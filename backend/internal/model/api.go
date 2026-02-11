@@ -1,10 +1,22 @@
 package model
 
-// ErrorResponse represents the standard API error response per v6f spec.
-type ErrorResponse struct {
+// ErrorEnvelope wraps ErrorDetail in {"error": {...}} per v6f spec section 0.2.
+type ErrorEnvelope struct {
+	Error ErrorDetail `json:"error"`
+}
+
+// ErrorDetail represents the error detail inside the envelope.
+type ErrorDetail struct {
 	Code    string      `json:"code"`
 	Message string      `json:"message"`
 	Details interface{} `json:"details,omitempty"`
+}
+
+// NewError creates an ErrorEnvelope for API responses.
+func NewError(code, message string, details interface{}) ErrorEnvelope {
+	return ErrorEnvelope{
+		Error: ErrorDetail{Code: code, Message: message, Details: details},
+	}
 }
 
 // Error codes per v6f error spec.
@@ -156,18 +168,26 @@ type ResolveConflictsRequest struct {
 
 // SubmitRequestRequest represents a request submission for approval.
 type SubmitRequestRequest struct {
-	TargetID   string `json:"target_id"`
-	DBName     string `json:"db_name"`
-	BranchName string `json:"branch_name"`
-	RequestID  string `json:"request_id"`
+	TargetID     string `json:"target_id"`
+	DBName       string `json:"db_name"`
+	BranchName   string `json:"branch_name"`
+	ExpectedHead string `json:"expected_head"`
+}
+
+// SubmitRequestResponse represents the result of a request submission.
+type SubmitRequestResponse struct {
+	RequestID         string `json:"request_id"`
+	SubmittedMainHash string `json:"submitted_main_hash"`
+	SubmittedWorkHash string `json:"submitted_work_hash"`
 }
 
 // RequestSummary represents a pending approval request.
 type RequestSummary struct {
 	RequestID         string `json:"request_id"`
-	BranchName        string `json:"branch_name"`
+	WorkBranch        string `json:"work_branch"`
 	SubmittedMainHash string `json:"submitted_main_hash"`
 	SubmittedWorkHash string `json:"submitted_work_hash"`
+	SubmittedAt       string `json:"submitted_at,omitempty"`
 }
 
 // ApproveRequest represents an approval action.
@@ -182,4 +202,72 @@ type RejectRequest struct {
 	TargetID  string `json:"target_id"`
 	DBName    string `json:"db_name"`
 	RequestID string `json:"request_id"`
+}
+
+// APIError is a typed error that handlers can map to specific HTTP responses.
+type APIError struct {
+	Status  int
+	Code    string
+	Msg     string
+	Details interface{}
+}
+
+func (e *APIError) Error() string {
+	return e.Msg
+}
+
+// FilterCondition represents a single filter in /table/rows.
+// Per v6f spec: eq, contains, in operators only, combined with AND.
+type FilterCondition struct {
+	Column string      `json:"column"`
+	Op     string      `json:"op"` // "eq", "contains", "in"
+	Value  interface{} `json:"value"`
+}
+
+// PreviewCloneRequest represents a clone preview request.
+type PreviewCloneRequest struct {
+	TargetID   string                 `json:"target_id"`
+	DBName     string                 `json:"db_name"`
+	BranchName string                 `json:"branch_name"`
+	Table      string                 `json:"table"`
+	TemplatePK map[string]interface{} `json:"template_pk"`
+	NewPKs     []interface{}          `json:"new_pks"`
+}
+
+// PreviewBatchGenerateRequest represents a batch generate preview request.
+type PreviewBatchGenerateRequest struct {
+	TargetID   string                 `json:"target_id"`
+	DBName     string                 `json:"db_name"`
+	BranchName string                 `json:"branch_name"`
+	Table      string                 `json:"table"`
+	TemplatePK map[string]interface{} `json:"template_pk"`
+	NewPKs     []interface{}          `json:"new_pks"`
+	Overrides  map[string]interface{} `json:"overrides,omitempty"`
+}
+
+// PreviewBulkUpdateRequest represents a bulk update preview request.
+type PreviewBulkUpdateRequest struct {
+	TargetID   string `json:"target_id"`
+	DBName     string `json:"db_name"`
+	BranchName string `json:"branch_name"`
+	Table      string `json:"table"`
+	TSVData    string `json:"tsv_data"`
+}
+
+// PreviewResponse represents the result of a preview operation.
+type PreviewResponse struct {
+	Ops []CommitOp `json:"ops"`
+}
+
+// ApproveResponse represents the result of an approval.
+type ApproveResponse struct {
+	Hash string `json:"hash"`
+}
+
+// ConflictsSummaryEntry represents a table's conflict summary from preview.
+type ConflictsSummaryEntry struct {
+	Table               string `json:"table"`
+	SchemaConflicts     int    `json:"schema_conflicts"`
+	DataConflicts       int    `json:"data_conflicts"`
+	ConstraintViolations int   `json:"constraint_violations"`
 }

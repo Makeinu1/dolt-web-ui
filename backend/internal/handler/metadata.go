@@ -54,9 +54,7 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// MainGuard: prevent creating branch named "main"
-	if req.BranchName == "main" {
-		writeError(w, http.StatusForbidden, model.CodeForbidden, "cannot create branch named 'main'")
+	if mainGuard(w, req.BranchName) {
 		return
 	}
 

@@ -39,7 +39,9 @@ func New(cfg *config.Config) (*Repository, error) {
 }
 
 // Conn acquires a connection for a specific target, database, and branch.
-// Per v6f spec: 1 request = 1 connection = 1 branch session.
+// Per v6f spec section 5.1:
+//   - Uses USE <db_name>/<branch_name> (DOLT_CHECKOUT is forbidden)
+//   - 1 request = 1 connection = 1 branch session
 func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
@@ -53,41 +55,21 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 
-	// Use the specified database
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE `%s`", dbName)); err != nil {
+	// Per v6f spec 5.1: USE <db_name>/<branch_name> to fix current location.
+	// DOLT_CHECKOUT() is forbidden.
+	useStmt := fmt.Sprintf("USE `%s/%s`", dbName, branchName)
+	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to use database %q: %w", dbName, err)
-	}
-
-	// Checkout the branch
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("CALL DOLT_CHECKOUT('%s')", branchName)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to checkout branch %q: %w", branchName, err)
+		return nil, fmt.Errorf("failed to set db/branch context %s/%s: %w", dbName, branchName, err)
 	}
 
 	return conn, nil
 }
 
-// ConnDB acquires a connection for a specific target and database (without branch checkout).
+// ConnDB acquires a connection for a specific target and database on main branch.
+// Used for operations that don't target a specific work branch.
 func (r *Repository) ConnDB(ctx context.Context, targetID, dbName string) (*sql.Conn, error) {
-	r.mu.RLock()
-	pool, ok := r.pools[targetID]
-	r.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("target %q not found", targetID)
-	}
-
-	conn, err := pool.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get connection: %w", err)
-	}
-
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE `%s`", dbName)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to use database %q: %w", dbName, err)
-	}
-
-	return conn, nil
+	return r.Conn(ctx, targetID, dbName, "main")
 }
 
 func (r *Repository) Close() {

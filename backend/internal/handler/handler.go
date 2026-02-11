@@ -74,10 +74,26 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, model.ErrorResponse{Code: code, Message: message})
+	writeJSON(w, status, model.NewError(code, message, nil))
+}
+
+func writeErrorWithDetails(w http.ResponseWriter, status int, code, message string, details interface{}) {
+	writeJSON(w, status, model.NewError(code, message, details))
 }
 
 func decodeJSON(r *http.Request, v interface{}) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// mainGuard returns true (and writes 403) if branchName is "main".
+// Per v6f spec: main branch is read-only for all write operations.
+func mainGuard(w http.ResponseWriter, branchName string) bool {
+	if branchName == "main" {
+		writeErrorWithDetails(w, http.StatusForbidden, model.CodeForbidden,
+			"write operations on main branch are forbidden",
+			map[string]string{"reason": "main_guard", "branch": "main"})
+		return true
+	}
+	return false
 }

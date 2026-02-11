@@ -96,9 +96,11 @@ export interface HistoryCommit {
   timestamp: string;
 }
 
-export interface ConflictSummary {
+export interface ConflictsSummaryEntry {
   table: string;
-  conflict_count: number;
+  schema_conflicts: number;
+  data_conflicts: number;
+  constraint_violations: number;
 }
 
 export interface ConflictRow {
@@ -107,9 +109,83 @@ export interface ConflictRow {
   theirs: Record<string, unknown>;
 }
 
-export interface RequestSummary {
-  request_id: string;
+export interface ResolveConflictsRequest {
+  target_id: string;
+  db_name: string;
   branch_name: string;
+  expected_head: string;
+  table: string;
+  strategy: "ours" | "theirs";
+}
+
+export interface SubmitRequestRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  expected_head: string;
+}
+
+export interface SubmitRequestResponse {
+  request_id: string;
   submitted_main_hash: string;
   submitted_work_hash: string;
+}
+
+export interface RequestSummary {
+  request_id: string;
+  work_branch: string;
+  submitted_main_hash: string;
+  submitted_work_hash: string;
+  submitted_at?: string;
+}
+
+export interface ApproveRequest {
+  target_id: string;
+  db_name: string;
+  request_id: string;
+}
+
+export interface RejectRequest {
+  target_id: string;
+  db_name: string;
+  request_id: string;
+}
+
+export interface ApproveResponse {
+  hash: string;
+}
+
+export interface PreviewCloneRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table: string;
+  template_pk: Record<string, unknown>;
+  new_pks: unknown[];
+}
+
+export interface PreviewBatchGenerateRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table: string;
+  template_pk: Record<string, unknown>;
+  new_pks: unknown[];
+  overrides?: Record<string, unknown>;
+}
+
+export interface PreviewBulkUpdateRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table: string;
+  tsv_data: string;
+}
+
+export interface PreviewResponse {
+  ops: CommitOp[];
+}
+
+export interface DiffResponse {
+  rows: DiffRow[];
 }

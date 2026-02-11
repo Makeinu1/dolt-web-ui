@@ -6,11 +6,16 @@ build: build-frontend build-backend
 build-frontend:
 	cd frontend && npm run build
 
-build-backend: build-frontend
+# Copy frontend build output into backend embed directory
+copy-static: build-frontend
+	rm -rf backend/cmd/server/static
+	cp -r frontend/dist backend/cmd/server/static
+
+build-backend: copy-static
 	cd backend && go build -o ../dist/dolt-web-ui ./cmd/server
 
 # Cross-compile for Linux (amd64)
-build-linux: build-frontend
+build-linux: copy-static
 	cd backend && GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server
 
 # Run tests
