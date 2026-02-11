@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
-import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
 import type { RequestSummary } from "../../types/api";
 
