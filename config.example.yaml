@@ -1,0 +1,24 @@
+# Dolt Web UI Configuration
+# Copy this file to config.yaml and update the values for your environment.
+
+# Dolt SQL Server targets
+targets:
+  - id: lab
+    host: "192.168.x.x"
+    port: 3306
+    user: "root"
+    password: ""
+
+# Allowed databases per target
+databases:
+  - target_id: lab
+    name: your_database
+    allowed_branches:
+      - "main"
+      - "wi/*"
+
+# Web server settings
+server:
+  port: 8080
+  # Set to "*" or specific origin for CORS (e.g., "http://localhost:5173" for dev)
+  cors_origin: "*"

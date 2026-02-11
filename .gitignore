@@ -1,0 +1,23 @@
+# Go
+backend/dolt-web-ui
+backend/tmp/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Config (contains credentials)
+config.yaml
+
+# Build artifacts
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

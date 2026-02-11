@@ -1,0 +1,24 @@
+name: Frontend CI
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+  pull_request:
+    paths:
+      - "frontend/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: cd frontend && npm ci
+      - name: Type Check
+        run: cd frontend && npx tsc --noEmit
+      - name: Build
+        run: cd frontend && npm run build
