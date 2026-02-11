@@ -1,42 +1,207 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* Layout */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #1a1a2e;
+  color: #fff;
+  border-bottom: 2px solid #4361ee;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.app-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.app-header .head-hash {
+  font-size: 12px;
+  color: #a0a0c0;
+  font-family: monospace;
 }
 
-.card {
-  padding: 2em;
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
 
-.read-the-docs {
-  color: #888;
+/* Context selector bar */
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #e8e8f0;
+  border-bottom: 1px solid #d0d0d8;
+  flex-wrap: wrap;
+}
+
+.context-bar label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  margin-right: 4px;
+}
+
+/* Tabs */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  background: #e8e8f0;
+  border-bottom: 1px solid #d0d0d8;
+  padding: 0 16px;
+}
+
+.tab-bar button {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+}
+
+.tab-bar button.active {
+  color: #4361ee;
+  border-bottom-color: #4361ee;
+  font-weight: 600;
+}
+
+.tab-bar button:hover {
+  color: #4361ee;
+  background: none;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8f0;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+/* Content area */
+.content-area {
+  flex: 1;
+  padding: 0;
+  overflow: auto;
+}
+
+/* Table info bar */
+.table-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: #fafafa;
+  border-bottom: 1px solid #e8e8f0;
+  font-size: 12px;
+  color: #666;
+}
+
+/* Status bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px;
+  background: #1a1a2e;
+  color: #a0a0c0;
+  font-size: 11px;
+  border-top: 1px solid #333;
+}
+
+.status-bar .state-badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.status-bar .state-idle { background: #065f46; color: #d1fae5; }
+.status-bar .state-draft { background: #92400e; color: #fef3c7; }
+.status-bar .state-conflict { background: #991b1b; color: #fee2e2; }
+.status-bar .state-request { background: #3730a3; color: #e0e7ff; }
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 8px;
+  padding: 24px;
+  min-width: 400px;
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+
+.modal h2 {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+.modal .modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* Error banner */
+.error-banner {
+  padding: 8px 16px;
+  background: #fee2e2;
+  color: #991b1b;
+  border-bottom: 1px solid #fca5a5;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-banner button {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* Draft count badge */
+.draft-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f59e0b;
+  color: #fff;
+  border-radius: 10px;
+  min-width: 20px;
+  height: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 6px;
+  margin-left: 4px;
 }
