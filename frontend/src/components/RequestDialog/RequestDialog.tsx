@@ -16,9 +16,14 @@ export function SubmitDialog({
 }: SubmitDialogProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const [submitting, setSubmitting] = useState(false);
+  const [summaryJa, setSummaryJa] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
+    if (!summaryJa.trim()) {
+      setError("変更概要を入力してください");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -27,6 +32,7 @@ export function SubmitDialog({
         db_name: dbName,
         branch_name: branchName,
         expected_head: expectedHead,
+        summary_ja: summaryJa,
       });
       onSubmitted();
       onClose();
@@ -47,6 +53,18 @@ export function SubmitDialog({
           Submit branch <strong>{branchName}</strong> for review and approval.
           The current HEAD hash will be frozen for the reviewer.
         </p>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", marginBottom: 4, fontSize: 12, fontWeight: 600 }}>
+            変更概要 (summary_ja) *
+          </label>
+          <textarea
+            value={summaryJa}
+            onChange={(e) => setSummaryJa(e.target.value)}
+            rows={3}
+            style={{ width: "100%", fontSize: 13 }}
+            placeholder="この変更の概要を記入してください"
+          />
+        </div>
         <div
           style={{
             background: "#f5f5f8",
@@ -63,7 +81,7 @@ export function SubmitDialog({
           <button onClick={onClose} disabled={submitting}>
             Cancel
           </button>
-          <button className="primary" onClick={handleSubmit} disabled={submitting}>
+          <button className="primary" onClick={handleSubmit} disabled={submitting || !summaryJa.trim()}>
             {submitting ? "Submitting..." : "Submit Request"}
           </button>
         </div>
@@ -72,50 +90,162 @@ export function SubmitDialog({
   );
 }
 
-// Approver inbox view
-export function ApproverInbox() {
+// --- Approve confirmation modal ---
+function ApproveModal({
+  requestId,
+  onClose,
+  onApproved,
+}: {
+  requestId: string;
+  onClose: () => void;
+  onApproved: () => void;
+}) {
   const { targetId, dbName } = useContextStore();
-  const [requests, setRequests] = useState<RequestSummary[]>([]);
+  const [mergeMessage, setMergeMessage] = useState(`承認マージ: ${requestId}`);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!targetId || !dbName) return;
+  const handleApprove = async () => {
     setLoading(true);
-    api
-      .listRequests(targetId, dbName)
-      .then(setRequests)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [targetId, dbName]);
-
-  const handleApprove = async (requestId: string) => {
-    if (!window.confirm(`Approve request ${requestId}?`)) return;
+    setError(null);
     try {
       await api.approveRequest({
         target_id: targetId,
         db_name: dbName,
         request_id: requestId,
+        merge_message_ja: mergeMessage,
       });
-      setRequests((prev) => prev.filter((r) => r.request_id !== requestId));
+      onApproved();
+      onClose();
     } catch (err: unknown) {
       const e = err as { error?: { message?: string } };
-      alert(e?.error?.message || "Approve failed");
+      setError(e?.error?.message || "Approve failed");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleReject = async (requestId: string) => {
-    if (!window.confirm(`Reject request ${requestId}?`)) return;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Approve Request</h2>
+        {error && <div className="error-banner">{error}</div>}
+        <p style={{ fontSize: 13, marginBottom: 16 }}>
+          Approve <strong>{requestId}</strong> and squash merge into main.
+        </p>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", marginBottom: 4, fontSize: 12, fontWeight: 600 }}>
+            承認コミットメッセージ
+          </label>
+          <textarea
+            value={mergeMessage}
+            onChange={(e) => setMergeMessage(e.target.value)}
+            rows={2}
+            style={{ width: "100%", fontSize: 13 }}
+          />
+        </div>
+        <div className="modal-actions">
+          <button onClick={onClose} disabled={loading}>Cancel</button>
+          <button
+            className="primary"
+            onClick={handleApprove}
+            disabled={loading || !mergeMessage.trim()}
+            style={{ background: "#065f46", borderColor: "#065f46" }}
+          >
+            {loading ? "Approving..." : "Approve & Merge"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Reject confirmation modal ---
+function RejectModal({
+  requestId,
+  onClose,
+  onRejected,
+}: {
+  requestId: string;
+  onClose: () => void;
+  onRejected: () => void;
+}) {
+  const { targetId, dbName } = useContextStore();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleReject = async () => {
+    setLoading(true);
+    setError(null);
     try {
       await api.rejectRequest({
         target_id: targetId,
         db_name: dbName,
         request_id: requestId,
       });
-      setRequests((prev) => prev.filter((r) => r.request_id !== requestId));
+      onRejected();
+      onClose();
     } catch (err: unknown) {
       const e = err as { error?: { message?: string } };
-      alert(e?.error?.message || "Reject failed");
+      setError(e?.error?.message || "Reject failed");
+    } finally {
+      setLoading(false);
     }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Reject Request</h2>
+        {error && <div className="error-banner">{error}</div>}
+        <p style={{ fontSize: 13, marginBottom: 16 }}>
+          Reject <strong>{requestId}</strong>? The request tag will be deleted and an audit tag created.
+        </p>
+        <div className="modal-actions">
+          <button onClick={onClose} disabled={loading}>Cancel</button>
+          <button
+            className="danger"
+            onClick={handleReject}
+            disabled={loading}
+          >
+            {loading ? "Rejecting..." : "Reject"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Approver inbox view ---
+export function ApproverInbox() {
+  const { targetId, dbName, triggerBranchRefresh } = useContextStore();
+  const [requests, setRequests] = useState<RequestSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!targetId || !dbName) return;
+    setLoading(true);
+    api
+      .listRequests(targetId, dbName)
+      .then((data) => setRequests(data || []))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [targetId, dbName]);
+
+  const onApproved = () => {
+    if (approveTarget) {
+      setRequests((prev) => prev.filter((r) => r.request_id !== approveTarget));
+    }
+    triggerBranchRefresh();
+  };
+
+  const onRejected = () => {
+    if (rejectTarget) {
+      setRequests((prev) => prev.filter((r) => r.request_id !== rejectTarget));
+    }
+    triggerBranchRefresh();
   };
 
   if (loading) {
@@ -151,6 +281,9 @@ export function ApproverInbox() {
               Work Branch
             </th>
             <th style={{ textAlign: "left", padding: "6px 8px" }}>
+              概要
+            </th>
+            <th style={{ textAlign: "left", padding: "6px 8px" }}>
               Submitted
             </th>
             <th style={{ textAlign: "right", padding: "6px 8px" }}>
@@ -174,6 +307,9 @@ export function ApproverInbox() {
                 {r.request_id}
               </td>
               <td style={{ padding: "6px 8px" }}>{r.work_branch}</td>
+              <td style={{ padding: "6px 8px", fontSize: 12 }}>
+                {r.summary_ja || "-"}
+              </td>
               <td style={{ padding: "6px 8px", fontSize: 12, color: "#666" }}>
                 {r.submitted_at || "-"}
               </td>
@@ -181,14 +317,14 @@ export function ApproverInbox() {
                 <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                   <button
                     className="success"
-                    onClick={() => handleApprove(r.request_id)}
+                    onClick={() => setApproveTarget(r.request_id)}
                     style={{ fontSize: 11 }}
                   >
                     Approve
                   </button>
                   <button
                     className="danger"
-                    onClick={() => handleReject(r.request_id)}
+                    onClick={() => setRejectTarget(r.request_id)}
                     style={{ fontSize: 11 }}
                   >
                     Reject
@@ -199,6 +335,21 @@ export function ApproverInbox() {
           ))}
         </tbody>
       </table>
+
+      {approveTarget && (
+        <ApproveModal
+          requestId={approveTarget}
+          onClose={() => setApproveTarget(null)}
+          onApproved={onApproved}
+        />
+      )}
+      {rejectTarget && (
+        <RejectModal
+          requestId={rejectTarget}
+          onClose={() => setRejectTarget(null)}
+          onRejected={onRejected}
+        />
+      )}
     </div>
   );
 }

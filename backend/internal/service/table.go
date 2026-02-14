@@ -25,7 +25,7 @@ func (s *Service) ListTables(ctx context.Context, targetID, dbName, branchName s
 	}
 	defer rows.Close()
 
-	var tables []model.TableResponse
+	tables := make([]model.TableResponse, 0)
 	for rows.Next() {
 		var name, tableType string
 		if err := rows.Scan(&name, &tableType); err != nil {
@@ -210,7 +210,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
 		valuePtrs := make([]interface{}, len(colNames))

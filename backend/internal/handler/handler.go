@@ -26,6 +26,7 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Get("/databases", h.ListDatabases)
 		r.Get("/branches", h.ListBranches)
 		r.Post("/branches/create", h.CreateBranch)
+		r.Post("/branches/delete", h.DeleteBranch)
 		r.Get("/head", h.GetHead)
 
 		// Tables

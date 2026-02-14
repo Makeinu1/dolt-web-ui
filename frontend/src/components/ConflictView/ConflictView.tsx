@@ -14,6 +14,7 @@ export function ConflictView({ expectedHead, onResolved }: ConflictViewProps) {
   const { setBaseState, setError } = useUIStore();
   const [conflicts, setConflicts] = useState<ConflictsSummaryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
@@ -22,10 +23,14 @@ export function ConflictView({ expectedHead, onResolved }: ConflictViewProps) {
 
   const loadConflicts = () => {
     setLoading(true);
+    setLoadError(null);
     api
       .getConflicts(targetId, dbName, branchName)
       .then(setConflicts)
-      .catch(console.error)
+      .catch((err) => {
+        const e = err as { error?: { message?: string } };
+        setLoadError(e?.error?.message || "Failed to load conflicts");
+      })
       .finally(() => setLoading(false));
   };
 
@@ -64,10 +69,28 @@ export function ConflictView({ expectedHead, onResolved }: ConflictViewProps) {
     return <div style={{ padding: 24, textAlign: "center" }}>Loading conflicts...</div>;
   }
 
+  if (loadError) {
+    return (
+      <div style={{ padding: 24, textAlign: "center" }}>
+        <div className="error-banner" style={{ display: "inline-flex", borderRadius: 6, borderBottom: "none" }}>
+          {loadError}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <button onClick={loadConflicts}>Retry</button>
+        </div>
+      </div>
+    );
+  }
+
   if (conflicts.length === 0) {
     return (
-      <div style={{ padding: 24, textAlign: "center", color: "#888" }}>
-        No conflicts detected.
+      <div style={{ padding: 48, textAlign: "center", color: "#888" }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>&#x2714;</div>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>No conflicts detected</div>
+        <div style={{ fontSize: 12 }}>
+          Conflicts appear here after a Sync from Main if there are overlapping changes.
+          You can safely continue editing.
+        </div>
       </div>
     );
   }

@@ -22,7 +22,7 @@ export function CommitDialog({
   const [submitting, setSubmitting] = useState(false);
 
   const handleCommit = async () => {
-    if (!message.trim()) return;
+    const commitMsg = message.trim() || `auto commit (${ops.length} ops)`;
     setSubmitting(true);
     setBaseState("Committing");
 
@@ -32,7 +32,7 @@ export function CommitDialog({
         db_name: dbName,
         branch_name: branchName,
         expected_head: expectedHead,
-        commit_message: message.trim(),
+        commit_message: commitMsg,
         ops,
       });
       clearDraft();
@@ -70,14 +70,14 @@ export function CommitDialog({
               fontWeight: 600,
             }}
           >
-            Commit Message
+            Commit Message (optional)
           </label>
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             rows={3}
             style={{ width: "100%" }}
-            placeholder="Describe your changes..."
+            placeholder="Leave empty for auto-generated message"
             autoFocus
           />
         </div>
@@ -100,7 +100,7 @@ export function CommitDialog({
           <button
             className="primary"
             onClick={handleCommit}
-            disabled={submitting || !message.trim()}
+            disabled={submitting}
           >
             {submitting ? "Committing..." : "Commit"}
           </button>

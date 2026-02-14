@@ -1,20 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useContextStore } from "./store/context";
 import { useDraftStore } from "./store/draft";
 import { useUIStore, type BaseState } from "./store/ui";
 import { ContextSelector } from "./components/ContextSelector/ContextSelector";
 import { TableGrid } from "./components/TableGrid/TableGrid";
-import { TemplateBar } from "./components/TemplateBar/TemplateBar";
+import { PKSearchBar } from "./components/PKSearchBar/PKSearchBar";
 import { ChangedView } from "./components/ChangedView/ChangedView";
-import { CommitDialog } from "./components/common/CommitDialog";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
+import { CommitDialog } from "./components/common/CommitDialog";
 import { ConflictView } from "./components/ConflictView/ConflictView";
 import { SubmitDialog, ApproverInbox } from "./components/RequestDialog/RequestDialog";
+import { CLIRunbook } from "./components/CLIRunbook/CLIRunbook";
 import * as api from "./api/client";
-import type { Table, ColumnSchema } from "./types/api";
+import type { Table } from "./types/api";
 import "./App.css";
 
-type TabId = "grid" | "changed" | "diff" | "conflicts" | "requests";
+type TopTab = "work" | "conflicts" | "requests";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
   switch (state) {
@@ -40,21 +41,32 @@ function stateLabel(state: BaseState): { text: string; className: string } {
 }
 
 function App() {
-  const { targetId, dbName, branchName } = useContextStore();
+  const { targetId, dbName, branchName, branchRefreshKey } = useContextStore();
   const { ops, loadDraft, hasDraft } = useDraftStore();
-  const { baseState, requestPending, error, setBaseState, setRequestPending, setError } =
+  const { baseState, requestPending, error, drawerOpen, setBaseState, setRequestPending, setError, toggleDrawer, closeDrawer } =
     useUIStore();
 
   const [tables, setTables] = useState<Table[]>([]);
   const [selectedTable, setSelectedTable] = useState("");
-  const [pkColumn, setPkColumn] = useState("");
   const [expectedHead, setExpectedHead] = useState("");
-  const [activeTab, setActiveTab] = useState<TabId>("grid");
+  const [activeTopTab, setActiveTopTab] = useState<TopTab>("work");
   const [showCommit, setShowCommit] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
+
+  // Prevent body scroll when modal is open
+  const anyModalOpen = showCommit || showSubmit;
+  useEffect(() => {
+    if (anyModalOpen) {
+      document.body.classList.add("modal-open");
+    } else {
+      document.body.classList.remove("modal-open");
+    }
+    return () => document.body.classList.remove("modal-open");
+  }, [anyModalOpen]);
 
   // Load draft from sessionStorage
   useEffect(() => {
@@ -76,33 +88,49 @@ function App() {
           setSelectedTable(t[0].name);
         }
       })
-      .catch(console.error);
+      .catch((err) => {
+        const e = err as { error?: { message?: string } };
+        setError(e?.error?.message || "Failed to load tables");
+      });
   }, [targetId, dbName, branchName, isContextReady]);
 
-  // Load HEAD hash
+  // Track current branchName to guard against stale async responses
+  const branchRef = useRef(branchName);
+  useEffect(() => {
+    branchRef.current = branchName;
+  }, [branchName]);
+
+  // Load HEAD hash (with race condition guard)
   const refreshHead = useCallback(() => {
     if (!isContextReady) return;
+    const requestBranch = branchName;
     api
       .getHead(targetId, dbName, branchName)
-      .then((h) => setExpectedHead(h.hash))
-      .catch(console.error);
+      .then((h) => {
+        // Only apply if branch hasn't changed since request was made
+        if (branchRef.current === requestBranch) {
+          setExpectedHead(h.hash);
+        }
+      })
+      .catch((err) => {
+        const e = err as { error?: { message?: string } };
+        if (branchRef.current === requestBranch) {
+          setError(e?.error?.message || "Failed to get HEAD");
+        }
+      });
   }, [targetId, dbName, branchName, isContextReady]);
 
   useEffect(() => {
     refreshHead();
   }, [refreshHead]);
 
-  // Load PK column for selected table
+  // Refresh data when branchRefreshKey changes (e.g. after approve/reject)
   useEffect(() => {
-    if (!selectedTable || !isContextReady) return;
-    api
-      .getTableSchema(targetId, dbName, branchName, selectedTable)
-      .then((schema) => {
-        const pk = schema.columns.find((c: ColumnSchema) => c.primary_key);
-        setPkColumn(pk?.name || "");
-      })
-      .catch(console.error);
-  }, [targetId, dbName, branchName, selectedTable, isContextReady]);
+    if (branchRefreshKey > 0) {
+      refreshHead();
+      setRefreshKey((k) => k + 1);
+    }
+  }, [branchRefreshKey]);
 
   // Update base state based on draft
   useEffect(() => {
@@ -131,7 +159,7 @@ function App() {
       const code = e?.error?.code;
       if (code === "MERGE_CONFLICTS_PRESENT") {
         setBaseState("MergeConflictsPresent");
-        setActiveTab("conflicts");
+        setActiveTopTab("conflicts");
       } else if (code === "SCHEMA_CONFLICTS_PRESENT") {
         setBaseState("SchemaConflictDetected");
       } else if (code === "CONSTRAINT_VIOLATIONS_PRESENT") {
@@ -155,11 +183,12 @@ function App() {
 
   const onCommitSuccess = (newHash: string) => {
     setExpectedHead(newHash);
+    setRefreshKey((k) => k + 1);
   };
 
   const onConflictResolved = (newHash: string) => {
     setExpectedHead(newHash);
-    setActiveTab("grid");
+    setActiveTopTab("work");
   };
 
   const label = stateLabel(baseState);
@@ -204,121 +233,173 @@ function App() {
         </div>
       ) : (
         <>
-          {/* Tab bar */}
+          {/* Top tab bar */}
           <div className="tab-bar">
             <button
-              className={activeTab === "grid" ? "active" : ""}
-              onClick={() => setActiveTab("grid")}
+              className={activeTopTab === "work" ? "active" : ""}
+              onClick={() => setActiveTopTab("work")}
             >
-              All View
+              Work
             </button>
             <button
-              className={activeTab === "changed" ? "active" : ""}
-              onClick={() => setActiveTab("changed")}
-            >
-              Changed
-              {ops.length > 0 && <span className="draft-count">{ops.length}</span>}
-            </button>
-            <button
-              className={activeTab === "diff" ? "active" : ""}
-              onClick={() => setActiveTab("diff")}
-            >
-              Diff
-            </button>
-            <button
-              className={activeTab === "conflicts" ? "active" : ""}
-              onClick={() => setActiveTab("conflicts")}
+              className={activeTopTab === "conflicts" ? "active" : ""}
+              onClick={() => setActiveTopTab("conflicts")}
             >
               Conflicts
             </button>
             <button
-              className={activeTab === "requests" ? "active" : ""}
-              onClick={() => setActiveTab("requests")}
+              className={activeTopTab === "requests" ? "active" : ""}
+              onClick={() => setActiveTopTab("requests")}
             >
               Requests
             </button>
           </div>
 
-          {/* Toolbar */}
-          <div className="toolbar">
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, marginRight: 8 }}>Table</label>
-              <select
-                value={selectedTable}
-                onChange={(e) => setSelectedTable(e.target.value)}
-              >
-                {tables.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="spacer" />
-            {!isMain && (
-              <>
-                <button
-                  onClick={handleSync}
-                  disabled={
-                    hasDraft() ||
-                    baseState === "Syncing" ||
-                    baseState === "Committing"
-                  }
-                >
-                  Sync from Main
-                </button>
-                <button
-                  className="primary"
-                  onClick={() => setShowCommit(true)}
-                  disabled={
-                    !hasDraft() ||
-                    baseState === "Committing" ||
-                    baseState === "Syncing" ||
-                    baseState === "StaleHeadDetected"
-                  }
-                >
-                  Commit ({ops.length})
-                </button>
-                <button
-                  onClick={() => setShowSubmit(true)}
-                  disabled={
-                    hasDraft() ||
-                    baseState !== "Idle"
-                  }
-                >
-                  Submit Request
-                </button>
-              </>
-            )}
-            <button onClick={handleRefresh}>Refresh</button>
-          </div>
+          {/* Work tab: grid + optional drawer */}
+          {activeTopTab === "work" && (
+            <>
+              <div className="work-area">
+                {/* Main grid area (full width when drawer closed) */}
+                <div className="grid-pane">
+                  <div className="grid-toolbar">
+                    <label style={{ fontSize: 12, fontWeight: 600, marginRight: 8 }}>Table</label>
+                    <select
+                      value={selectedTable}
+                      onChange={(e) => setSelectedTable(e.target.value)}
+                    >
+                      {tables.map((t) => (
+                        <option key={t.name} value={t.name}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="toolbar-spacer" />
+                    {!isMain && (
+                      <>
+                        <button
+                          className={`toolbar-btn ${drawerOpen === "changed" ? "toolbar-btn-active" : ""}`}
+                          onClick={() => toggleDrawer("changed")}
+                        >
+                          Changed
+                          {ops.length > 0 && <span className="toolbar-badge">{ops.length}</span>}
+                        </button>
+                        <button
+                          className={`toolbar-btn ${drawerOpen === "diff" ? "toolbar-btn-active" : ""}`}
+                          onClick={() => toggleDrawer("diff")}
+                        >
+                          Diff
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {selectedTable && <PKSearchBar tableName={selectedTable} />}
+                  {selectedTable && <TableGrid tableName={selectedTable} refreshKey={refreshKey} />}
+                </div>
 
-          {/* Template bar (only on grid tab, non-main) */}
-          {activeTab === "grid" && !isMain && selectedTable && pkColumn && (
-            <TemplateBar tableName={selectedTable} pkColumn={pkColumn} />
+                {/* Right drawer (push style) */}
+                {drawerOpen && (
+                  <div className="drawer">
+                    <div className="drawer-header">
+                      <span className="drawer-title">
+                        {drawerOpen === "changed" ? `Changed (${ops.length})` : "Diff"}
+                      </span>
+                      <button className="drawer-close" onClick={closeDrawer}>
+                        &times;
+                      </button>
+                    </div>
+                    <div className="drawer-content">
+                      {drawerOpen === "changed" && <ChangedView />}
+                      {drawerOpen === "diff" && (
+                        selectedTable ? (
+                          <DiffViewer tableName={selectedTable} fromRef="main" toRef={branchName} />
+                        ) : (
+                          <div style={{ padding: 24, color: "#888", textAlign: "center", fontSize: 13 }}>
+                            Select a table to view diff.
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Read-only banner for main */}
+              {isMain && (
+                <div className="action-bar" style={{ background: "#f0f0f5", justifyContent: "center" }}>
+                  <span style={{ fontSize: 13, color: "#666" }}>
+                    main is read-only. Create a work branch to edit.
+                  </span>
+                </div>
+              )}
+
+              {/* Action bar */}
+              {!isMain && (
+                <div className="action-bar">
+                  <button
+                    onClick={handleSync}
+                    disabled={
+                      hasDraft() ||
+                      baseState === "Syncing" ||
+                      baseState === "Committing" ||
+                      baseState === "MergeConflictsPresent" ||
+                      baseState === "SchemaConflictDetected" ||
+                      baseState === "ConstraintViolationDetected"
+                    }
+                  >
+                    Sync from Main
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => setShowCommit(true)}
+                    disabled={
+                      !hasDraft() ||
+                      baseState === "Committing" ||
+                      baseState === "Syncing" ||
+                      baseState === "StaleHeadDetected" ||
+                      baseState === "MergeConflictsPresent" ||
+                      baseState === "SchemaConflictDetected" ||
+                      baseState === "ConstraintViolationDetected"
+                    }
+                  >
+                    Commit ({ops.length})
+                  </button>
+                  <button
+                    onClick={() => setShowSubmit(true)}
+                    disabled={
+                      hasDraft() ||
+                      baseState !== "Idle"
+                    }
+                  >
+                    Submit Request
+                  </button>
+                  <div className="spacer" />
+                  <button onClick={handleRefresh}>Refresh</button>
+                  {hasDraft() && (
+                    <span style={{ fontSize: 12, color: "#92400e" }}>
+                      {ops.length} pending ops
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Content area */}
-          <div className="content-area">
-            {activeTab === "grid" && selectedTable && (
-              <TableGrid tableName={selectedTable} />
-            )}
-            {activeTab === "changed" && <ChangedView />}
-            {activeTab === "diff" && selectedTable && (
-              <DiffViewer
-                tableName={selectedTable}
-                fromRef="main"
-                toRef={branchName}
-              />
-            )}
-            {activeTab === "conflicts" && (
+          {/* Conflicts tab: full width */}
+          {activeTopTab === "conflicts" && (
+            <div className="content-area">
               <ConflictView
                 expectedHead={expectedHead}
                 onResolved={onConflictResolved}
               />
-            )}
-            {activeTab === "requests" && <ApproverInbox />}
-          </div>
+            </div>
+          )}
+
+          {/* Requests tab: full width */}
+          {activeTopTab === "requests" && (
+            <div className="content-area">
+              <ApproverInbox />
+            </div>
+          )}
         </>
       )}
 
@@ -348,6 +429,8 @@ function App() {
           onSubmitted={() => setRequestPending(true)}
         />
       )}
+      {/* CLI intervention screen for fatal states */}
+      <CLIRunbook />
     </div>
   );
 }

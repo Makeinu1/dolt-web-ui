@@ -40,6 +40,12 @@ export const createBranch = (body: import("../types/api").CreateBranchRequest) =
     body: JSON.stringify(body),
   });
 
+export const deleteBranch = (body: import("../types/api").DeleteBranchRequest) =>
+  request<{ status: string }>("/branches/delete", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 export const getHead = (targetId: string, dbName: string, branchName: string) =>
   request<import("../types/api").Head>(
     `/head${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName })}`

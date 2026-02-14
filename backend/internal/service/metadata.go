@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -41,7 +42,7 @@ func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]
 	}
 	defer rows.Close()
 
-	var branches []model.BranchResponse
+	branches := make([]model.BranchResponse, 0)
 	for rows.Next() {
 		var b model.BranchResponse
 		if err := rows.Scan(&b.Name, &b.Hash); err != nil {
@@ -59,9 +60,37 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 	}
 	defer conn.Close()
 
-	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH(?, 'main')", req.BranchName)
+	// ConnDB already sets USE db/main, so single-arg form creates from main HEAD.
+	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH(?)", req.BranchName)
 	if err != nil {
 		return fmt.Errorf("failed to create branch: %w", err)
+	}
+
+	// Verify the branch is queryable on a fresh connection (USE db/branch).
+	// Dolt may need a moment to propagate the branch across connections.
+	for attempt := 0; attempt < 3; attempt++ {
+		verifyConn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+		if err == nil {
+			verifyConn.Close()
+			return nil
+		}
+		if attempt < 2 {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("branch created but not yet queryable via USE")
+}
+
+func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchRequest) error {
+	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", req.BranchName)
+	if err != nil {
+		return fmt.Errorf("failed to delete branch: %w", err)
 	}
 	return nil
 }

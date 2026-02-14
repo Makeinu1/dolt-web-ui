@@ -48,10 +48,13 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 	if _, err := conn.ExecContext(ctx, "SET autocommit=1"); err != nil {
 		return nil, fmt.Errorf("failed to set autocommit: %w", err)
 	}
+	// Reset autocommit when connection returns to pool to prevent pool pollution.
+	defer conn.ExecContext(ctx, "SET autocommit=0")
 
 	var mergeHash string
-	var mergeConflicts int
-	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").Scan(&mergeHash, &mergeConflicts)
+	var fastForward, mergeConflicts int
+	var mergeMessage string
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").Scan(&mergeHash, &fastForward, &mergeConflicts, &mergeMessage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to merge: %w", err)
 	}

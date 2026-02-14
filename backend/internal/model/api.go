@@ -60,6 +60,13 @@ type CreateBranchRequest struct {
 	BranchName string `json:"branch_name"`
 }
 
+// DeleteBranchRequest represents a request to delete a work branch.
+type DeleteBranchRequest struct {
+	TargetID   string `json:"target_id"`
+	DBName     string `json:"db_name"`
+	BranchName string `json:"branch_name"`
+}
+
 // TableResponse represents a table name.
 type TableResponse struct {
 	Name string `json:"name"`
@@ -172,6 +179,7 @@ type SubmitRequestRequest struct {
 	DBName       string `json:"db_name"`
 	BranchName   string `json:"branch_name"`
 	ExpectedHead string `json:"expected_head"`
+	SummaryJa    string `json:"summary_ja"`
 }
 
 // SubmitRequestResponse represents the result of a request submission.
@@ -187,14 +195,16 @@ type RequestSummary struct {
 	WorkBranch        string `json:"work_branch"`
 	SubmittedMainHash string `json:"submitted_main_hash"`
 	SubmittedWorkHash string `json:"submitted_work_hash"`
+	SummaryJa         string `json:"summary_ja"`
 	SubmittedAt       string `json:"submitted_at,omitempty"`
 }
 
 // ApproveRequest represents an approval action.
 type ApproveRequest struct {
-	TargetID  string `json:"target_id"`
-	DBName    string `json:"db_name"`
-	RequestID string `json:"request_id"`
+	TargetID       string `json:"target_id"`
+	DBName         string `json:"db_name"`
+	RequestID      string `json:"request_id"`
+	MergeMessageJa string `json:"merge_message_ja"`
 }
 
 // RejectRequest represents a rejection action.
@@ -226,23 +236,26 @@ type FilterCondition struct {
 
 // PreviewCloneRequest represents a clone preview request.
 type PreviewCloneRequest struct {
-	TargetID   string                 `json:"target_id"`
-	DBName     string                 `json:"db_name"`
-	BranchName string                 `json:"branch_name"`
-	Table      string                 `json:"table"`
-	TemplatePK map[string]interface{} `json:"template_pk"`
-	NewPKs     []interface{}          `json:"new_pks"`
+	TargetID     string                 `json:"target_id"`
+	DBName       string                 `json:"db_name"`
+	BranchName   string                 `json:"branch_name"`
+	Table        string                 `json:"table"`
+	TemplatePK   map[string]interface{} `json:"template_pk"`
+	NewPKs       []interface{}          `json:"new_pks"`
+	ChangeColumn string                 `json:"change_column,omitempty"`
+	ChangeValue  interface{}            `json:"change_value,omitempty"`
 }
 
 // PreviewBatchGenerateRequest represents a batch generate preview request.
 type PreviewBatchGenerateRequest struct {
-	TargetID   string                 `json:"target_id"`
-	DBName     string                 `json:"db_name"`
-	BranchName string                 `json:"branch_name"`
-	Table      string                 `json:"table"`
-	TemplatePK map[string]interface{} `json:"template_pk"`
-	NewPKs     []interface{}          `json:"new_pks"`
-	Overrides  map[string]interface{} `json:"overrides,omitempty"`
+	TargetID     string                 `json:"target_id"`
+	DBName       string                 `json:"db_name"`
+	BranchName   string                 `json:"branch_name"`
+	Table        string                 `json:"table"`
+	TemplatePK   map[string]interface{} `json:"template_pk"`
+	NewPKs       []interface{}          `json:"new_pks"`
+	ChangeColumn string                 `json:"change_column,omitempty"`
+	ChangeValues []interface{}          `json:"change_values,omitempty"`
 }
 
 // PreviewBulkUpdateRequest represents a bulk update preview request.
@@ -254,9 +267,19 @@ type PreviewBulkUpdateRequest struct {
 	TSVData    string `json:"tsv_data"`
 }
 
+// PreviewError represents an error for a specific row in preview.
+type PreviewError struct {
+	RowIndex int         `json:"row_index"`
+	Code     string      `json:"code"`
+	Message  string      `json:"message"`
+	Details  interface{} `json:"details,omitempty"`
+}
+
 // PreviewResponse represents the result of a preview operation.
 type PreviewResponse struct {
-	Ops []CommitOp `json:"ops"`
+	Ops      []CommitOp     `json:"ops"`
+	Warnings []string       `json:"warnings"`
+	Errors   []PreviewError `json:"errors"`
 }
 
 // ApproveResponse represents the result of an approval.

@@ -67,7 +67,7 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result []model.DiffRow
+	result := make([]model.DiffRow, 0)
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
 		valuePtrs := make([]interface{}, len(colNames))
@@ -121,7 +121,7 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	}
 	defer rows.Close()
 
-	var commits []model.HistoryCommit
+	commits := make([]model.HistoryCommit, 0)
 	for rows.Next() {
 		var c model.HistoryCommit
 		if err := rows.Scan(&c.Hash, &c.Author, &c.Message, &c.Timestamp); err != nil {
@@ -178,7 +178,7 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
 		valuePtrs := make([]interface{}, len(colNames))

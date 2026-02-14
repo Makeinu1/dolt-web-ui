@@ -44,14 +44,15 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 	if err != nil {
 		return nil, fmt.Errorf("failed to query template: %w", err)
 	}
-	defer rows.Close()
 
 	colNames, err := rows.Columns()
 	if err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
 	if !rows.Next() {
+		rows.Close()
 		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "template row not found"}
 	}
 
@@ -61,8 +62,10 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 		valuePtrs[i] = &values[i]
 	}
 	if err := rows.Scan(valuePtrs...); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("failed to scan template: %w", err)
 	}
+	rows.Close() // Must close before making another query on the same connection.
 
 	templateRow := make(map[string]interface{})
 	for i, col := range colNames {
@@ -91,6 +94,19 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 		}
 	}
 
+	// Validate change_column if specified
+	if req.ChangeColumn != "" {
+		if err := validation.ValidateIdentifier("change_column", req.ChangeColumn); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid change_column name"}
+		}
+		if _, exists := templateRow[req.ChangeColumn]; !exists {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("change_column '%s' not found in table", req.ChangeColumn)}
+		}
+		if req.ChangeColumn == pkCol {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "change_column must not be PK column"}
+		}
+	}
+
 	// Generate ops
 	ops := make([]model.CommitOp, 0, len(req.NewPKs))
 	for _, newPK := range req.NewPKs {
@@ -100,6 +116,11 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 		}
 		rowValues[pkCol] = newPK
 
+		// Apply change_column override
+		if req.ChangeColumn != "" && req.ChangeValue != nil {
+			rowValues[req.ChangeColumn] = req.ChangeValue
+		}
+
 		ops = append(ops, model.CommitOp{
 			Type:   "insert",
 			Table:  req.Table,
@@ -107,19 +128,29 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 		})
 	}
 
-	return &model.PreviewResponse{Ops: ops}, nil
+	return &model.PreviewResponse{Ops: ops, Warnings: []string{}, Errors: []model.PreviewError{}}, nil
 }
 
-// PreviewBatchGenerate generates insert ops similar to clone with optional overrides.
-// Per v6f spec section 3.3.
+// PreviewBatchGenerate generates insert ops similar to clone with per-row change_column values.
+// Per v6f spec section 3.3: change_column specifies the single column to vary,
+// change_values (if provided) must match new_pks length.
 func (s *Service) PreviewBatchGenerate(ctx context.Context, req model.PreviewBatchGenerateRequest) (*model.PreviewResponse, error) {
+	// Validate change_values length if provided
+	if len(req.ChangeValues) > 0 && len(req.ChangeValues) != len(req.NewPKs) {
+		return nil, &model.APIError{
+			Status: 400, Code: model.CodeInvalidArgument,
+			Msg: fmt.Sprintf("change_values length (%d) must match new_pks length (%d)", len(req.ChangeValues), len(req.NewPKs)),
+		}
+	}
+
 	cloneReq := model.PreviewCloneRequest{
-		TargetID:   req.TargetID,
-		DBName:     req.DBName,
-		BranchName: req.BranchName,
-		Table:      req.Table,
-		TemplatePK: req.TemplatePK,
-		NewPKs:     req.NewPKs,
+		TargetID:     req.TargetID,
+		DBName:       req.DBName,
+		BranchName:   req.BranchName,
+		Table:        req.Table,
+		TemplatePK:   req.TemplatePK,
+		NewPKs:       req.NewPKs,
+		ChangeColumn: req.ChangeColumn,
 	}
 
 	result, err := s.PreviewClone(ctx, cloneReq)
@@ -127,11 +158,11 @@ func (s *Service) PreviewBatchGenerate(ctx context.Context, req model.PreviewBat
 		return nil, err
 	}
 
-	// Apply overrides if specified
-	if req.Overrides != nil && len(req.Overrides) > 0 {
+	// Apply per-row change_values if provided
+	if req.ChangeColumn != "" && len(req.ChangeValues) > 0 {
 		for i := range result.Ops {
-			for k, v := range req.Overrides {
-				result.Ops[i].Values[k] = v
+			if i < len(req.ChangeValues) {
+				result.Ops[i].Values[req.ChangeColumn] = req.ChangeValues[i]
 			}
 		}
 	}
@@ -268,5 +299,5 @@ func (s *Service) PreviewBulkUpdate(ctx context.Context, req model.PreviewBulkUp
 		})
 	}
 
-	return &model.PreviewResponse{Ops: ops}, nil
+	return &model.PreviewResponse{Ops: ops, Warnings: []string{}, Errors: []model.PreviewError{}}, nil
 }

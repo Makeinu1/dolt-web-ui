@@ -65,12 +65,14 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		return nil, fmt.Errorf("failed to get main hash: %w", err)
 	}
 
-	// Step 3: Build tag message JSON
+	// Step 3: Build tag message JSON (includes summary_ja for approver review)
 	tagMessage, err := json.Marshal(map[string]string{
+		"schema":              "dolt-webui/request@1",
 		"submitted_main_hash": submittedMainHash,
 		"submitted_work_hash": submittedWorkHash,
 		"submitted_at":        time.Now().UTC().Format(time.RFC3339),
 		"work_branch":         req.BranchName,
+		"summary_ja":          req.SummaryJa,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal tag message: %w", err)
@@ -105,13 +107,13 @@ func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx,
-		"SELECT tag_name, hash, message FROM dolt_tags WHERE tag_name LIKE 'req/%' ORDER BY tag_name")
+		"SELECT tag_name, tag_hash, message FROM dolt_tags WHERE tag_name LIKE 'req/%' ORDER BY tag_name")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query requests: %w", err)
 	}
 	defer rows.Close()
 
-	var result []model.RequestSummary
+	result := make([]model.RequestSummary, 0)
 	for rows.Next() {
 		var tagName, hash, message string
 		if err := rows.Scan(&tagName, &hash, &message); err != nil {
@@ -129,6 +131,7 @@ func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]
 			WorkBranch:        workBranch,
 			SubmittedMainHash: meta["submitted_main_hash"],
 			SubmittedWorkHash: hash,
+			SummaryJa:         meta["summary_ja"],
 			SubmittedAt:       meta["submitted_at"],
 		})
 	}
@@ -147,9 +150,9 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 	}
 	defer conn.Close()
 
-	var hash, message string
+	var tagHash, message string
 	err = conn.QueryRowContext(ctx,
-		"SELECT hash, message FROM dolt_tags WHERE tag_name = ?", requestID).Scan(&hash, &message)
+		"SELECT tag_hash, message FROM dolt_tags WHERE tag_name = ?", requestID).Scan(&tagHash, &message)
 	if err != nil {
 		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
 	}
@@ -163,7 +166,8 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 		RequestID:         requestID,
 		WorkBranch:        workBranch,
 		SubmittedMainHash: meta["submitted_main_hash"],
-		SubmittedWorkHash: hash,
+		SubmittedWorkHash: tagHash,
+		SummaryJa:         meta["summary_ja"],
 		SubmittedAt:       meta["submitted_at"],
 	}, nil
 }
@@ -180,7 +184,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 
 	var submittedWorkHash, message string
 	err = conn.QueryRowContext(ctx,
-		"SELECT hash, message FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&submittedWorkHash, &message)
+		"SELECT tag_hash, message FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&submittedWorkHash, &message)
 	if err != nil {
 		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
 	}
@@ -236,21 +240,20 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		return nil, fmt.Errorf("failed to squash merge: %w", err)
 	}
 
-	// Derive work item info for commit message
-	workItem := strings.TrimPrefix(workBranch, "wi/")
-	commitMsg := fmt.Sprintf("承認マージ: %s", workItem)
-
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('-am', ?)", commitMsg); err != nil {
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('-am', ?)", req.MergeMessageJa); err != nil {
 		conn.ExecContext(ctx, "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 
 	// Audit tag: merged/<WorkItem>/<Round>
 	mergedTag := "merged/" + strings.TrimPrefix(req.RequestID, "req/")
-	conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", commitMsg, mergedTag)
+	conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag)
 
 	// Delete request tag
 	conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID)
+
+	// Delete work branch (cleanup after merge)
+	conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch)
 
 	// Get new HEAD
 	var newHead string
@@ -273,7 +276,7 @@ func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) er
 	// Get tag info before deletion
 	var hash string
 	err = conn.QueryRowContext(ctx,
-		"SELECT hash FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&hash)
+		"SELECT tag_hash FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&hash)
 	if err != nil {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
 	}
@@ -287,6 +290,10 @@ func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) er
 	rejTag := "rej/" + strings.TrimPrefix(req.RequestID, "req/")
 	rejMessage := fmt.Sprintf("却下: %s at %s", req.RequestID, time.Now().UTC().Format(time.RFC3339))
 	conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, ?)", rejMessage, rejTag, hash)
+
+	// Delete work branch (cleanup after rejection)
+	workBranch := "wi/" + strings.TrimPrefix(req.RequestID, "req/")
+	conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch)
 
 	return nil
 }

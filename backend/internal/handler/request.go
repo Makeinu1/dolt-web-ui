@@ -13,9 +13,9 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TargetID == "" || req.DBName == "" || req.BranchName == "" {
+	if req.TargetID == "" || req.DBName == "" || req.BranchName == "" || req.SummaryJa == "" {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, and branch_name are required")
+			"target_id, db_name, branch_name, and summary_ja are required")
 		return
 	}
 
@@ -73,9 +73,9 @@ func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TargetID == "" || req.DBName == "" || req.RequestID == "" {
+	if req.TargetID == "" || req.DBName == "" || req.RequestID == "" || req.MergeMessageJa == "" {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, and request_id are required")
+			"target_id, db_name, request_id, and merge_message_ja are required")
 		return
 	}
 

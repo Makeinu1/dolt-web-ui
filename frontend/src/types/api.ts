@@ -29,6 +29,12 @@ export interface CreateBranchRequest {
   branch_name: string;
 }
 
+export interface DeleteBranchRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+}
+
 export interface Table {
   name: string;
 }
@@ -123,6 +129,7 @@ export interface SubmitRequestRequest {
   db_name: string;
   branch_name: string;
   expected_head: string;
+  summary_ja: string;
 }
 
 export interface SubmitRequestResponse {
@@ -136,6 +143,7 @@ export interface RequestSummary {
   work_branch: string;
   submitted_main_hash: string;
   submitted_work_hash: string;
+  summary_ja: string;
   submitted_at?: string;
 }
 
@@ -143,6 +151,7 @@ export interface ApproveRequest {
   target_id: string;
   db_name: string;
   request_id: string;
+  merge_message_ja: string;
 }
 
 export interface RejectRequest {
@@ -162,6 +171,8 @@ export interface PreviewCloneRequest {
   table: string;
   template_pk: Record<string, unknown>;
   new_pks: unknown[];
+  change_column?: string;
+  change_value?: unknown;
 }
 
 export interface PreviewBatchGenerateRequest {
@@ -171,7 +182,8 @@ export interface PreviewBatchGenerateRequest {
   table: string;
   template_pk: Record<string, unknown>;
   new_pks: unknown[];
-  overrides?: Record<string, unknown>;
+  change_column?: string;
+  change_values?: unknown[];
 }
 
 export interface PreviewBulkUpdateRequest {
@@ -182,8 +194,17 @@ export interface PreviewBulkUpdateRequest {
   tsv_data: string;
 }
 
+export interface PreviewError {
+  row_index: number;
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
 export interface PreviewResponse {
   ops: CommitOp[];
+  warnings: string[];
+  errors: PreviewError[];
 }
 
 export interface DiffResponse {

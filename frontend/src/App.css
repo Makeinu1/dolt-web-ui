@@ -2,7 +2,8 @@
 .app-layout {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-header {
@@ -27,13 +28,6 @@
   font-family: monospace;
 }
 
-.app-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-}
-
 /* Context selector bar */
 .context-bar {
   display: flex;
@@ -52,7 +46,7 @@
   margin-right: 4px;
 }
 
-/* Tabs */
+/* Top Tabs */
 .tab-bar {
   display: flex;
   gap: 0;
@@ -83,7 +77,142 @@
   background: none;
 }
 
-/* Toolbar */
+/* Work Area (grid + optional drawer) */
+.work-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Main grid pane (fills remaining space) */
+.grid-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8f0;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+/* Toolbar buttons (Changed / Diff toggle) */
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #c0c0d0;
+  border-radius: 4px;
+  background: #f5f5f8;
+  color: #555;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.toolbar-btn:hover {
+  background: #e8e8f0;
+  border-color: #a0a0c0;
+}
+
+.toolbar-btn-active {
+  background: #e0e7ff;
+  border-color: #4361ee;
+  color: #4361ee;
+  font-weight: 600;
+}
+
+.toolbar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f59e0b;
+  color: #fff;
+  border-radius: 10px;
+  min-width: 18px;
+  height: 18px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 5px;
+}
+
+/* Right drawer (push style — shrinks the grid) */
+.drawer {
+  width: 420px;
+  min-width: 360px;
+  border-left: 1px solid #d0d0d8;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #f5f5f8;
+  border-bottom: 1px solid #d0d0d8;
+  flex-shrink: 0;
+}
+
+.drawer-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+}
+
+.drawer-close {
+  border: none;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.drawer-close:hover {
+  color: #333;
+}
+
+.drawer-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Action bar (bottom of Work tab) */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #f5f5f8;
+  border-top: 1px solid #d0d0d8;
+  flex-shrink: 0;
+}
+
+.action-bar .spacer {
+  flex: 1;
+}
+
+/* Toolbar (used by pagination etc.) */
 .toolbar {
   display: flex;
   align-items: center;
@@ -97,7 +226,7 @@
   flex: 1;
 }
 
-/* Content area */
+/* Content area (full-width for Conflicts/Requests tabs) */
 .content-area {
   flex: 1;
   padding: 0;
@@ -114,6 +243,7 @@
   border-bottom: 1px solid #e8e8f0;
   font-size: 12px;
   color: #666;
+  flex-shrink: 0;
 }
 
 /* Status bar */
@@ -126,6 +256,7 @@
   color: #a0a0c0;
   font-size: 11px;
   border-top: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .status-bar .state-badge {
@@ -139,7 +270,7 @@
 .status-bar .state-conflict { background: #991b1b; color: #fee2e2; }
 .status-bar .state-request { background: #3730a3; color: #e0e7ff; }
 
-/* Modal overlay */
+/* Modal overlay — blocks backdrop scroll */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -148,6 +279,13 @@
   align-items: center;
   justify-content: center;
   z-index: 100;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* When any modal is open, prevent body scroll */
+body.modal-open {
+  overflow: hidden;
 }
 
 .modal {
@@ -190,6 +328,12 @@
   font-size: 12px;
 }
 
+/* Template row highlight in AG Grid */
+.template-row {
+  background-color: #e0e7ff !important;
+  border-left: 3px solid #4361ee;
+}
+
 /* Draft count badge */
 .draft-count {
   display: inline-flex;
@@ -204,4 +348,47 @@
   font-weight: 700;
   padding: 0 6px;
   margin-left: 4px;
+}
+
+/* Column toggle dropdown */
+.column-toggle-wrapper {
+  position: relative;
+}
+
+.column-toggle-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  background: #fff;
+  border: 1px solid #d0d0d8;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 8px 0;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.column-toggle-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.column-toggle-item:hover {
+  background: #f0f0f5;
+}
+
+.column-toggle-item input[type="checkbox"] {
+  margin: 0;
+}
+
+.column-toggle-item.pk-col {
+  color: #888;
+  cursor: default;
 }

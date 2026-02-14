@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -24,7 +25,7 @@ func (s *Service) ListConflicts(ctx context.Context, targetID, dbName, branchNam
 	}
 	defer rows.Close()
 
-	var result []model.ConflictsSummaryEntry
+	result := make([]model.ConflictsSummaryEntry, 0)
 	for rows.Next() {
 		var entry model.ConflictsSummaryEntry
 		if err := rows.Scan(&entry.Table, &entry.SchemaConflicts, &entry.DataConflicts, &entry.ConstraintViolations); err != nil {
@@ -60,7 +61,7 @@ func (s *Service) GetConflictsTable(ctx context.Context, targetID, dbName, branc
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result []model.ConflictRow
+	result := make([]model.ConflictRow, 0)
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
 		valuePtrs := make([]interface{}, len(colNames))
@@ -79,9 +80,20 @@ func (s *Service) GetConflictsTable(ctx context.Context, targetID, dbName, branc
 			if b, ok := val.([]byte); ok {
 				val = string(b)
 			}
-			base[col] = val
-			ours[col] = val
-			theirs[col] = val
+			// Dolt conflict columns use prefixes: base_<col>, our_<col>, their_<col>
+			switch {
+			case strings.HasPrefix(col, "base_"):
+				base[strings.TrimPrefix(col, "base_")] = val
+			case strings.HasPrefix(col, "our_"):
+				ours[strings.TrimPrefix(col, "our_")] = val
+			case strings.HasPrefix(col, "their_"):
+				theirs[strings.TrimPrefix(col, "their_")] = val
+			default:
+				// Shared columns (e.g. diff_type) go into all maps
+				base[col] = val
+				ours[col] = val
+				theirs[col] = val
+			}
 		}
 
 		result = append(result, model.ConflictRow{
@@ -162,8 +174,9 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 
 	// Step 3: DOLT_MERGE
 	var mergeHash string
-	var mergeConflicts int
-	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main', '--no-ff')").Scan(&mergeHash, &mergeConflicts)
+	var fastForward, mergeConflicts int
+	var mergeMessage string
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main', '--no-ff')").Scan(&mergeHash, &fastForward, &mergeConflicts, &mergeMessage)
 	if err != nil {
 		conn.ExecContext(ctx, "ROLLBACK")
 		return nil, fmt.Errorf("failed to merge: %w", err)
