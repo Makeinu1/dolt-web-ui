@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -78,30 +79,111 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 			return nil, fmt.Errorf("failed to scan diff row: %w", err)
 		}
 
-		row := make(map[string]interface{})
+		// Separate from_<col> and to_<col> columns
+		fromRow := make(map[string]interface{})
+		toRow := make(map[string]interface{})
+		var diffType string
+
 		for i, col := range colNames {
-			if b, ok := values[i].([]byte); ok {
-				row[col] = string(b)
-			} else {
-				row[col] = values[i]
+			val := values[i]
+			if b, ok := val.([]byte); ok {
+				val = string(b)
+			}
+			switch {
+			case col == "diff_type":
+				if s, ok := val.(string); ok {
+					diffType = s
+				}
+			case strings.HasPrefix(col, "from_"):
+				fromRow[strings.TrimPrefix(col, "from_")] = val
+			case strings.HasPrefix(col, "to_"):
+				toRow[strings.TrimPrefix(col, "to_")] = val
 			}
 		}
 
-		diffType := "modified"
-		if dt, ok := row["diff_type"]; ok {
-			if s, ok := dt.(string); ok {
-				diffType = s
-			}
+		if diffType == "" {
+			diffType = "modified"
 		}
 
 		result = append(result, model.DiffRow{
 			DiffType: diffType,
-			From:     row,
-			To:       row,
+			From:     fromRow,
+			To:       toRow,
 		})
 	}
 
 	return result, rows.Err()
+}
+
+// DiffSummary returns per-table added/modified/removed counts for all tables
+// in the branch, using three-dot diff vs fromRef (default "main").
+func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName, fromRef, toRef, mode string) ([]model.DiffSummaryEntry, error) {
+	if err := validateRef("from", fromRef); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+	if err := validateRef("to", toRef); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+
+	// Get the list of tables to diff
+	tables, err := s.ListTables(ctx, targetID, dbName, branchName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tables: %w", err)
+	}
+
+	var refSpec string
+	if mode == "three_dot" {
+		refSpec = fmt.Sprintf("%s...%s", fromRef, toRef)
+	} else {
+		refSpec = fmt.Sprintf("%s..%s", fromRef, toRef)
+	}
+
+	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	result := make([]model.DiffSummaryEntry, 0)
+	for _, t := range tables {
+		if err := validation.ValidateIdentifier("table", t.Name); err != nil {
+			continue
+		}
+
+		query := fmt.Sprintf(
+			"SELECT diff_type, COUNT(*) FROM DOLT_DIFF('%s', '%s') GROUP BY diff_type",
+			refSpec, t.Name,
+		)
+		// NOTE: Must close rows before next query on the same connection.
+		rows, err := conn.QueryContext(ctx, query)
+		if err != nil {
+			// Table may not have diff support (e.g. new table); skip silently.
+			continue
+		}
+
+		entry := model.DiffSummaryEntry{Table: t.Name}
+		for rows.Next() {
+			var diffType string
+			var count int
+			if err := rows.Scan(&diffType, &count); err != nil {
+				break
+			}
+			switch diffType {
+			case "added":
+				entry.Added = count
+			case "modified":
+				entry.Modified = count
+			case "removed":
+				entry.Removed = count
+			}
+		}
+		rows.Close() // Close BEFORE next iteration's QueryContext
+
+		if entry.Added+entry.Modified+entry.Removed > 0 {
+			result = append(result, entry)
+		}
+	}
+	return result, nil
 }
 
 // HistoryCommits returns the commit log for a branch.

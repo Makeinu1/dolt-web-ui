@@ -31,7 +31,10 @@ func New(cfg *config.Config) (*Repository, error) {
 			return nil, fmt.Errorf("failed to connect to target %q: %w", target.ID, err)
 		}
 		db.SetMaxOpenConns(20)
-		db.SetMaxIdleConns(5)
+		// MaxIdleConns=0: Dolt branch contexts persist on pooled connections.
+		// A connection last used for a deleted branch will fail USE on reuse.
+		// Setting MaxIdleConns=0 closes connections on release, avoiding stale contexts.
+		db.SetMaxIdleConns(0)
 		r.pools[target.ID] = db
 	}
 
@@ -39,9 +42,8 @@ func New(cfg *config.Config) (*Repository, error) {
 }
 
 // Conn acquires a connection for a specific target, database, and branch.
-// Per v6f spec section 5.1:
-//   - Uses USE <db_name>/<branch_name> (DOLT_CHECKOUT is forbidden)
-//   - 1 request = 1 connection = 1 branch session
+// Uses USE + DOLT_CHECKOUT to handle branch names containing slashes (e.g. wi/work/01).
+// 1 request = 1 connection = 1 branch session.
 func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
@@ -55,12 +57,19 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 
-	// Per v6f spec 5.1: USE <db_name>/<branch_name> to fix current location.
-	// DOLT_CHECKOUT() is forbidden.
-	useStmt := fmt.Sprintf("USE `%s/%s`", dbName, branchName)
+	// USE `db` to select the database, then DOLT_CHECKOUT to switch branch.
+	// Backtick-quoting the full "db/branch" path breaks when branch names
+	// contain slashes (e.g. wi/work/01), so we split into two steps.
+	useStmt := fmt.Sprintf("USE `%s`", dbName)
 	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to set db/branch context %s/%s: %w", dbName, branchName, err)
+		return nil, fmt.Errorf("failed to set db context %s: %w", dbName, err)
+	}
+	if branchName != "main" {
+		if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branchName); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to checkout branch %s: %w", branchName, err)
+		}
 	}
 
 	return conn, nil

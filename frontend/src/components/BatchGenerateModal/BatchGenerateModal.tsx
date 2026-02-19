@@ -15,7 +15,6 @@ export function BatchGenerateModal({ onClose }: BatchGenerateModalProps) {
   const { templateRow, templateTable, templateColumns, changeColumn } = useTemplateStore();
   const addOp = useDraftStore((s) => s.addOp);
   const setBaseState = useUIStore((s) => s.setBaseState);
-  const toggleDrawer = useUIStore((s) => s.toggleDrawer);
 
   const pkCol = templateColumns.find((c) => c.primary_key);
 
@@ -82,7 +81,6 @@ export function BatchGenerateModal({ onClose }: BatchGenerateModalProps) {
     setWarnings([]);
     setErrors([]);
     setBaseState("DraftEditing");
-    toggleDrawer("changed");
     onClose();
   };
 

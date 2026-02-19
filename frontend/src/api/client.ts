@@ -193,6 +193,25 @@ export const getHistoryRow = (
     })}`
   );
 
+export const getDiffSummary = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  fromRef = "main",
+  toRef = branchName,
+  mode = "three_dot"
+) =>
+  request<import("../types/api").DiffSummaryResponse>(
+    `/diff/summary${queryString({
+      target_id: targetId,
+      db_name: dbName,
+      branch_name: branchName,
+      from_ref: fromRef,
+      to_ref: toRef,
+      mode,
+    })}`
+  );
+
 // Conflicts
 export const getConflicts = (targetId: string, dbName: string, branchName: string) =>
   request<import("../types/api").ConflictsSummaryEntry[]>(

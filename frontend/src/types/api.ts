@@ -162,6 +162,7 @@ export interface RejectRequest {
 
 export interface ApproveResponse {
   hash: string;
+  next_branch: string; // Auto-created next round branch (e.g., "wi/ProjectA/02")
 }
 
 export interface PreviewCloneRequest {
@@ -209,4 +210,15 @@ export interface PreviewResponse {
 
 export interface DiffResponse {
   rows: DiffRow[];
+}
+
+export interface DiffSummaryEntry {
+  table: string;
+  added: number;
+  modified: number;
+  removed: number;
+}
+
+export interface DiffSummaryResponse {
+  entries: DiffSummaryEntry[];
 }

@@ -5,109 +5,19 @@ import {
   ModuleRegistry,
   type ColDef,
   type CellValueChangedEvent,
-  type ICellRendererParams,
   type FirstDataRenderedEvent,
+  type GetContextMenuItemsParams,
+  type MenuItemDef,
 } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
+import { useTemplateStore } from "../../store/template";
+import { RecordHistoryPopup } from "../common/RecordHistoryPopup";
 import * as api from "../../api/client";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-
-// --- Copy button renderer (one-click row clone with auto PK) ---
-interface CopyButtonParams extends ICellRendererParams {
-  tableName: string;
-  columns: ColumnSchema[];
-  rowData: Record<string, unknown>[];
-  onRowInserted: (row: Record<string, unknown>) => void;
-}
-
-function CopyButtonRenderer(params: CopyButtonParams) {
-  const [copying, setCopying] = useState(false);
-
-  if (!params.data) return null;
-
-  // Hide Copy button for uncommitted (optimistically inserted) rows
-  const pkCol = params.columns.find((c) => c.primary_key);
-  if (pkCol) {
-    const rowPK = params.data[pkCol.name];
-    const draftOps = useDraftStore.getState().ops;
-    const isUncommitted = draftOps.some(
-      (op) =>
-        op.type === "insert" &&
-        op.table === params.tableName &&
-        String(op.values[pkCol.name]) === String(rowPK)
-    );
-    if (isUncommitted) return null;
-  }
-
-  const handleCopy = async () => {
-    const { targetId, dbName, branchName } = useContextStore.getState();
-    const pkCol = params.columns.find((c) => c.primary_key);
-    if (!pkCol) return;
-
-    // Auto-generate next PK from loaded rows
-    const allRows = params.rowData;
-    const draftOps = useDraftStore.getState().ops;
-    const existingPKs = allRows.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
-    const draftPKs = draftOps
-      .filter((op) => op.table === params.tableName && op.type === "insert" && op.values[pkCol.name] != null)
-      .map((op) => Number(op.values[pkCol.name]))
-      .filter((n) => !isNaN(n));
-    const allPKs = [...existingPKs, ...draftPKs];
-    const maxPK = allPKs.length > 0 ? Math.max(...allPKs) : 0;
-    const newPK = maxPK + 1;
-
-    setCopying(true);
-    try {
-      const result = await api.previewClone({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        table: params.tableName,
-        template_pk: { [pkCol.name]: params.data[pkCol.name] },
-        new_pks: [newPK],
-      });
-      if (result.errors?.length > 0) {
-        alert(result.errors[0].message);
-      } else {
-        for (const op of result.ops) {
-          useDraftStore.getState().addOp(op);
-        }
-        useUIStore.getState().setBaseState("DraftEditing");
-        // Optimistically add the new row to the grid
-        const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
-        if (insertOp && params.onRowInserted) {
-          params.onRowInserted(insertOp.values as Record<string, unknown>);
-        }
-      }
-    } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      alert(e?.error?.message || "Copy failed");
-    } finally {
-      setCopying(false);
-    }
-  };
-
-  return (
-    <button
-      onClick={handleCopy}
-      disabled={copying}
-      style={{
-        fontSize: 11,
-        padding: "2px 8px",
-        cursor: copying ? "wait" : "pointer",
-        border: "1px solid #c0c0d0",
-        borderRadius: 3,
-        background: copying ? "#e8e8f0" : "#f0f0f5",
-      }}
-    >
-      {copying ? "..." : "Copy"}
-    </button>
-  );
-}
 
 // --- Column toggle dropdown ---
 function ColumnToggle({
@@ -177,6 +87,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
   const setBaseState = useUIStore((s) => s.setBaseState);
+  const { setTemplate } = useTemplateStore();
 
   const [columns, setColumns] = useState<ColumnSchema[]>([]);
   const [rowData, setRowData] = useState<Record<string, unknown>[]>([]);
@@ -185,6 +96,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const [historyTarget, setHistoryTarget] = useState<{ pkJson: string; pkLabel: string } | null>(null);
   const gridRef = useRef<AgGridReact>(null);
 
   const isMain = branchName === "main";
@@ -230,7 +142,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     loadRows();
   }, [loadRows]);
 
-  // Optimistic row insert for Copy button
+  // Optimistic row insert (used after clone)
   const onRowInserted = useCallback((row: Record<string, unknown>) => {
     setRowData((prev) => [...prev, row]);
     setTotalCount((c) => c + 1);
@@ -249,11 +161,94 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     });
   }, []);
 
+  // Right-click context menu
+  const getContextMenuItems = useCallback(
+    (params: GetContextMenuItemsParams) => {
+      if (!params.node || !params.node.data) {
+        return ["copy" as unknown as MenuItemDef];
+      }
+
+      const rowNode = params.node.data as Record<string, unknown>;
+      const pkCol = columns.find((c) => c.primary_key);
+
+      // "Show History" is always available (main branch and work branches)
+      const historyItem: MenuItemDef = {
+        name: "Show History",
+        action: () => {
+          if (!pkCol) return;
+          const pkVal = rowNode[pkCol.name];
+          setHistoryTarget({
+            pkJson: JSON.stringify({ [pkCol.name]: pkVal }),
+            pkLabel: String(pkVal),
+          });
+        },
+        disabled: !pkCol,
+      };
+
+      if (isMain || editingBlocked) {
+        return [historyItem, "separator" as unknown as MenuItemDef, "copy" as unknown as MenuItemDef];
+      }
+
+      const cloneItem = {
+        name: "Clone Row (auto PK)",
+        action: async () => {
+          if (!pkCol) return;
+
+          // Auto-generate next PK from loaded rows + draft ops
+          const draftOps = useDraftStore.getState().ops;
+          const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
+          const draftPKs = draftOps
+            .filter((op) => op.table === tableName && op.type === "insert" && op.values[pkCol.name] != null)
+            .map((op) => Number(op.values[pkCol.name]))
+            .filter((n) => !isNaN(n));
+          const maxPK = Math.max(0, ...existingPKs, ...draftPKs);
+          const newPK = maxPK + 1;
+
+          try {
+            const result = await api.previewClone({
+              target_id: targetId,
+              db_name: dbName,
+              branch_name: branchName,
+              table: tableName,
+              template_pk: { [pkCol.name]: rowNode[pkCol.name] },
+              new_pks: [newPK],
+            });
+            if (result.errors?.length > 0) {
+              alert(result.errors[0].message);
+            } else {
+              for (const op of result.ops) {
+                addOp(op);
+              }
+              setBaseState("DraftEditing");
+              const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
+              if (insertOp) {
+                onRowInserted(insertOp.values as Record<string, unknown>);
+              }
+            }
+          } catch (err: unknown) {
+            const e = err as { error?: { message?: string } };
+            alert(e?.error?.message || "Clone failed");
+          }
+        },
+      };
+
+      const templateItem = {
+        name: "Set as Template",
+        action: () => {
+          setTemplate(rowNode, tableName, columns);
+        },
+      };
+
+      return [historyItem, "separator" as unknown as MenuItemDef, cloneItem, templateItem, "separator" as unknown as MenuItemDef, "copy" as unknown as MenuItemDef];
+    },
+    [isMain, editingBlocked, columns, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted, setTemplate, setHistoryTarget]
+  );
+
   // Column definitions for AG Grid
   const colDefs: ColDef[] = useMemo(() => {
     const visibleCols = columns.filter((col) => !hiddenColumns.has(col.name));
 
-    const dataCols: ColDef[] = visibleCols.map((col) => ({
+    return visibleCols.map((col) => ({
       field: col.name,
       headerName: col.name,
       editable: !editingBlocked && !col.primary_key,
@@ -264,32 +259,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
         ? { backgroundColor: "#f0f0f5", fontWeight: 600 }
         : undefined,
     }));
-
-    // Add Copy column on work branches
-    if (!isMain) {
-      const actionCol: ColDef = {
-        headerName: "",
-        colId: "__actions",
-        pinned: "left",
-        width: 70,
-        maxWidth: 70,
-        sortable: false,
-        filter: false,
-        editable: false,
-        suppressNavigable: true,
-        cellRenderer: CopyButtonRenderer,
-        cellRendererParams: {
-          tableName,
-          columns,
-          rowData,
-          onRowInserted,
-        },
-      };
-      return [actionCol, ...dataCols];
-    }
-
-    return dataCols;
-  }, [columns, hiddenColumns, editingBlocked, isMain, tableName, rowData, onRowInserted]);
+  }, [columns, hiddenColumns, editingBlocked]);
 
   // Auto-size columns to fit content on first data render
   const onFirstDataRendered = useCallback((event: FirstDataRenderedEvent) => {
@@ -347,6 +317,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           onFirstDataRendered={onFirstDataRendered}
           onCellValueChanged={onCellValueChanged}
           suppressClickEdit={editingBlocked}
+          getContextMenuItems={getContextMenuItems}
         />
       </div>
       <div className="toolbar" style={{ justifyContent: "center" }}>
@@ -360,6 +331,15 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           Next
         </button>
       </div>
+
+      {historyTarget && (
+        <RecordHistoryPopup
+          table={tableName}
+          pkJson={historyTarget.pkJson}
+          pkLabel={historyTarget.pkLabel}
+          onClose={() => setHistoryTarget(null)}
+        />
+      )}
     </div>
   );
 }

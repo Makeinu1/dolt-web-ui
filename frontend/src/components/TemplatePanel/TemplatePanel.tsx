@@ -19,7 +19,6 @@ export function TemplatePanel() {
   } = useTemplateStore();
   const addOp = useDraftStore((s) => s.addOp);
   const setBaseState = useUIStore((s) => s.setBaseState);
-  const toggleDrawer = useUIStore((s) => s.toggleDrawer);
 
   const pkCol = templateColumns.find((c) => c.primary_key);
   const nonPkCols = templateColumns.filter((c) => !c.primary_key);
@@ -124,7 +123,6 @@ export function TemplatePanel() {
     setShowBulk(false);
     setTsvData("");
     setBaseState("DraftEditing");
-    toggleDrawer("changed");
   };
 
   const cancelBulkPreview = () => {

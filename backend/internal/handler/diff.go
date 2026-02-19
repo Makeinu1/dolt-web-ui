@@ -31,6 +31,37 @@ func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.DiffResponse{Rows: rows})
 }
 
+func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
+	targetID := r.URL.Query().Get("target_id")
+	dbName := r.URL.Query().Get("db_name")
+	branchName := r.URL.Query().Get("branch_name")
+	if targetID == "" || dbName == "" || branchName == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
+			"target_id, db_name, and branch_name are required")
+		return
+	}
+
+	fromRef := r.URL.Query().Get("from_ref")
+	if fromRef == "" {
+		fromRef = "main"
+	}
+	toRef := r.URL.Query().Get("to_ref")
+	if toRef == "" {
+		toRef = branchName
+	}
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "three_dot"
+	}
+
+	entries, err := h.svc.DiffSummary(r.Context(), targetID, dbName, branchName, fromRef, toRef, mode)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, model.DiffSummaryResponse{Entries: entries})
+}
+
 func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	targetID := r.URL.Query().Get("target_id")
 	dbName := r.URL.Query().Get("db_name")

@@ -284,7 +284,21 @@ type PreviewResponse struct {
 
 // ApproveResponse represents the result of an approval.
 type ApproveResponse struct {
-	Hash string `json:"hash"`
+	Hash       string `json:"hash"`
+	NextBranch string `json:"next_branch"` // Auto-created next round branch (e.g., "wi/ProjectA/02")
+}
+
+// DiffSummaryEntry represents the row-count diff for one table.
+type DiffSummaryEntry struct {
+	Table    string `json:"table"`
+	Added    int    `json:"added"`
+	Modified int    `json:"modified"`
+	Removed  int    `json:"removed"`
+}
+
+// DiffSummaryResponse is the full response for GET /diff/summary.
+type DiffSummaryResponse struct {
+	Entries []DiffSummaryEntry `json:"entries"`
 }
 
 // ConflictsSummaryEntry represents a table's conflict summary from preview.

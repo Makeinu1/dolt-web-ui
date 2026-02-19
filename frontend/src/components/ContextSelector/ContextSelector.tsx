@@ -44,6 +44,11 @@ export function ContextSelector() {
     try {
       const result = await api.getBranches(targetId, dbName);
       setBranches(result);
+      // Reset branch selection if current branch no longer exists (e.g. after approve/delete)
+      const currentBranch = useContextStore.getState().branchName;
+      if (currentBranch && !result.some((b) => b.name === currentBranch)) {
+        setBranch("");
+      }
     } catch (err) {
       const e = err as { error?: { message?: string } };
       setError(e?.error?.message || "Failed to load branches");

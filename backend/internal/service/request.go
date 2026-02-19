@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,9 @@ var workBranchRe = regexp.MustCompile(`^wi/[A-Za-z0-9._-]+/[0-9]{2}$`)
 
 // requestIDRe validates request IDs: req/<WorkItem>/<Round>
 var requestIDRe = regexp.MustCompile(`^req/[A-Za-z0-9._-]+/[0-9]{2}$`)
+
+// nextRoundRe extracts item and round from wi/<WorkItem>/<Round>
+var nextRoundRe = regexp.MustCompile(`^wi/(.+)/(\d{2})$`)
 
 // SubmitRequest creates a request tag for approval.
 // Per v6f spec section 9.1: derives request_id from work branch name,
@@ -172,8 +177,8 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 	}, nil
 }
 
-// ApproveRequest performs a squash merge of work branch into main.
-// Per v6f spec section 9.3: freeze gate check → squash merge → audit tag → delete req tag.
+// ApproveRequest performs a regular (non-squash) merge of work branch into main.
+// Removes freeze gate to enable parallel merges, relying on Dolt's cell-level 3-way merge.
 func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) (*model.ApproveResponse, error) {
 	// Step 0: Get request tag info
 	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
@@ -193,24 +198,9 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	if err := json.Unmarshal([]byte(message), &meta); err != nil {
 		return nil, fmt.Errorf("failed to parse tag message: %w", err)
 	}
-	submittedMainHash := meta["submitted_main_hash"]
 	workBranch := meta["work_branch"]
 
-	// Step 1: Freeze gate check - verify main hasn't changed
-	var currentMainHash string
-	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('main')").Scan(&currentMainHash); err != nil {
-		return nil, fmt.Errorf("failed to get main hash: %w", err)
-	}
-	if currentMainHash != submittedMainHash {
-		return nil, &model.APIError{
-			Status:  412,
-			Code:    model.CodePreconditionFailed,
-			Msg:     "main branch has changed since submission",
-			Details: map[string]string{"submitted_main_hash": submittedMainHash, "current_main_hash": currentMainHash},
-		}
-	}
-
-	// Step 1b: Verify work branch HEAD hasn't changed
+	// Step 1: Work HEAD integrity check (NOT freeze gate - only checks work branch unchanged)
 	workConn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, workBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to work branch: %w", err)
@@ -230,42 +220,101 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		}
 	}
 
-	// Step 2: Squash merge on main
-	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
-		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	// Step 2: Regular merge with autocommit (enables immediate commit)
+	if _, err := conn.ExecContext(ctx, "SET autocommit=1"); err != nil {
+		return nil, fmt.Errorf("failed to set autocommit: %w", err)
+	}
+	// Reset autocommit to prevent pool pollution (sync.go pattern)
+	defer conn.ExecContext(ctx, "SET autocommit=0")
+
+	// DOLT_MERGE with parameterized query (prevents SQL injection).
+	// With autocommit=1, Dolt auto-rolls back conflicting merges and returns error 1105
+	// ("Merge conflict detected") instead of returning conflicts>0 in the result row.
+	// Detect this and map to MERGE_CONFLICTS_PRESENT.
+	var mergeHash string
+	var fastForward, conflicts int
+	var mergeMessage string
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE(?, '-m', ?)", workBranch, req.MergeMessageJa).
+		Scan(&mergeHash, &fastForward, &conflicts, &mergeMessage)
+	if err != nil {
+		if strings.Contains(err.Error(), "Merge conflict detected") || strings.Contains(err.Error(), "conflict") {
+			// autocommit=1: Dolt already rolled back the transaction automatically.
+			return nil, &model.APIError{
+				Status: 409,
+				Code:   model.CodeMergeConflictsPresent,
+				Msg:    "merge conflicts detected - same cell edited in multiple branches",
+				Details: map[string]interface{}{
+					"hint": "Contact administrator for conflict resolution.",
+				},
+			}
+		}
+		return nil, fmt.Errorf("failed to merge: %w", err)
 	}
 
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("CALL DOLT_MERGE('%s', '--squash')", workBranch)); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
-		return nil, fmt.Errorf("failed to squash merge: %w", err)
+	if conflicts > 0 {
+		// Fallback: conflicts returned in result row (non-autocommit path).
+		// Abort to restore clean state.
+		if _, err := conn.ExecContext(ctx, "CALL DOLT_MERGE('--abort')"); err != nil {
+			log.Printf("WARN: merge abort failed: %v", err)
+		}
+		return nil, &model.APIError{
+			Status: 409,
+			Code:   model.CodeMergeConflictsPresent,
+			Msg:    "merge conflicts detected - same cell edited in multiple branches",
+			Details: map[string]interface{}{
+				"conflicts": conflicts,
+				"hint":      "Contact administrator for conflict resolution.",
+			},
+		}
 	}
 
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('-am', ?)", req.MergeMessageJa); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
-		return nil, fmt.Errorf("failed to commit: %w", err)
-	}
-
-	// Audit tag: merged/<WorkItem>/<Round>
-	mergedTag := "merged/" + strings.TrimPrefix(req.RequestID, "req/")
-	conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag)
-
-	// Delete request tag
-	conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID)
-
-	// Delete work branch (cleanup after merge)
-	conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch)
-
-	// Get new HEAD
+	// Step 3: Post-processing (log errors but continue)
 	var newHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {
 		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
 	}
 
-	return &model.ApproveResponse{Hash: newHead}, nil
+	// Audit tag: merged/<WorkItem>/<Round>
+	mergedTag := "merged/" + strings.TrimPrefix(req.RequestID, "req/")
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag); err != nil {
+		log.Printf("ERROR: audit tag creation failed for %s: %v", mergedTag, err)
+	}
+
+	// Delete request tag
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
+		log.Printf("ERROR: req tag deletion failed for %s: %v", req.RequestID, err)
+	}
+
+	// Delete old work branch
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch); err != nil {
+		log.Printf("ERROR: branch deletion failed for %s: %v", workBranch, err)
+	}
+
+	// Step 4: Create next round branch
+	// Parse: wi/ProjectA/01 → item="ProjectA", round=1
+	matches := nextRoundRe.FindStringSubmatch(workBranch)
+	if len(matches) != 3 {
+		return nil, fmt.Errorf("invalid work branch format: %s", workBranch)
+	}
+	item := matches[1]
+	round, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse round number: %w", err)
+	}
+	nextBranch := fmt.Sprintf("wi/%s/%02d", item, round+1)
+
+	// Create next branch from current main HEAD
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
+		log.Printf("ERROR: next branch creation failed for %s: %v", nextBranch, err)
+		// Non-fatal: return success with empty next_branch
+		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
+	}
+
+	return &model.ApproveResponse{Hash: newHead, NextBranch: nextBranch}, nil
 }
 
-// RejectRequest deletes the request tag and creates an audit tag.
-// Per v6f spec section 9.4: delete req tag, create rej tag.
+// RejectRequest deletes the request tag only.
+// Branch is kept for user to fix and re-submit. No rej tag needed (simplicity).
 func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) error {
 	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
 	if err != nil {
@@ -273,27 +322,23 @@ func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) er
 	}
 	defer conn.Close()
 
-	// Get tag info before deletion
-	var hash string
+	// Verify request exists
+	var count int
 	err = conn.QueryRowContext(ctx,
-		"SELECT tag_hash FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&hash)
+		"SELECT COUNT(*) FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&count)
 	if err != nil {
+		return fmt.Errorf("failed to query tag: %w", err)
+	}
+	if count == 0 {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
 	}
 
-	// Delete request tag
+	// Delete request tag only
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
 		return fmt.Errorf("failed to delete tag: %w", err)
 	}
 
-	// Create audit tag: rej/<WorkItem>/<Round>
-	rejTag := "rej/" + strings.TrimPrefix(req.RequestID, "req/")
-	rejMessage := fmt.Sprintf("却下: %s at %s", req.RequestID, time.Now().UTC().Format(time.RFC3339))
-	conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, ?)", rejMessage, rejTag, hash)
-
-	// Delete work branch (cleanup after rejection)
-	workBranch := "wi/" + strings.TrimPrefix(req.RequestID, "req/")
-	conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch)
-
+	// Branch remains for user to fix and re-submit
+	// No rej tag created (simpler: absence of req tag = rejected)
 	return nil
 }
