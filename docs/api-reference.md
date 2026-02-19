@@ -782,9 +782,15 @@ Get a specific request's details.
 
 ### POST /request/approve
 
-Approve a request and merge into main via squash merge.
+Approve a request and merge into main via **3-way merge** (Dolt cell-level merge).
 
-Creates `merged/` tag upon successful merge.
+On success:
+- Creates `merged/{item}/{round}` audit tag
+- Deletes the work branch (`wi/{item}/{round}`)
+- Creates the next-round branch (`wi/{item}/{round+1}`) from the new main HEAD
+- Returns the new main HEAD hash and the next-round branch name
+
+**No freeze gate**: multiple branches can be approved concurrently. Dolt's cell-level 3-way merge automatically resolves non-overlapping changes. Only same-cell conflicts cause an abort.
 
 **Request Body:**
 
@@ -802,19 +808,35 @@ Creates `merged/` tag upon successful merge.
 | `target_id` | Yes | Target ID |
 | `db_name` | Yes | Database name |
 | `request_id` | Yes | Request ID to approve |
-| `merge_message_ja` | Yes | Merge commit message in Japanese |
+| `merge_message_ja` | Yes | Merge commit message |
 
 **Response:**
 
 ```json
-{ "hash": "mergecommithash123..." }
+{
+  "hash": "mergecommithash123...",
+  "next_branch": "wi/wi-work-1/2"
+}
 ```
+
+| Field | Description |
+|-------|-------------|
+| `hash` | New main HEAD hash after merge |
+| `next_branch` | Auto-created next-round branch name (e.g., `wi/foo/02`) |
+
+**Errors:**
+
+| Code | HTTP | Condition |
+|------|------|-----------|
+| `PRECONDITION_FAILED` | 412 | Work branch HEAD has changed since submission |
+| `MERGE_CONFLICTS_PRESENT` | 409 | Same-cell conflict detected; merge was aborted, branch is intact |
+| `NOT_FOUND` | 404 | Request ID not found |
 
 ---
 
 ### POST /request/reject
 
-Reject a request. Creates `rej/` tag.
+Reject a request. Removes the `req/` tag. **The work branch is preserved** so the assignee can make corrections and re-submit.
 
 **Request Body:**
 
@@ -831,6 +853,70 @@ Reject a request. Creates `rej/` tag.
 ```json
 { "status": "rejected" }
 ```
+
+---
+
+## Version History
+
+### GET /versions
+
+List all approved merge versions, derived from `merged/*` Dolt tags. Used by the History tab to populate the version selector for comparing two points in time.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `project` | No | Filter by project name (e.g., `ProjectA`) |
+
+**Response:**
+
+```json
+[
+  {
+    "tag_name": "merged/ProjectA/01",
+    "tag_hash": "abc123...",
+    "message": "承認マージ: ProjectA round 1"
+  },
+  {
+    "tag_name": "merged/ProjectB/01",
+    "tag_hash": "def456...",
+    "message": "承認マージ: ProjectB round 1"
+  }
+]
+```
+
+Returns an empty array `[]` if no merged versions exist.
+
+---
+
+### GET /diff/summary
+
+Get a DB-wide change summary across all tables between two refs. Used by the History tab and approver inbox to show high-level impact before drilling into row-level diffs.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `from_ref` | Yes | Source ref (commit hash, tag name, or branch name) |
+| `to_ref` | Yes | Target ref |
+
+**Response:**
+
+```json
+{
+  "tables": [
+    { "name": "Test1", "added": 3, "modified": 5, "removed": 1 },
+    { "name": "Test2", "added": 0, "modified": 2, "removed": 0 }
+  ],
+  "total": { "added": 3, "modified": 7, "removed": 1 }
+}
+```
+
+Returns counts per table and an aggregated `total`. Tables with zero changes are omitted.
 
 ---
 
