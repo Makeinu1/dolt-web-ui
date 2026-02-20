@@ -94,10 +94,12 @@ func (s *Service) previewMergeConflicts(ctx context.Context, conn *sql.Conn, bra
 	}
 	defer rows.Close()
 
+	// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns 3 columns:
+	// (table, num_data_conflicts, num_schema_conflicts)
 	for rows.Next() {
 		var tableName string
-		var schemaConflicts, dataConflicts, constraintViolations int
-		if err := rows.Scan(&tableName, &schemaConflicts, &dataConflicts, &constraintViolations); err != nil {
+		var dataConflicts, schemaConflicts int
+		if err := rows.Scan(&tableName, &dataConflicts, &schemaConflicts); err != nil {
 			return &model.APIError{Status: 500, Code: model.CodeInternal, Msg: fmt.Sprintf("failed to scan preview: %v", err)}
 		}
 		if schemaConflicts > 0 {

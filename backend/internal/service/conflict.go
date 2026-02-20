@@ -25,10 +25,12 @@ func (s *Service) ListConflicts(ctx context.Context, targetID, dbName, branchNam
 	}
 	defer rows.Close()
 
+	// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns 3 columns:
+	// (table, num_data_conflicts, num_schema_conflicts)
 	result := make([]model.ConflictsSummaryEntry, 0)
 	for rows.Next() {
 		var entry model.ConflictsSummaryEntry
-		if err := rows.Scan(&entry.Table, &entry.SchemaConflicts, &entry.DataConflicts, &entry.ConstraintViolations); err != nil {
+		if err := rows.Scan(&entry.Table, &entry.DataConflicts, &entry.SchemaConflicts); err != nil {
 			return nil, fmt.Errorf("failed to scan conflict summary: %w", err)
 		}
 		result = append(result, entry)
@@ -41,6 +43,9 @@ func (s *Service) ListConflicts(ctx context.Context, targetID, dbName, branchNam
 func (s *Service) GetConflictsTable(ctx context.Context, targetID, dbName, branchName, table string) ([]model.ConflictRow, error) {
 	if err := validation.ValidateIdentifier("table", table); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
+	}
+	if err := validateRef("branch", branchName); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid branch name"}
 	}
 
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
@@ -151,10 +156,12 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 		conn.ExecContext(ctx, "ROLLBACK")
 		return nil, fmt.Errorf("failed to preview conflicts: %w", err)
 	}
+	// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns 3 columns:
+	// (table, num_data_conflicts, num_schema_conflicts)
 	for previewRows.Next() {
 		var tableName string
-		var schemaConflicts, dataConflicts, constraintViolations int
-		if err := previewRows.Scan(&tableName, &schemaConflicts, &dataConflicts, &constraintViolations); err != nil {
+		var dataConflicts, schemaConflicts int
+		if err := previewRows.Scan(&tableName, &dataConflicts, &schemaConflicts); err != nil {
 			previewRows.Close()
 			conn.ExecContext(ctx, "ROLLBACK")
 			return nil, fmt.Errorf("failed to scan preview: %w", err)

@@ -21,15 +21,15 @@ func NewError(code, message string, details interface{}) ErrorEnvelope {
 
 // Error codes per v6f error spec.
 const (
-	CodeInvalidArgument            = "INVALID_ARGUMENT"
-	CodeForbidden                  = "FORBIDDEN"
-	CodeNotFound                   = "NOT_FOUND"
-	CodeStaleHead                  = "STALE_HEAD"
-	CodeMergeConflictsPresent      = "MERGE_CONFLICTS_PRESENT"
-	CodeSchemaConflictsPresent     = "SCHEMA_CONFLICTS_PRESENT"
+	CodeInvalidArgument             = "INVALID_ARGUMENT"
+	CodeForbidden                   = "FORBIDDEN"
+	CodeNotFound                    = "NOT_FOUND"
+	CodeStaleHead                   = "STALE_HEAD"
+	CodeMergeConflictsPresent       = "MERGE_CONFLICTS_PRESENT"
+	CodeSchemaConflictsPresent      = "SCHEMA_CONFLICTS_PRESENT"
 	CodeConstraintViolationsPresent = "CONSTRAINT_VIOLATIONS_PRESENT"
-	CodePreconditionFailed         = "PRECONDITION_FAILED"
-	CodeInternal                   = "INTERNAL"
+	CodePreconditionFailed          = "PRECONDITION_FAILED"
+	CodeInternal                    = "INTERNAL"
 )
 
 // TargetResponse represents a Dolt target.
@@ -96,17 +96,17 @@ type RowsResponse struct {
 
 // CommitRequest represents a commit operation.
 type CommitRequest struct {
-	TargetID      string      `json:"target_id"`
-	DBName        string      `json:"db_name"`
-	BranchName    string      `json:"branch_name"`
-	ExpectedHead  string      `json:"expected_head"`
-	CommitMessage string      `json:"commit_message"`
-	Ops           []CommitOp  `json:"ops"`
+	TargetID      string     `json:"target_id"`
+	DBName        string     `json:"db_name"`
+	BranchName    string     `json:"branch_name"`
+	ExpectedHead  string     `json:"expected_head"`
+	CommitMessage string     `json:"commit_message"`
+	Ops           []CommitOp `json:"ops"`
 }
 
-// CommitOp represents a single insert or update operation.
+// CommitOp represents a single insert, update, or delete operation.
 type CommitOp struct {
-	Type   string                 `json:"type"` // "insert" or "update"
+	Type   string                 `json:"type"` // "insert", "update", or "delete"
 	Table  string                 `json:"table"`
 	Values map[string]interface{} `json:"values"`
 	PK     map[string]interface{} `json:"pk,omitempty"` // for update only
@@ -152,8 +152,8 @@ type HistoryCommit struct {
 
 // ConflictSummary represents a table with conflicts.
 type ConflictSummary struct {
-	Table        string `json:"table"`
-	ConflictCount int   `json:"conflict_count"`
+	Table         string `json:"table"`
+	ConflictCount int    `json:"conflict_count"`
 }
 
 // ConflictRow represents a single conflict.
@@ -302,9 +302,9 @@ type DiffSummaryResponse struct {
 }
 
 // ConflictsSummaryEntry represents a table's conflict summary from preview.
+// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns (table, num_data_conflicts, num_schema_conflicts).
 type ConflictsSummaryEntry struct {
-	Table               string `json:"table"`
-	SchemaConflicts     int    `json:"schema_conflicts"`
-	DataConflicts       int    `json:"data_conflicts"`
-	ConstraintViolations int   `json:"constraint_violations"`
+	Table           string `json:"table"`
+	DataConflicts   int    `json:"data_conflicts"`
+	SchemaConflicts int    `json:"schema_conflicts"`
 }

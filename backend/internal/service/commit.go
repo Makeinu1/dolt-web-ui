@@ -17,6 +17,9 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 	if validation.IsMainBranch(req.BranchName) {
 		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
+	if len(req.Ops) == 0 {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "ops must not be empty"}
+	}
 
 	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
@@ -58,6 +61,11 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 			}
 		case "update":
 			if err := applyUpdate(ctx, conn, op); err != nil {
+				conn.ExecContext(ctx, "ROLLBACK")
+				return nil, err
+			}
+		case "delete":
+			if err := applyDelete(ctx, conn, op); err != nil {
 				conn.ExecContext(ctx, "ROLLBACK")
 				return nil, err
 			}
@@ -153,6 +161,35 @@ func applyUpdate(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 	}
 
 	// Per v6f spec: affected rows 0 → 404
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}
+	}
+
+	return nil
+}
+
+func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
+	if len(op.PK) != 1 {
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "single primary key required for delete"}
+	}
+
+	var pkCol string
+	var pkVal interface{}
+	for k, v := range op.PK {
+		pkCol = k
+		pkVal = v
+	}
+	if err := validation.ValidateIdentifier("pk column", pkCol); err != nil {
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
+	}
+
+	query := fmt.Sprintf("DELETE FROM `%s` WHERE `%s` = ?", op.Table, pkCol)
+	result, err := conn.ExecContext(ctx, query, pkVal)
+	if err != nil {
+		return fmt.Errorf("failed to delete from %s: %w", op.Table, err)
+	}
+
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}

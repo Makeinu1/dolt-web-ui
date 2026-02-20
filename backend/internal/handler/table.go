@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -107,5 +108,6 @@ func handleServiceError(w http.ResponseWriter, err error) {
 		}
 		return
 	}
-	writeError(w, http.StatusInternalServerError, model.CodeInternal, err.Error())
+	log.Printf("internal error: %v", err)
+	writeError(w, http.StatusInternalServerError, model.CodeInternal, "internal server error")
 }
