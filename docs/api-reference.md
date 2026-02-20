@@ -475,6 +475,12 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
 |------|-------------|--------|
 | `insert` | Insert a new row | `table`, `values` (must include PK) |
 | `update` | Update an existing row | `table`, `values` (changed columns only), `pk` |
+| `delete` | Delete an existing row | `table`, `pk` |
+
+**Validation:**
+- `ops` must not be empty (`400 INVALID_ARGUMENT` if empty array is sent)
+- For `update` and `delete`: `pk` must contain exactly one key-value pair
+- For `delete`: `values` field is ignored
 
 **Response:**
 
@@ -483,7 +489,9 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
 ```
 
 **Errors:**
+- `400 INVALID_ARGUMENT` - Empty ops array, invalid table/column name, or empty pk
 - `403 FORBIDDEN` - MainGuard (write to main)
+- `404 NOT_FOUND` - Row not found (update/delete with non-existent pk)
 - `409 STALE_HEAD` - expected_head mismatch
 
 ---
@@ -631,12 +639,13 @@ Get conflict summary for a branch.
 [
   {
     "table": "items",
-    "schema_conflicts": 0,
     "data_conflicts": 3,
-    "constraint_violations": 0
+    "schema_conflicts": 0
   }
 ]
 ```
+
+> **Note:** `data_conflicts` and `schema_conflicts` correspond to Dolt v1.x `DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY` columns `num_data_conflicts` and `num_schema_conflicts`. There is no `constraint_violations` field.
 
 ---
 
@@ -701,6 +710,8 @@ Resolve all conflicts in a table using a strategy. **MainGuard applies.**
 ### POST /request/submit
 
 Submit a work branch for review. **MainGuard applies.**
+
+**Auto-sync behavior**: Before creating the `req/` tag, this endpoint automatically merges `main` into the work branch (`DOLT_MERGE('main')`). If the merge produces conflicts, `409 MERGE_CONFLICTS_PRESENT` is returned and no tag is created. The caller must resolve conflicts and retry.
 
 Creates a Dolt tag with prefix `req/` containing the submission metadata.
 
@@ -904,25 +915,37 @@ Get a DB-wide change summary across all tables between two refs. Used by the His
 | `from_ref` | Yes | Source ref (commit hash, tag name, or branch name) |
 | `to_ref` | Yes | Target ref |
 
+**Query Parameters (full list):**
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `target_id` | Yes | | Target ID |
+| `db_name` | Yes | | Database name |
+| `branch_name` | Yes | | Branch name (connection context) |
+| `from_ref` | No | `main` | Source ref |
+| `to_ref` | No | `branch_name` | Target ref |
+| `mode` | No | `three_dot` | `two_dot` or `three_dot` |
+
 **Response:**
 
 ```json
 {
-  "tables": [
-    { "name": "Test1", "added": 3, "modified": 5, "removed": 1 },
-    { "name": "Test2", "added": 0, "modified": 2, "removed": 0 }
-  ],
-  "total": { "added": 3, "modified": 7, "removed": 1 }
+  "entries": [
+    { "table": "Test1", "added": 3, "modified": 5, "removed": 1 },
+    { "table": "Test2", "added": 0, "modified": 2, "removed": 0 }
+  ]
 }
 ```
 
-Returns counts per table and an aggregated `total`. Tables with zero changes are omitted.
+Returns an `entries` array with one entry per table. Tables with zero changes are included if they appear in the diff. Returns `{"entries": []}` if no changes.
 
 ---
 
 ## Health Check
 
 ### GET /health
+
+> **Note:** This endpoint is at the root path `/health`, **not** under `/api/v1/health`.
 
 **Response:**
 

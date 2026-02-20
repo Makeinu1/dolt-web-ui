@@ -6,20 +6,21 @@ PSXデータ変更管理ワークベンチ。Dolt（Git風バージョン管理�
 
 - **単一バイナリ配布** - Go `embed`パッケージでフロントエンドを埋め込み。ラボ環境にGo/Node.jsの追加インストール不要
 - **スプレッドシート風テーブル編集** - AG Gridによるセル直接編集、ページング、カラム表示切替
-- **右クリックコンテキストメニュー** - Clone Row（PK自動採番）/ Show History / Set as Template
-- **Git風バージョン管理** - ブランチ作成・削除、コミット、Sync（main→ワークブランチマージ）
+- **右クリックコンテキストメニュー** - Clone Row（PK自動採番）/ Batch Clone / Show History / Delete Row
+- **Git風バージョン管理** - ブランチ作成・削除、コミット。Submit時にmain→ワークブランチ自動Sync
 - **並行マージ** - Doltのセルレベル3-wayマージにより、複数プロジェクトが同時進行可能
 - **承認ワークフロー** - 申請（Submit）→ 承認（Approve）/ 却下（Reject）の変更管理フロー
+  - Submit時にmainを自動マージ（コンフリクト時は事前検出）
   - 承認時にワークブランチの変更内容をプレビュー（three-dot diff）
   - 承認後は次ラウンドブランチ（`wi/foo/01` → `wi/foo/02`）を自動作成
 - **コンフリクト解決** - Sync時のマージ競合をUI上でOurs/Theirsで解決
 - **バージョン比較** - `merged/*` タグをバージョンとして選択し、DB全体の変更サマリーを確認
 - **レコード履歴** - 任意のレコードの変更タイムラインを右クリックから参照
-- **一括操作** - バッチ生成、TSV一括更新
+- **一括操作** - バッチ生成（Batch Clone）、TSV一括更新
 - **Optimistic Locking** - 全書き込み操作で`expected_head`を検証し、同時編集を安全に制御
 - **MainGuard** - mainブランチは読み取り専用。書き込みはワークブランチのみ
-- **ドラフト管理** - 未コミットの変更をsessionStorageで管理（揮発性）
-- **状態マシン** - UI状態を厳密に管理（Idle / DraftEditing / Committing / Syncing / Conflicts系 / StaleHead）
+- **ドラフト管理** - 未コミットの変更をsessionStorageで管理（揮発性）。変更済みセルを黄太字・挿入行を緑・削除行を赤で可視化
+- **状態駆動アクションボタン** - 現在やるべき操作だけをヘッダーに表示
 
 ## 技術スタック
 
@@ -36,64 +37,72 @@ PSXデータ変更管理ワークベンチ。Dolt（Git風バージョン管理�
 ### レイアウト
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ Header: [状態バッジ] Target/DB/Branch  HEAD:xxx  [📋 N]    │  ~36px
-├────────────────────────────────────────────────────────────┤
-│ Tab: Work | History | Requests                             │  ~32px
-├────────────────────────────────────────────────────────────┤
-│ Toolbar: [Table ▼ ●] [Columns] [◀ 1/5 ▶]                  │  ~32px
-│          [Sync] [Commit(N)] [Submit] [Refresh]              │
-├────────────────────────────────────────────────────────────┤
-│                                                            │
-│              AG Grid (テーブル 全幅)                         │  flex:1
-│              右クリック → コンテキストメニュー                 │
-│              ⚠ コンフリクトバナー（存在時のみ）               │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Test@prod  [wi/ProjA/01 ▼]  [Test1 ▼●]  [⚙]            │
+│                                    [Commit(3)] [📋2] [⋮] │  36px
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│                      AG Grid                             │  flex:1
+│                     (全幅・全高)                           │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│ ◀ 1/50 ▶                                    1,000 rows  │  28px (複数ページ時のみ)
+└──────────────────────────────────────────────────────────┘
 ```
 
-**ヘッダー右端**: `[📋 N]` は承認待ちバッジ。クリックで Requests タブに切替。
+**オーバーヘッド**: 36px（+ 28px ページネーション） = **最小 36px / 最大 64px**
 
-### タブ
+### ヘッダー要素
 
-| タブ | 対象ロール | 機能 |
-|------|-----------|------|
-| **Work** | 作業者 | テーブルデータの閲覧・直接編集 |
-| **History** | 全員 | バージョン間の変更サマリー比較 |
-| **Requests** | 承認者 | 承認リクエスト一覧・承認/却下・diff プレビュー |
+| 要素 | 位置 | 説明 |
+|------|------|------|
+| `DB@Target` | 左端 | DB@Target を静的テキスト表示。クリック → 設定ダイアログ |
+| `[Branch ▼]` | 左 | ブランチドロップダウン。リスト + 「新規作成」+ 「削除」を内包 |
+| `[Table ▼ ●]` | 左 | テーブルセレクター。ドラフト変更ありテーブルに ● 表示 |
+| `[⚙]` | 左 | カラム表示/非表示トグル（ポップアップ） |
+| `[Commit(N)]` | 右 | ドラフトがある時だけ表示。状態に応じて変化（下記） |
+| `[📋 N]` | 右 | 承認待ちバッジ。N>0 の時のみ表示。クリック → 承認者ビュー |
+| `[⋮]` | 右端 | オーバーフローメニュー（Submit / Commit Log / Settings） |
 
-コンフリクトは Work タブ内のインラインアラートとして表示（コンフリクト発生時のみ）。
+### アクションボタン（状態駆動）
 
-### Work タブの詳細
+| UI状態 | ヘッダー右の表示 |
+|--------|-----------------|
+| Idle（ドラフトなし） | 非表示 |
+| DraftEditing | **[Commit (N)]** （primary/青） |
+| Committing | [Committing...] （disabled） |
+| StaleHeadDetected | **[↻ Refresh]** （warning/橙） |
+| MergeConflictsPresent | バナー表示（ConflictViewオーバーレイが自動表示） |
 
-| 要素 | 機能 |
-|------|------|
-| **テーブル選択** | ドロップダウンでテーブルを切替。ドラフト変更があるテーブルは ● 表示 |
-| **Columns** | カラム表示/非表示の切替（PKカラムは常に表示） |
-| **AG Grid** | セル直接編集、ページング。PKカラムは編集不可 |
-| **右クリックメニュー** | Clone Row（PK自動採番）/ Show History（変更タイムライン）/ Set as Template |
-| **コンフリクトアラート** | Sync後にコンフリクトがある場合のみ表示。クリックで解決UIに遷移 |
+mainブランチ選択時: アクションボタン非表示。グリッドは read-only。
 
-### History タブ
+### [⋮] オーバーフローメニュー
 
-- `merged/*` タグをバージョンとして選択（例: `merged/ProjectA/01`）
-- 2バージョン間のDB全テーブル変更サマリーを表示（追加/変更/削除行数）
-- テーブル選択で行レベルの差分に ドリルダウン
+| 項目 | 有効条件 |
+|------|---------|
+| **Submit Request...** | ドラフトなし + コミット済み + リクエストなし |
+| **Compare Versions...** | 常時 |
+| **Commit Log** | 常時 |
+| **Settings** | 常時 |
 
-### Requests タブ（承認者ビュー）
+### 右クリックメニュー
 
-- 承認待ちリクエスト一覧
-- 各リクエストのワークブランチ変更内容（three-dot diff）をプレビュー
-- Approve（mainに3-wayマージ）/ Reject（reqタグ削除、ブランチ保持）
+| メニュー項目 | 機能 |
+|-------------|------|
+| **Show History** | そのレコードの変更タイムライン（最大30件）を表示。変更セルを黄色ハイライトし old→new を表示 |
+| **Clone Row** | 行を複製（PK自動採番）。ドラフトに insert 操作として追加 |
+| **Batch Clone...** | バッチ生成モーダルを起動。複数行を一括生成 |
+| **Delete Row** | 行を削除。ドラフトに delete 操作として追加（取消線で表示） |
 
-### ツールバー（ワークブランチのみ）
+> Show History は main ブランチ・ワークブランチ両方で使用可能。main ブランチでは Clone/Delete は非表示。
 
-| ボタン | 機能 | 条件 |
-|--------|------|------|
-| **Sync from Main** | mainの最新変更をマージ | ドラフト空 & Idle状態 |
-| **Commit** | ドラフトの変更をコミット | ドラフトあり & Idle/DraftEditing |
-| **Submit Request** | 承認リクエスト送信（diffプレビュー付き） | ドラフト空 & Idle状態 |
-| **Refresh** | HEAD再取得 | 常時 |
+### ドラフト可視化
+
+| op type | 表示スタイル |
+|---------|------------|
+| insert | 左 3px 緑ボーダー + 薄緑背景 |
+| update | 変更カラムのみ **太字** + 薄黄背景 |
+| delete | 薄赤背景 + 取消線 |
 
 ## セットアップ
 
@@ -113,6 +122,10 @@ make build-linux
 ```
 
 ビルドパイプライン: `build-frontend` → `copy-static` → `build-backend`
+
+成果物:
+- `dist/dolt-web-ui` — macOS 向け実行バイナリ
+- `dist/dolt-web-ui-linux-amd64` — Linux amd64 向け実行バイナリ
 
 ### 設定ファイル
 
@@ -142,7 +155,10 @@ server:
 
 ```bash
 # 本番（単一バイナリ）
-./dolt-web-ui -config config.yaml
+./dist/dolt-web-ui -config config.yaml
+
+# Linux サーバー
+./dist/dolt-web-ui-linux-amd64 -config config.yaml
 
 # 開発モード（バックエンド）
 cd backend && go run ./cmd/server -config ../config.yaml
@@ -157,66 +173,68 @@ cd frontend && npm run dev
 
 ### 1. コンテキストの選択
 
-画面上部のセレクターで **Target** → **Database** → **Branch** の順に選択します。
+ヘッダー左の **DB@Target** テキストをクリックして設定ダイアログを開き、**Target** と **Database** を選択します。
 
 ### 2. ワークブランチの作成
 
-Branchセレクター横の **+ New** ボタンをクリックし、ブランチ名を入力して **Create** を押します。mainブランチから新しいワークブランチが作成され、自動的にそのブランチに切り替わります。
+ヘッダーの **Branch ドロップダウン** をクリックし、「+ Create new branch」を選択してブランチ名を入力します。mainブランチから新しいワークブランチが作成され、自動的にそのブランチに切り替わります。
 
 > **ブランチ命名規則**: `wi/<作業項目名>/<ラウンド番号>` 形式（例: `wi/psx-update/01`）。`config.yaml` の `allowed_branches` パターンに一致する必要があります。
 
 ### 3. データの編集
 
 1. ワークブランチを選択（mainブランチでは編集不可）
-2. **Work** タブでテーブルのセルをダブルクリックして直接編集
-3. PKカラムは編集不可（データの整合性を保護）
-4. 変更はブラウザのsessionStorageに「ドラフト」として保存されます
+2. テーブルセレクターでテーブルを選択。ドラフト変更あり = ●
+3. セルをダブルクリックして直接編集（変更セル → 黄太字）
+4. PKカラムは編集不可（データの整合性を保護）
+5. 変更はブラウザのsessionStorageに「ドラフト」として保存されます
 
-#### 右クリックメニュー
+#### 右クリック操作
 
-セルを右クリックすると以下の操作が可能です:
-
-| メニュー項目 | 機能 |
-|-------------|------|
-| **Show History** | そのレコードの変更タイムライン（最大30件）を表示。変更セルを黄色ハイライトし old→new を表示 |
-| **Clone Row** | 行を複製（PK自動採番）。ドラフトに insert 操作として追加 |
-| **Set as Template** | バッチ生成のテンプレート行に設定 |
-
-> Show History は main ブランチ・ワークブランチ両方で使用可能です。
+| 操作 | 説明 |
+|------|------|
+| **Clone Row** | 行を複製（PK自動採番）→ insert ドラフトに追加（緑表示） |
+| **Batch Clone...** | バッチ生成モーダル起動。複数行を一括生成 |
+| **Delete Row** | 行を削除予約 → delete ドラフトに追加（赤・取消線表示） |
+| **Show History** | レコードの変更タイムラインを表示 |
 
 #### 一括操作
 
-- **Batch Generate**: テンプレート行から複数行を一括生成（特定カラムの値を変えて）
-- **Bulk Update**: TSV形式のデータを貼り付けて一括更新プレビュー
+- **Bulk Update**: TSV形式のデータを貼り付けて一括更新プレビュー（[⋮] メニューから）
 
 ### 4. コミット
 
-1. ツールバーの **Commit** ボタンをクリック
-2. コミットダイアログで変更内容を確認してメッセージを入力
-3. Doltにコミットが記録され、ドラフトがクリアされます
+1. ヘッダーの **Commit (N)** ボタンをクリック（ドラフトあり時のみ表示）
+2. CommitDialog でテーブル別の変更一覧を確認（× ボタンで個別キャンセル可）
+3. コミットメッセージを入力して確定
+4. Doltにコミットが記録され、ドラフトがクリアされます
 
-### 5. Sync（mainからの更新取り込み）
+### 5. 承認リクエスト（Submit → Approve）
 
-1. ドラフトが空であることを確認（未コミットの変更があるとSyncできません）
-2. ツールバーの **Sync** をクリック
-3. mainブランチの最新変更がワークブランチにマージされます
-4. コンフリクトが発生した場合は Work タブ内のアラートから解決UIを開く
+1. 全ての変更をコミット（ドラフトが空の状態）
+2. **[⋮] → Submit Request...** をクリック
+3. SubmitDialog 内でバックグラウンドに main を自動マージ（コンフリクト時はダイアログ内でエラー表示）
+4. 「mainに反映される変更」（three-dot diff）を確認
+5. 概要（summary_ja）を入力して送信
+6. 承認者は **[📋]** バッジをクリックして承認者ビューを開く
+7. diff プレビューを確認し、**Approve** でmainに3-wayマージ
+8. 承認後、次ラウンドブランチ（例: `wi/work/02`）が自動作成される
 
-### 6. 承認リクエスト（Submit → Approve）
+> Sync（手動）は廃止。Submit時に自動で main → ブランチ のマージを実行します。コンフリクトが検出された場合は Submit がブロックされ、ConflictView で解決後に再試行してください。
 
-1. 全ての変更をコミットし、ドラフトが空の状態で **Submit** をクリック
-2. Submit ダイアログで「mainに反映される変更」（three-dot diff）を確認
-3. 概要（summary_ja）を入力して送信
-4. 承認者は **Requests** タブでリクエストを確認
-5. diff プレビューを確認し、**Approve & Merge** でmainに3-wayマージ
-6. 承認後、次ラウンドブランチ（例: `wi/work/02`）が自動作成される
+### 6. コンフリクト解決
 
-### 7. バージョン比較（History タブ）
+Syncコンフリクトや Submit 時の自動マージコンフリクトは ConflictView オーバーレイで解決:
 
-1. **History** タブを開く
-2. 比較したい2つのバージョン（`merged/*` タグ）を選択して **Compare**
-3. DB全テーブルの変更サマリーを確認
-4. テーブルを選択して行レベルのdiffにドリルダウン
+1. コンフリクトバナーが表示される（または ConflictView が自動表示）
+2. テーブルを選択し、行ごとに **Ours** / **Theirs** を選択
+3. 解決後に再コミット → Submit
+
+### 7. バージョン比較（[⋮] → Compare Versions...）
+
+1. 比較したい2つのバージョン（`merged/*` タグ）を選択して **Compare**
+2. DB全テーブルの変更サマリーを確認
+3. テーブルを選択して行レベルのdiffにドリルダウン
 
 ## 変更管理フロー全体図
 
@@ -224,11 +242,10 @@ Branchセレクター横の **+ New** ボタンをクリックし、ブランチ
 Main (read-only / SSOT)
   │
   ├── wi/ProjectA/01 (担当者A)
-  │     ├── セル編集 / Clone Row / Batch Generate / Bulk Update
+  │     ├── セル編集 / Clone Row / Batch Clone / Bulk Update / Delete Row
   │     │     └── ドラフト (sessionStorage)
   │     ├── Commit → Doltコミット
-  │     ├── Sync from Main → 3-wayマージ（コンフリクト時は解決）
-  │     └── Submit Request → 承認待ち (req/ProjectA/01 タグ)
+  │     └── Submit Request → main自動マージ → 承認待ち (req/ProjectA/01 タグ)
   │           ├── Approve → main に 3-wayマージ
   │           │     ├── merged/ProjectA/01 タグ作成（監査ログ）
   │           │     ├── wi/ProjectA/01 削除
@@ -238,7 +255,7 @@ Main (read-only / SSOT)
   ├── wi/ProjectB/01 (担当者B) ← 並行して進行可能
   │     └── ... → Approve → main に 3-wayマージ（freeze gate なし）
   │
-  └── merged/* タグ → History タブでバージョン比較
+  └── merged/* タグ → [⋮]→Compare Versions でバージョン比較
 ```
 
 **Doltのセルレベル3-wayマージ**: 異なるプロジェクトが同一テーブルの異なるレコード（または同一レコードの異なるカラム）を編集した場合は自動マージ。同一セルの競合のみ `MERGE_CONFLICTS_PRESENT` エラーとなります。
@@ -250,7 +267,6 @@ Main (read-only / SSOT)
 | `Idle` | Ready | 初期状態。全操作可能 |
 | `DraftEditing` | Draft | 未コミットの変更あり |
 | `Committing` | Committing... | コミット処理中 |
-| `Syncing` | Syncing... | Sync処理中 |
 | `MergeConflictsPresent` | Conflicts | データ行のマージ競合あり |
 | `SchemaConflictDetected` | Schema Conflict (CLI) | スキーマ競合（CLI介入必要） |
 | `ConstraintViolationDetected` | Constraint Violation (CLI) | 制約違反（CLI介入必要） |
@@ -271,25 +287,27 @@ dolt-web-ui/
 │       ├── repository/       # Dolt DB接続管理 (MaxIdleConns=0)
 │       ├── service/          # ビジネスロジック
 │       └── validation/       # 入力バリデーション
+├── dist/
+│   ├── dolt-web-ui              # macOS arm64 実行バイナリ
+│   └── dolt-web-ui-linux-amd64  # Linux amd64 実行バイナリ
 ├── frontend/
 │   ├── src/
 │   │   ├── api/              # APIクライアント
 │   │   ├── components/
 │   │   │   ├── BatchGenerateModal/  # バッチ生成モーダル
-│   │   │   ├── CLIRunbook/          # CLI介入ガイド（致命的エラー時）
+│   │   │   ├── CLIRunbook/          # CLI介入ガイド（致命的エラー時、最小化可能）
 │   │   │   ├── ConflictView/        # コンフリクト解決UI
-│   │   │   ├── ContextSelector/     # Target/DB/Branch セレクター
+│   │   │   ├── ContextSelector/     # Branch ドロップダウン（Target/DBは設定ダイアログへ）
 │   │   │   ├── HistoryTab/          # バージョン比較タブ
-│   │   │   ├── RequestDialog/       # Submit/Approve/Reject ダイアログ
-│   │   │   ├── TableGrid/           # AG Grid + 右クリックメニュー
-│   │   │   ├── TemplatePanel/       # テンプレート行パネル
+│   │   │   ├── RequestDialog/       # 承認者ビュー（モーダルオーバーレイ）
+│   │   │   ├── TableGrid/           # AG Grid + 右クリックメニュー + ドラフト可視化
 │   │   │   └── common/
-│   │   │       ├── CommitDialog.tsx       # コミットダイアログ
+│   │   │       ├── CommitDialog.tsx       # コミットダイアログ（op一覧 + 個別キャンセル）
+│   │   │       ├── DiffTableDetail.tsx    # テーブル差分詳細
 │   │   │       └── RecordHistoryPopup.tsx # レコード変更タイムライン
-│   │   ├── store/            # Zustand ストア (4個)
+│   │   ├── store/            # Zustand ストア (3個)
 │   │   │   ├── context.ts    # Target/DB/Branch 選択状態
 │   │   │   ├── draft.ts      # 未コミット操作 (sessionStorage)
-│   │   │   ├── template.ts   # テンプレート行状態
 │   │   │   └── ui.ts         # UI状態マシン
 │   │   └── types/            # 型定義
 │   └── package.json
@@ -329,7 +347,7 @@ dolt-web-ui/
 | メソッド | パス | 説明 |
 |----------|------|------|
 | POST | `/api/v1/commit` | コミット（insert/update/delete） |
-| POST | `/api/v1/sync` | Sync（mainからマージ） |
+| POST | `/api/v1/sync` | Sync（mainからマージ、手動用途） |
 
 ### Diff / 履歴
 | メソッド | パス | 説明 |
@@ -343,14 +361,14 @@ dolt-web-ui/
 ### コンフリクト
 | メソッド | パス | 説明 |
 |----------|------|------|
-| GET | `/api/v1/conflicts` | コンフリクトサマリ |
-| GET | `/api/v1/conflicts/table` | テーブル別コンフリクト行 |
+| GET | `/api/v1/conflicts` | コンフリクトサマリ（data_conflicts / schema_conflicts） |
+| GET | `/api/v1/conflicts/table` | テーブル別コンフリクト行（base/ours/theirs） |
 | POST | `/api/v1/conflicts/resolve` | コンフリクト解決（ours/theirs） |
 
 ### 申請 / 承認
 | メソッド | パス | 説明 |
 |----------|------|------|
-| POST | `/api/v1/request/submit` | 承認申請（req/* タグ作成） |
+| POST | `/api/v1/request/submit` | 承認申請（mainへの自動Sync → req/* タグ作成） |
 | GET | `/api/v1/requests` | 申請一覧 |
 | GET | `/api/v1/request` | 申請詳細 |
 | POST | `/api/v1/request/approve` | 承認（mainに3-wayマージ + 次ラウンドブランチ作成） |
@@ -359,7 +377,7 @@ dolt-web-ui/
 ### ヘルスチェック
 | メソッド | パス | 説明 |
 |----------|------|------|
-| GET | `/api/v1/health` | サービス稼働状態 |
+| GET | `/health` | サービス稼働状態（`/api/v1` プレフィックスなし） |
 
 ### その他
 | パス | 説明 |
@@ -376,7 +394,15 @@ make lint           # リンター (go vet + tsc --noEmit)
 make clean          # ビルド成果物のクリーンアップ
 ```
 
-E2Eテストスクリプト（APIレベル）: `/tmp/dolt-e2e-test.sh`
+### E2Eテスト（APIレベル）
+
+```bash
+# 基本 58 チェック（INSERT/UPDATE/Sync/Submit/Approve/Cell-level merge）
+bash /tmp/dolt-e2e-test.sh
+
+# 拡張 52 チェック（DELETE/DiffSummary/RowHistory/Filter/Conflict/EdgeCase）
+bash /tmp/dolt-e2e-extended.sh
+```
 
 ## 配備（Linuxサーバー）
 
