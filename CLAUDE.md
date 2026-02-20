@@ -149,7 +149,39 @@ curl http://localhost:8080/health  # 起動確認
 
 ---
 
-## E2E Testing
+## Mac でのローカル試験手順
+
+### 1. Dolt サーバーを起動する
+
+```bash
+# data_dir は dolt-data/ の親ディレクトリで起動（Test DB を認識させるため）
+cd /Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-data
+dolt sql-server &
+# → 127.0.0.1:3306 で起動（Test/config.yaml の listener 設定が反映される）
+```
+
+起動確認:
+```bash
+dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql -q "SELECT 1"
+```
+
+### 2. Web UI サーバーを起動する
+
+```bash
+cd /Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui
+./dist/dolt-web-ui &
+# → http://localhost:8080 で起動
+```
+
+起動確認:
+```bash
+curl http://localhost:8080/health
+# → {"status":"ok"}
+```
+
+ブラウザで `http://localhost:8080` を開いて動作確認できる。
+
+### 3. E2E テストを実行する
 
 ```bash
 # 基本 58 チェック（INSERT/UPDATE/Sync/Submit/Approve/Cell-level merge）
@@ -159,7 +191,70 @@ bash /tmp/dolt-e2e-test.sh
 bash /tmp/dolt-e2e-extended.sh
 ```
 
-Dolt サーバー（`127.0.0.1:3306`）と dolt-web-ui サーバー（`:8080`）が両方起動していることを確認してから実行する。
+> テストスクリプトはセクション 0 に自前クリーンアップが含まれているため、連続実行しても安全。
+
+### 4. クリーンアップ・停止手順
+
+#### サーバーを停止する
+
+```bash
+# dolt-web-ui サーバーを停止
+pkill -f dolt-web-ui
+
+# Dolt SQL サーバーを停止
+pkill -f "dolt sql-server"
+```
+
+#### Dolt DB を試験前の状態に戻す（完全リセット）
+
+```bash
+# E2E テストが作成したブランチ・タグを全削除してmainだけにする
+DOLT_REPO="/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-data/Test"
+
+# wi/* ブランチを削除
+for branch in $(dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql -q \
+  "SELECT name FROM dolt_branches WHERE name LIKE 'wi/%'" --result-format=csv | tail -n +2); do
+  dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql \
+    -q "CALL DOLT_BRANCH('-D', '$branch')"
+done
+
+# req/* タグ・merged/* タグを削除
+for tag in $(dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql -q \
+  "SELECT tag_name FROM dolt_tags WHERE tag_name LIKE 'req/%' OR tag_name LIKE 'merged/%'" \
+  --result-format=csv | tail -n +2); do
+  dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql \
+    -q "CALL DOLT_TAG('-d', '$tag')"
+done
+
+# Test1 / Test2 テーブルのE2Eデータを削除してコミット
+(cd "$DOLT_REPO" && dolt sql -q "
+  DELETE FROM Test1 WHERE id >= 100;
+  DELETE FROM Test2 WHERE id >= 100;
+" && dolt sql -q "CALL DOLT_COMMIT('--allow-empty', '--all', '-m', 'e2e cleanup')")
+```
+
+#### ブランチ一覧・タグ一覧の確認
+
+```bash
+dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql \
+  -q "SELECT name FROM dolt_branches"
+
+dolt --host 127.0.0.1 --port 3306 --user root --password "" --no-tls sql \
+  -q "SELECT tag_name FROM dolt_tags"
+```
+
+### パス早見表
+
+| 項目 | パス |
+|------|------|
+| Dolt データディレクトリ | `/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-data/` |
+| Dolt DB（Test） | `/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-data/Test/` |
+| Web UI プロジェクト | `/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/` |
+| macOS バイナリ | `dolt-web-ui/dist/dolt-web-ui` |
+| Linux バイナリ | `dolt-web-ui/dist/dolt-web-ui-linux-amd64` |
+| Web UI 設定 | `dolt-web-ui/config.yaml` |
+| E2E 基本テスト | `/tmp/dolt-e2e-test.sh` |
+| E2E 拡張テスト | `/tmp/dolt-e2e-extended.sh` |
 
 ---
 
