@@ -142,9 +142,12 @@ export const getDiffTable = (
   fromRef: string,
   toRef: string,
   mode = "two_dot",
-  skinny = false
+  skinny = false,
+  diffType = "",
+  page = 1,
+  pageSize = 50
 ) =>
-  request<import("../types/api").DiffResponse>(
+  request<import("../types/api").DiffTableResponse>(
     `/diff/table${queryString({
       target_id: targetId,
       db_name: dbName,
@@ -154,6 +157,9 @@ export const getDiffTable = (
       to_ref: toRef,
       mode,
       skinny: skinny ? "true" : "",
+      diff_type: diffType,
+      page: String(page),
+      page_size: String(pageSize),
     })}`
   );
 
@@ -162,7 +168,8 @@ export const getHistoryCommits = (
   dbName: string,
   branchName: string,
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  filter = ""
 ) =>
   request<import("../types/api").HistoryCommit[]>(
     `/history/commits${queryString({
@@ -171,6 +178,7 @@ export const getHistoryCommits = (
       branch_name: branchName,
       page: String(page),
       page_size: String(pageSize),
+      filter,
     })}`
   );
 

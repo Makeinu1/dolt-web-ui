@@ -137,9 +137,17 @@ type DiffRow struct {
 	To       map[string]interface{} `json:"to,omitempty"`
 }
 
-// DiffResponse represents a table diff.
+// DiffResponse represents a table diff (legacy, full dump).
 type DiffResponse struct {
 	Rows []DiffRow `json:"rows"`
+}
+
+// DiffTableResponse represents a paginated table diff.
+type DiffTableResponse struct {
+	Rows       []DiffRow `json:"rows"`
+	TotalCount int       `json:"total_count"`
+	Page       int       `json:"page"`
+	PageSize   int       `json:"page_size"`
 }
 
 // HistoryCommit represents a commit in history.

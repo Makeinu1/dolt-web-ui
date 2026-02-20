@@ -128,9 +128,22 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 			case "eq":
 				whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", f.Column))
 				whereArgs = append(whereArgs, f.Value)
+			case "neq":
+				whereParts = append(whereParts, fmt.Sprintf("`%s` != ?", f.Column))
+				whereArgs = append(whereArgs, f.Value)
 			case "contains":
 				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT('%%', ?, '%%')", f.Column))
 				whereArgs = append(whereArgs, f.Value)
+			case "startsWith":
+				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT(?, '%%')", f.Column))
+				whereArgs = append(whereArgs, f.Value)
+			case "endsWith":
+				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT('%%', ?)", f.Column))
+				whereArgs = append(whereArgs, f.Value)
+			case "blank":
+				whereParts = append(whereParts, fmt.Sprintf("`%s` IS NULL", f.Column))
+			case "notBlank":
+				whereParts = append(whereParts, fmt.Sprintf("`%s` IS NOT NULL", f.Column))
 			case "in":
 				vals, ok := f.Value.([]interface{})
 				if !ok {

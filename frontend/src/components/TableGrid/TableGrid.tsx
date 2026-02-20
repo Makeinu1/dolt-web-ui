@@ -9,6 +9,9 @@ import {
   type GetContextMenuItemsParams,
   type MenuItemDef,
   type CellClassParams,
+  type FilterChangedEvent,
+  type SortChangedEvent,
+  type RowClickedEvent,
 } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
@@ -97,12 +100,15 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const [pageSize] = useState(50);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [serverFilter, setServerFilter] = useState("");
+  const [serverSort, setServerSort] = useState("");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [historyTarget, setHistoryTarget] = useState<{ pkJson: string; pkLabel: string } | null>(null);
   const [batchGenerateConfig, setBatchGenerateConfig] = useState<{
     templateRow: Record<string, unknown>;
     changeColumn?: string;
   } | null>(null);
+  const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const gridRef = useRef<AgGridReact>(null);
 
   const isMain = branchName === "main";
@@ -161,23 +167,24 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
       .then((schema) => {
         setColumns(schema.columns);
         setHiddenColumns(new Set());
+        setSelectedRow(null);
       })
       .catch(console.error);
   }, [targetId, dbName, branchName, tableName]);
 
-  // Load rows
+  // Load rows (server-side filter + sort)
   const loadRows = useCallback(() => {
     if (!tableName) return;
     setLoading(true);
     api
-      .getTableRows(targetId, dbName, branchName, tableName, page, pageSize)
+      .getTableRows(targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort)
       .then((res: RowsResponse) => {
         setRowData(res.rows || []);
         setTotalCount(res.total_count);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [targetId, dbName, branchName, tableName, page, pageSize, refreshKey]);
+  }, [targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort, refreshKey]);
 
   useEffect(() => {
     loadRows();
@@ -188,6 +195,77 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     setRowData((prev) => [...prev, row]);
     setTotalCount((c) => c + 1);
   }, []);
+
+  // Row click handler
+  const onRowClicked = useCallback((event: RowClickedEvent) => {
+    setSelectedRow(event.data as Record<string, unknown> | null);
+  }, []);
+
+  // --- Shared action functions (used by both right-click menu and toolbar buttons) ---
+  const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns]);
+
+  const handleShowHistory = useCallback((row: Record<string, unknown>) => {
+    if (!pkCol) return;
+    const pkVal = row[pkCol.name];
+    setHistoryTarget({
+      pkJson: JSON.stringify({ [pkCol.name]: pkVal }),
+      pkLabel: String(pkVal),
+    });
+  }, [pkCol]);
+
+  const handleCloneRow = useCallback(async (row: Record<string, unknown>) => {
+    if (!pkCol) return;
+    const currentDraftOps = useDraftStore.getState().ops;
+    const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
+    const draftPKs = currentDraftOps
+      .filter((op) => op.table === tableName && op.type === "insert" && op.values[pkCol.name] != null)
+      .map((op) => Number(op.values[pkCol.name]))
+      .filter((n) => !isNaN(n));
+    const maxPK = Math.max(0, ...existingPKs, ...draftPKs);
+    const newPK = maxPK + 1;
+
+    try {
+      const result = await api.previewClone({
+        target_id: targetId,
+        db_name: dbName,
+        branch_name: branchName,
+        table: tableName,
+        template_pk: { [pkCol.name]: row[pkCol.name] },
+        new_pks: [newPK],
+      });
+      if (result.errors?.length > 0) {
+        useUIStore.getState().setError(result.errors[0].message);
+      } else {
+        for (const op of result.ops) {
+          addOp(op);
+        }
+        setBaseState("DraftEditing");
+        const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
+        if (insertOp) {
+          onRowInserted(insertOp.values as Record<string, unknown>);
+        }
+      }
+    } catch (err: unknown) {
+      const e = err as { error?: { message?: string } };
+      useUIStore.getState().setError(e?.error?.message || "コピーに失敗しました");
+    }
+  }, [pkCol, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
+
+  const handleBatchClone = useCallback((row: Record<string, unknown>, changeColumn?: string) => {
+    setBatchGenerateConfig({ templateRow: row, changeColumn });
+  }, []);
+
+  const handleDeleteRow = useCallback((row: Record<string, unknown>) => {
+    if (!pkCol) return;
+    const pkVal = row[pkCol.name];
+    addOp({
+      type: "delete",
+      table: tableName,
+      values: {},
+      pk: { [pkCol.name]: pkVal },
+    });
+    setBaseState("DraftEditing");
+  }, [pkCol, tableName, addOp, setBaseState]);
 
   // Toggle column visibility
   const handleColumnToggle = useCallback((colName: string) => {
@@ -202,7 +280,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     });
   }, []);
 
-  // Right-click context menu
+  // Right-click context menu (uses shared action functions)
   const getContextMenuItems = useCallback(
     (params: GetContextMenuItemsParams) => {
       if (!params.node || !params.node.data) {
@@ -210,19 +288,10 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
       }
 
       const rowNode = params.node.data as Record<string, unknown>;
-      const pkCol = columns.find((c) => c.primary_key);
 
-      // "Show History" is always available
       const historyItem: MenuItemDef = {
-        name: "Show History",
-        action: () => {
-          if (!pkCol) return;
-          const pkVal = rowNode[pkCol.name];
-          setHistoryTarget({
-            pkJson: JSON.stringify({ [pkCol.name]: pkVal }),
-            pkLabel: String(pkVal),
-          });
-        },
+        name: "履歴を表示",
+        action: () => handleShowHistory(rowNode),
         disabled: !pkCol,
       };
 
@@ -231,71 +300,18 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
       }
 
       const cloneItem: MenuItemDef = {
-        name: "Clone Row (auto PK)",
-        action: async () => {
-          if (!pkCol) return;
-          const draftOps = useDraftStore.getState().ops;
-          const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
-          const draftPKs = draftOps
-            .filter((op) => op.table === tableName && op.type === "insert" && op.values[pkCol.name] != null)
-            .map((op) => Number(op.values[pkCol.name]))
-            .filter((n) => !isNaN(n));
-          const maxPK = Math.max(0, ...existingPKs, ...draftPKs);
-          const newPK = maxPK + 1;
-
-          try {
-            const result = await api.previewClone({
-              target_id: targetId,
-              db_name: dbName,
-              branch_name: branchName,
-              table: tableName,
-              template_pk: { [pkCol.name]: rowNode[pkCol.name] },
-              new_pks: [newPK],
-            });
-            if (result.errors?.length > 0) {
-              useUIStore.getState().setError(result.errors[0].message);
-            } else {
-              for (const op of result.ops) {
-                addOp(op);
-              }
-              setBaseState("DraftEditing");
-              const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
-              if (insertOp) {
-                onRowInserted(insertOp.values as Record<string, unknown>);
-              }
-            }
-          } catch (err: unknown) {
-            const e = err as { error?: { message?: string } };
-            useUIStore.getState().setError(e?.error?.message || "Clone failed");
-          }
-        },
+        name: "行をコピー（PK自動採番）",
+        action: () => handleCloneRow(rowNode),
       };
 
       const batchCloneItem: MenuItemDef = {
-        name: "Batch Clone...",
-        action: () => {
-          if (!pkCol) return;
-          const config = {
-            templateRow: rowNode,
-            changeColumn: params.column?.getColDef().field,
-          };
-          setBatchGenerateConfig(config);
-        },
+        name: "一括コピー...",
+        action: () => handleBatchClone(rowNode, params.column?.getColDef().field),
       };
 
       const deleteItem: MenuItemDef = {
-        name: "🗑 Delete Row",
-        action: () => {
-          if (!pkCol) return;
-          const pkVal = rowNode[pkCol.name];
-          addOp({
-            type: "delete",
-            table: tableName,
-            values: {},
-            pk: { [pkCol.name]: pkVal },
-          });
-          setBaseState("DraftEditing");
-        },
+        name: "行を削除",
+        action: () => handleDeleteRow(rowNode),
         disabled: !pkCol,
         cssClasses: ["ag-menu-option-danger"],
       };
@@ -310,8 +326,48 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
         "copy" as unknown as MenuItemDef,
       ];
     },
-    [isMain, editingBlocked, columns, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted, setHistoryTarget, setBatchGenerateConfig]
+    [isMain, editingBlocked, pkCol, handleShowHistory, handleCloneRow, handleBatchClone, handleDeleteRow]
   );
+
+  // Convert AG Grid filter model to backend FilterCondition[] JSON
+  const onFilterChanged = useCallback((event: FilterChangedEvent) => {
+    const model = event.api.getFilterModel();
+    const conditions: { column: string; op: string; value?: unknown }[] = [];
+    for (const [col, filter] of Object.entries(model)) {
+      const f = filter as { filterType?: string; type?: string; filter?: string; dateFrom?: string };
+      if (!f.type) continue;
+      const agType = f.type;
+      let op = "";
+      let value: unknown = f.filter ?? f.dateFrom;
+      switch (agType) {
+        case "contains": op = "contains"; break;
+        case "equals": op = "eq"; break;
+        case "notEqual": op = "neq"; break;
+        case "startsWith": op = "startsWith"; break;
+        case "endsWith": op = "endsWith"; break;
+        case "blank": op = "blank"; value = undefined; break;
+        case "notBlank": op = "notBlank"; value = undefined; break;
+        default: continue;
+      }
+      const cond: { column: string; op: string; value?: unknown } = { column: col, op };
+      if (value !== undefined) cond.value = value;
+      conditions.push(cond);
+    }
+    setServerFilter(conditions.length > 0 ? JSON.stringify(conditions) : "");
+    setPage(1);
+  }, []);
+
+  // Convert AG Grid sort model to backend sort string
+  const onSortChanged = useCallback((event: SortChangedEvent) => {
+    const sortModel = event.api.getColumnState()
+      .filter((c) => c.sort)
+      .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0));
+    const parts = sortModel.map((c) =>
+      c.sort === "desc" ? `-${c.colId}` : c.colId
+    );
+    setServerSort(parts.join(","));
+    setPage(1);
+  }, []);
 
   // Column definitions for AG Grid with draft visualization
   const colDefs: ColDef[] = useMemo(() => {
@@ -389,11 +445,52 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Column toggle (top-right corner of grid) */}
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px", background: "#fafafa", borderBottom: "1px solid #e8e8f0", flexShrink: 0 }}>
+      {/* Toolbar: row info + action buttons + column toggle */}
+      <div style={{ display: "flex", alignItems: "center", padding: "2px 8px", background: "#fafafa", borderBottom: "1px solid #e8e8f0", flexShrink: 0, gap: 4 }}>
         <span style={{ fontSize: 11, color: "#888", marginRight: "auto" }}>
           {totalCount.toLocaleString()} rows {loading && "• Loading..."}
         </span>
+
+        {/* Row action buttons (visible when a row is selected) */}
+        {selectedRow && (
+          <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
+            <button
+              onClick={() => handleShowHistory(selectedRow)}
+              disabled={!pkCol}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#e0e7ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 4, cursor: "pointer" }}
+              title="履歴を表示"
+            >
+              履歴
+            </button>
+            {!editingBlocked && (
+              <>
+                <button
+                  onClick={() => handleCloneRow(selectedRow)}
+                  style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: "pointer" }}
+                  title="行をコピー（PK自動採番）"
+                >
+                  コピー
+                </button>
+                <button
+                  onClick={() => handleBatchClone(selectedRow)}
+                  style={{ fontSize: 11, padding: "2px 8px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
+                  title="一括コピー"
+                >
+                  一括
+                </button>
+                <button
+                  onClick={() => handleDeleteRow(selectedRow)}
+                  disabled={!pkCol}
+                  style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer" }}
+                  title="行を削除"
+                >
+                  削除
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         <ColumnToggle
           columns={columns}
           hiddenColumns={hiddenColumns}
@@ -415,6 +512,9 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           onCellValueChanged={onCellValueChanged}
           suppressClickEdit={editingBlocked}
           getContextMenuItems={getContextMenuItems}
+          onRowClicked={onRowClicked}
+          onFilterChanged={onFilterChanged}
+          onSortChanged={onSortChanged}
         />
       </div>
 

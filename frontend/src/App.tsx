@@ -16,28 +16,28 @@ import "./App.css";
 function stateLabel(state: BaseState): { text: string; className: string } {
   switch (state) {
     case "Idle":
-      return { text: "Ready", className: "state-idle" };
+      return { text: "待機中", className: "state-idle" };
     case "DraftEditing":
-      return { text: "Draft", className: "state-draft" };
+      return { text: "下書き", className: "state-draft" };
     case "Previewing":
-      return { text: "Previewing", className: "state-draft" };
+      return { text: "プレビュー中", className: "state-draft" };
     case "Committing":
-      return { text: "Committing...", className: "state-draft" };
+      return { text: "コミット中...", className: "state-draft" };
     case "Syncing":
-      return { text: "Syncing...", className: "state-draft" };
+      return { text: "同期中...", className: "state-draft" };
     case "MergeConflictsPresent":
-      return { text: "Conflicts", className: "state-conflict" };
+      return { text: "コンフリクト", className: "state-conflict" };
     case "SchemaConflictDetected":
-      return { text: "Schema Conflict", className: "state-conflict" };
+      return { text: "スキーマコンフリクト", className: "state-conflict" };
     case "ConstraintViolationDetected":
-      return { text: "Constraint Violation", className: "state-conflict" };
+      return { text: "制約違反", className: "state-conflict" };
     case "StaleHeadDetected":
-      return { text: "Stale", className: "state-conflict" };
+      return { text: "要更新", className: "state-conflict" };
   }
 }
 
 function App() {
-  const { targetId, dbName, branchName, branchRefreshKey } = useContextStore();
+  const { targetId, dbName, branchName, branchRefreshKey, setBranch, triggerBranchRefresh } = useContextStore();
   const { ops, loadDraft, hasDraft } = useDraftStore();
   const { baseState, requestPending, error, setBaseState, setRequestPending, setError } = useUIStore();
 
@@ -50,12 +50,14 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm;
   useEffect(() => {
     if (anyModalOpen) {
       document.body.classList.add("modal-open");
@@ -87,7 +89,7 @@ function App() {
       })
       .catch((err) => {
         const e = err as { error?: { message?: string } };
-        setError(e?.error?.message || "Failed to load tables");
+        setError(e?.error?.message || "テーブルの読み込みに失敗しました");
       });
   }, [targetId, dbName, branchName, isContextReady]);
 
@@ -111,7 +113,7 @@ function App() {
       .catch((err) => {
         const e = err as { error?: { message?: string } };
         if (branchRef.current === requestBranch) {
-          setError(e?.error?.message || "Failed to get HEAD");
+          setError(e?.error?.message || "HEADの取得に失敗しました");
         }
       });
   }, [targetId, dbName, branchName, isContextReady]);
@@ -164,7 +166,7 @@ function App() {
       } else {
         setBaseState("Idle");
       }
-      setError(e?.error?.message || "Sync failed");
+      setError(e?.error?.message || "同期に失敗しました");
     }
   };
 
@@ -174,6 +176,26 @@ function App() {
     if (baseState === "StaleHeadDetected") {
       setBaseState(hasDraft() ? "DraftEditing" : "Idle");
       setError(null);
+    }
+  };
+
+  const handleDeleteBranch = async () => {
+    if (!branchName || branchName === "main") return;
+    setDeleting(true);
+    try {
+      await api.deleteBranch({
+        target_id: targetId,
+        db_name: dbName,
+        branch_name: branchName,
+      });
+      setBranch("main");
+      triggerBranchRefresh();
+      setShowDeleteConfirm(false);
+    } catch (err: unknown) {
+      const e = err as { error?: { message?: string } };
+      setError(e?.error?.message || "ブランチの削除に失敗しました");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -245,7 +267,7 @@ function App() {
         baseState === "MergeConflictsPresent" || baseState === "SchemaConflictDetected" ||
         baseState === "ConstraintViolationDetected";
       items.push({
-        label: "↻ Sync with Main",
+        label: "↻ Main と同期",
         onClick: () => { handleSync(); setShowOverflow(false); },
         disabled: syncDisabled,
         disabledReason: syncDisabled
@@ -256,7 +278,7 @@ function App() {
       // Submit
       const submitDisabled = hasDraft() || baseState !== "Idle";
       items.push({
-        label: "📤 Submit for Approval",
+        label: "📤 承認を申請",
         onClick: () => { setShowSubmit(true); setShowOverflow(false); },
         disabled: submitDisabled,
         disabledReason: submitDisabled
@@ -266,16 +288,25 @@ function App() {
 
       // Refresh
       items.push({
-        label: "🔄 Refresh",
+        label: "🔄 最新に更新",
         onClick: () => { handleRefresh(); setShowOverflow(false); },
       });
     }
 
     // Compare Versions (History)
     items.push({
-      label: "📊 Compare Versions...",
+      label: "📊 バージョン比較...",
       onClick: () => { setShowHistory(true); setShowOverflow(false); },
     });
+
+    // Delete Branch (non-main only)
+    if (!isMain && branchName) {
+      items.push({
+        label: "🗑 ブランチを削除",
+        onClick: () => { setShowDeleteConfirm(true); setShowOverflow(false); },
+        danger: true,
+      });
+    }
 
     return items;
   };
@@ -357,14 +388,14 @@ function App() {
 
       {!isContextReady ? (
         <div className="empty-state">
-          Select a target, database, and branch to get started.
+          ターゲット、データベース、ブランチを選択してください。
         </div>
       ) : (
         <div className="work-content">
           {/* Conflict alert banner */}
           {baseState === "MergeConflictsPresent" && (
             <div className="conflict-banner">
-              <strong>⚠ Merge Conflicts Detected</strong>
+              <strong>⚠ マージコンフリクトが検出されました</strong>
               <p>コンフリクトを解決してください。</p>
             </div>
           )}
@@ -416,10 +447,33 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowHistory(false)}>
           <div className="modal" style={{ minWidth: 700, maxWidth: 900, maxHeight: "80vh" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <h2 style={{ margin: 0 }}>Compare Versions</h2>
+              <h2 style={{ margin: 0 }}>バージョン比較</h2>
               <button onClick={() => setShowHistory(false)} style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer" }}>✕</button>
             </div>
             <HistoryTab />
+          </div>
+        </div>
+      )}
+      {/* Delete branch confirmation */}
+      {showDeleteConfirm && (
+        <div className="modal-overlay" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="modal" style={{ minWidth: 380, maxWidth: 450 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ margin: "0 0 12px", fontSize: 16 }}>ブランチの削除</h2>
+            <p style={{ fontSize: 13, color: "#555", margin: "0 0 16px" }}>
+              ブランチ <code style={{ fontSize: 12, background: "#f1f5f9", padding: "1px 4px", borderRadius: 2 }}>{branchName}</code> を完全に削除します。この操作は元に戻せません。
+            </p>
+            <div className="modal-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowDeleteConfirm(false)} style={{ padding: "6px 16px", fontSize: 13, background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}>
+                キャンセル
+              </button>
+              <button
+                onClick={handleDeleteBranch}
+                disabled={deleting}
+                style={{ padding: "6px 16px", fontSize: 13, background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 600 }}
+              >
+                {deleting ? "削除中..." : "削除する"}
+              </button>
+            </div>
           </div>
         </div>
       )}

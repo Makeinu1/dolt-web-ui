@@ -18,7 +18,6 @@ export function ContextSelector() {
   const [workItemName, setWorkItemName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     api.getTargets().then(setTargets).catch((err) => {
@@ -104,28 +103,6 @@ export function ContextSelector() {
     }
   };
 
-  const handleDeleteBranch = async () => {
-    if (!branchName || branchName === "main") return;
-    if (!window.confirm(`Delete branch "${branchName}"?`)) return;
-    setDeleting(true);
-    try {
-      await api.deleteBranch({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-      });
-      refreshBranches();
-      setBranch("main");
-    } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      alert(e?.error?.message || "Failed to delete branch");
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const isMain = branchName === "main";
-
   return (
     <div className="context-bar">
       {/* Active Target/DB clickable text */}
@@ -171,24 +148,6 @@ export function ContextSelector() {
             +
           </button>
 
-          {branchName && !isMain && (
-            <button
-              onClick={handleDeleteBranch}
-              disabled={deleting}
-              style={{
-                fontSize: 12,
-                padding: "3px 8px",
-                background: "#fef2f2",
-                color: "#991b1b",
-                border: "1px solid #fecaca",
-                borderRadius: 4,
-                cursor: "pointer"
-              }}
-              title="Delete current branch"
-            >
-              {deleting ? "..." : "🗑"}
-            </button>
-          )}
         </div>
       )}
 

@@ -274,16 +274,17 @@ Database: Test
 
 ---
 
-## Release Checklist
+## Release Checklist（毎回必須）
 
-バグ修正・機能追加後、以下を順番に実施:
+> **重要**: コード変更後は **必ず** 以下の手順をすべて実行すること。
+> E2E テストが成功したら、ドキュメント更新・バイナリビルド・Git コミット＆プッシュまでを一連の流れとして毎回行う。
 
-1. `go build` でコンパイルエラーがないことを確認
-2. `bash /tmp/dolt-e2e-test.sh` — 58/58 PASS
-3. `bash /tmp/dolt-e2e-extended.sh` — 52/52 PASS
-4. `find backend/cmd/server/static -name $'Icon\r' -delete` — macOS ゴミファイル削除
-5. `make build` — macOS バイナリ更新
-6. `GOOS=linux GOARCH=amd64 go build ...` — Linux バイナリ更新
-7. `git add -f dist/dolt-web-ui dist/dolt-web-ui-linux-amd64` + ソース変更をステージング
-8. コミット・プッシュ
-9. ドキュメント（README.md / docs/api-reference.md）を実装に合わせて更新してコミット
+1. `npx tsc --noEmit`（フロントエンド変更時）/ `go build`（バックエンド変更時）でコンパイルエラーがないことを確認
+2. フロントエンド変更時: `cd frontend && npm run build` → `rm -rf ../backend/cmd/server/static && cp -r dist ../backend/cmd/server/static`
+3. `find backend/cmd/server/static -name $'Icon\r' -delete` — macOS ゴミファイル削除
+4. `bash /tmp/dolt-e2e-test.sh` — 58/58 PASS
+5. `bash /tmp/dolt-e2e-extended.sh` — 52/52 PASS
+6. macOS バイナリビルド: `cd backend && go build -o ../dist/dolt-web-ui ./cmd/server`
+7. Linux バイナリビルド: `cd backend && GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server`
+8. `git add -f dist/dolt-web-ui dist/dolt-web-ui-linux-amd64` + ソース変更をステージング
+9. コミット・プッシュ（`git commit` → `git push origin master`）

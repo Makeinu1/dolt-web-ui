@@ -212,6 +212,13 @@ export interface DiffResponse {
   rows: DiffRow[];
 }
 
+export interface DiffTableResponse {
+  rows: DiffRow[];
+  total_count: number;
+  page: number;
+  page_size: number;
+}
+
 export interface DiffSummaryEntry {
   table: string;
   added: number;

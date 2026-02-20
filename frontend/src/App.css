@@ -148,7 +148,7 @@
   color: #aaa;
   cursor: not-allowed;
 }
-.overflow-item.danger { color: #991b1b; }
+.overflow-item.danger { color: #dc2626; font-weight: 600; }
 
 /* ========== Context Selector (inside header) ========== */
 .context-bar {

@@ -22,13 +22,27 @@ func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
 
 	mode := r.URL.Query().Get("mode") // "two_dot" or "three_dot"
 	skinny := r.URL.Query().Get("skinny") == "true"
+	diffType := r.URL.Query().Get("diff_type") // "added", "modified", "removed", or ""
 
-	rows, err := h.svc.DiffTable(r.Context(), targetID, dbName, branchName, table, fromRef, toRef, mode, skinny)
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	pageSize := 50
+	if ps := r.URL.Query().Get("page_size"); ps != "" {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 200 {
+			pageSize = v
+		}
+	}
+
+	resp, err := h.svc.DiffTable(r.Context(), targetID, dbName, branchName, table, fromRef, toRef, mode, skinny, diffType, page, pageSize)
 	if err != nil {
 		handleServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, model.DiffResponse{Rows: rows})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +99,9 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize)
+	filter := r.URL.Query().Get("filter") // "all" | "merges_only" | "exclude_auto_merge"
+
+	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, filter)
 	if err != nil {
 		handleServiceError(w, err)
 		return

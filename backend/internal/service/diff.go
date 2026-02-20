@@ -22,9 +22,10 @@ func validateRef(name, value string) error {
 }
 
 // DiffTable returns the diff between two refs for a table.
+// Supports pagination (page/pageSize) and optional diffType filter.
 // Per v6f spec section 5.1: DOLT_DIFF() requires literal arguments (no bind).
 // Tokens are validated via allowlist + regex before SQL template embedding.
-func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, table, fromRef, toRef, mode string, skinny bool) ([]model.DiffRow, error) {
+func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, table, fromRef, toRef, mode string, skinny bool, diffType string, page, pageSize int) (*model.DiffTableResponse, error) {
 	if err := validation.ValidateIdentifier("table", table); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
 	}
@@ -55,9 +56,26 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 	if skinny {
 		skinnyArg = ", '--skinny'"
 	}
-	query := fmt.Sprintf("SELECT * FROM DOLT_DIFF('%s', '%s'%s)", refSpec, table, skinnyArg)
+	diffBase := fmt.Sprintf("DOLT_DIFF('%s', '%s'%s)", refSpec, table, skinnyArg)
 
-	rows, err := conn.QueryContext(ctx, query)
+	// Build WHERE clause for diff_type filter
+	whereClause := ""
+	if diffType == "added" || diffType == "modified" || diffType == "removed" {
+		whereClause = fmt.Sprintf(" WHERE diff_type = '%s'", diffType)
+	}
+
+	// Count query
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s%s", diffBase, whereClause)
+	var totalCount int
+	if err := conn.QueryRowContext(ctx, countQuery).Scan(&totalCount); err != nil {
+		return nil, fmt.Errorf("failed to count diff rows: %w", err)
+	}
+
+	// Data query with LIMIT/OFFSET
+	offset := (page - 1) * pageSize
+	dataQuery := fmt.Sprintf("SELECT * FROM %s%s LIMIT %d OFFSET %d", diffBase, whereClause, pageSize, offset)
+
+	rows, err := conn.QueryContext(ctx, dataQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query diff: %w", err)
 	}
@@ -82,7 +100,7 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 		// Separate from_<col> and to_<col> columns
 		fromRow := make(map[string]interface{})
 		toRow := make(map[string]interface{})
-		var diffType string
+		var dt string
 
 		for i, col := range colNames {
 			val := values[i]
@@ -91,8 +109,8 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 			}
 			switch {
 			case col == "diff_type":
-				if s, ok := val.(string); ok {
-					diffType = s
+				if sv, ok := val.(string); ok {
+					dt = sv
 				}
 			case strings.HasPrefix(col, "from_"):
 				fromRow[strings.TrimPrefix(col, "from_")] = val
@@ -101,18 +119,27 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 			}
 		}
 
-		if diffType == "" {
-			diffType = "modified"
+		if dt == "" {
+			dt = "modified"
 		}
 
 		result = append(result, model.DiffRow{
-			DiffType: diffType,
+			DiffType: dt,
 			From:     fromRow,
 			To:       toRow,
 		})
 	}
 
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &model.DiffTableResponse{
+		Rows:       result,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+	}, nil
 }
 
 // DiffSummary returns per-table added/modified/removed counts for all tables
@@ -187,7 +214,9 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 }
 
 // HistoryCommits returns the commit log for a branch.
-func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int) ([]model.HistoryCommit, error) {
+// filter: "all" (default), "merges_only" (main: merge commits only),
+// "exclude_auto_merge" (work branch: exclude auto-sync merges).
+func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter string) ([]model.HistoryCommit, error) {
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -195,9 +224,30 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	defer conn.Close()
 
 	offset := (page - 1) * pageSize
-	rows, err := conn.QueryContext(ctx,
-		"SELECT commit_hash, committer, message, date FROM dolt_log ORDER BY date DESC LIMIT ? OFFSET ?",
-		pageSize, offset)
+
+	var query string
+	switch filter {
+	case "merges_only":
+		// For main branch: show only merge commits (2+ parents)
+		query = `SELECT l.commit_hash, l.committer, l.message, l.date
+			FROM dolt_log AS l
+			INNER JOIN (
+				SELECT commit_hash FROM dolt_commit_ancestors
+				GROUP BY commit_hash HAVING COUNT(*) > 1
+			) AS m ON l.commit_hash = m.commit_hash
+			ORDER BY l.date DESC LIMIT ? OFFSET ?`
+	case "exclude_auto_merge":
+		// For work branches: exclude auto-generated merge commits
+		query = `SELECT commit_hash, committer, message, date
+			FROM dolt_log
+			WHERE message NOT LIKE 'Merge branch%'
+			  AND message != 'Merge main with conflict resolution'
+			ORDER BY date DESC LIMIT ? OFFSET ?`
+	default:
+		query = "SELECT commit_hash, committer, message, date FROM dolt_log ORDER BY date DESC LIMIT ? OFFSET ?"
+	}
+
+	rows, err := conn.QueryContext(ctx, query, pageSize, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
