@@ -60,16 +60,20 @@ git commit -m "fix: ..."
 git push origin master
 ```
 
-フロントエンドも変更した場合は先にフルビルドを実行:
+フロントエンドも変更した場合は **必ず** フルビルドを実行（embed されるため）:
 
 ```bash
-# フロントエンド込みのフルビルド（macOS）
-make build-backend   # = copy-static + go build
+# フロントエンド再ビルド → static/ にコピー → macOS バイナリ
+cd frontend && npm run build
+rm -rf ../backend/cmd/server/static && cp -r dist ../backend/cmd/server/static
+find ../backend/cmd/server/static -name $'Icon\r' -delete
+cd ../backend && go build -o ../dist/dolt-web-ui ./cmd/server
 
-# Linux バイナリ（フロントエンド込み）
-find backend/cmd/server/static -name $'Icon\r' -delete
-cd backend && GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server
+# Linux バイナリも同じ static/ から再ビルド
+GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server
 ```
+
+> **落とし穴**: Linux ビルド（`make build-linux`）でフロントエンドが再ビルドされた後、macOS バイナリを再ビルドしないと古い UI が埋め込まれたまま残る。必ず両方セットで再ビルドすること。
 
 ### よくあるつまづきポイント
 
