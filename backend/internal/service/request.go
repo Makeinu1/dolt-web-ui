@@ -63,6 +63,45 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		}
 	}
 
+	// Step 1.5: Auto-sync main into work branch before submit
+	if _, err := conn.ExecContext(ctx, "SET autocommit=1"); err != nil {
+		return nil, fmt.Errorf("failed to set autocommit: %w", err)
+	}
+	defer conn.ExecContext(ctx, "SET autocommit=0")
+
+	var syncHash string
+	var syncFF, syncConflicts int
+	var syncMsg string
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").
+		Scan(&syncHash, &syncFF, &syncConflicts, &syncMsg)
+	if err != nil {
+		if strings.Contains(err.Error(), "conflict") {
+			return nil, &model.APIError{
+				Status: 409,
+				Code:   model.CodeMergeConflictsPresent,
+				Msg:    "Main との同期でコンフリクトが検出されました。ダイアログを閉じてコンフリクトを解決してください。",
+			}
+		}
+		// If merge returns "nothing to merge" or similar non-error, continue
+		if !strings.Contains(err.Error(), "up to date") {
+			return nil, fmt.Errorf("failed to auto-sync main: %w", err)
+		}
+	}
+	if syncConflicts > 0 {
+		// Abort the conflicting merge
+		conn.ExecContext(ctx, "CALL DOLT_MERGE('--abort')")
+		return nil, &model.APIError{
+			Status: 409,
+			Code:   model.CodeMergeConflictsPresent,
+			Msg:    "Main との同期でコンフリクトが検出されました。ダイアログを閉じてコンフリクトを解決してください。",
+		}
+	}
+
+	// Re-read HEAD after potential sync merge
+	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
+		return nil, fmt.Errorf("failed to get HEAD after sync: %w", err)
+	}
+
 	// Step 2: Capture hashes
 	submittedWorkHash := currentHead
 	var submittedMainHash string

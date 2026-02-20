@@ -59,7 +59,7 @@ export interface RowsResponse {
 }
 
 export interface CommitOp {
-  type: "insert" | "update";
+  type: "insert" | "update" | "delete";
   table: string;
   values: Record<string, unknown>;
   pk?: Record<string, unknown>;

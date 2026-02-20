@@ -8,12 +8,13 @@ import {
   type FirstDataRenderedEvent,
   type GetContextMenuItemsParams,
   type MenuItemDef,
+  type CellClassParams,
 } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
-import { useTemplateStore } from "../../store/template";
 import { RecordHistoryPopup } from "../common/RecordHistoryPopup";
+import { BatchGenerateModal } from "../BatchGenerateModal/BatchGenerateModal";
 import * as api from "../../api/client";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 
@@ -51,8 +52,9 @@ function ColumnToggle({
       <button
         className="toolbar-btn"
         onClick={() => setOpen(!open)}
+        style={{ fontSize: 11, padding: "2px 8px" }}
       >
-        Columns ({visibleCount}/{columns.length})
+        ⚙ Columns ({visibleCount}/{columns.length})
       </button>
       {open && (
         <div className="column-toggle-dropdown">
@@ -86,8 +88,8 @@ interface TableGridProps {
 export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
+  const draftOps = useDraftStore((s) => s.ops);
   const setBaseState = useUIStore((s) => s.setBaseState);
-  const { setTemplate } = useTemplateStore();
 
   const [columns, setColumns] = useState<ColumnSchema[]>([]);
   const [rowData, setRowData] = useState<Record<string, unknown>[]>([]);
@@ -97,6 +99,10 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const [loading, setLoading] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [historyTarget, setHistoryTarget] = useState<{ pkJson: string; pkLabel: string } | null>(null);
+  const [batchGenerateConfig, setBatchGenerateConfig] = useState<{
+    templateRow: Record<string, unknown>;
+    changeColumn?: string;
+  } | null>(null);
   const gridRef = useRef<AgGridReact>(null);
 
   const isMain = branchName === "main";
@@ -111,6 +117,41 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     baseState === "SchemaConflictDetected" ||
     baseState === "ConstraintViolationDetected" ||
     baseState === "StaleHeadDetected";
+
+  // Build draft index for visualization:
+  // Map of pkValue -> { type, changedCols }
+  const draftIndex = useMemo(() => {
+    const pkCol = columns.find((c) => c.primary_key);
+    if (!pkCol) return new Map<string, { type: string; changedCols: Set<string> }>();
+
+    const index = new Map<string, { type: string; changedCols: Set<string> }>();
+    for (const op of draftOps) {
+      if (op.table !== tableName) continue;
+      const pkVal = op.type === "insert"
+        ? String(op.values[pkCol.name])
+        : String(op.pk?.[pkCol.name]);
+      const existing = index.get(pkVal);
+      if (existing) {
+        // Accumulate changed columns
+        if (op.values) {
+          for (const col of Object.keys(op.values)) {
+            existing.changedCols.add(col);
+          }
+        }
+        // Delete supersedes update
+        if (op.type === "delete") {
+          existing.type = "delete";
+        }
+      } else {
+        const changedCols = new Set<string>(op.values ? Object.keys(op.values) : []);
+        if (op.pk) {
+          for (const col of Object.keys(op.pk)) changedCols.add(col);
+        }
+        index.set(pkVal, { type: op.type, changedCols });
+      }
+    }
+    return index;
+  }, [draftOps, tableName, columns]);
 
   // Load schema
   useEffect(() => {
@@ -171,7 +212,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
       const rowNode = params.node.data as Record<string, unknown>;
       const pkCol = columns.find((c) => c.primary_key);
 
-      // "Show History" is always available (main branch and work branches)
+      // "Show History" is always available
       const historyItem: MenuItemDef = {
         name: "Show History",
         action: () => {
@@ -189,12 +230,10 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
         return [historyItem, "separator" as unknown as MenuItemDef, "copy" as unknown as MenuItemDef];
       }
 
-      const cloneItem = {
+      const cloneItem: MenuItemDef = {
         name: "Clone Row (auto PK)",
         action: async () => {
           if (!pkCol) return;
-
-          // Auto-generate next PK from loaded rows + draft ops
           const draftOps = useDraftStore.getState().ops;
           const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
           const draftPKs = draftOps
@@ -214,7 +253,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
               new_pks: [newPK],
             });
             if (result.errors?.length > 0) {
-              alert(result.errors[0].message);
+              useUIStore.getState().setError(result.errors[0].message);
             } else {
               for (const op of result.ops) {
                 addOp(op);
@@ -227,25 +266,56 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
             }
           } catch (err: unknown) {
             const e = err as { error?: { message?: string } };
-            alert(e?.error?.message || "Clone failed");
+            useUIStore.getState().setError(e?.error?.message || "Clone failed");
           }
         },
       };
 
-      const templateItem = {
-        name: "Set as Template",
+      const batchCloneItem: MenuItemDef = {
+        name: "Batch Clone...",
         action: () => {
-          setTemplate(rowNode, tableName, columns);
+          if (!pkCol) return;
+          const config = {
+            templateRow: rowNode,
+            changeColumn: params.column?.getColDef().field,
+          };
+          setBatchGenerateConfig(config);
         },
       };
 
-      return [historyItem, "separator" as unknown as MenuItemDef, cloneItem, templateItem, "separator" as unknown as MenuItemDef, "copy" as unknown as MenuItemDef];
+      const deleteItem: MenuItemDef = {
+        name: "🗑 Delete Row",
+        action: () => {
+          if (!pkCol) return;
+          const pkVal = rowNode[pkCol.name];
+          addOp({
+            type: "delete",
+            table: tableName,
+            values: {},
+            pk: { [pkCol.name]: pkVal },
+          });
+          setBaseState("DraftEditing");
+        },
+        disabled: !pkCol,
+        cssClasses: ["ag-menu-option-danger"],
+      };
+
+      return [
+        historyItem,
+        "separator" as unknown as MenuItemDef,
+        cloneItem,
+        batchCloneItem,
+        deleteItem,
+        "separator" as unknown as MenuItemDef,
+        "copy" as unknown as MenuItemDef,
+      ];
     },
-    [isMain, editingBlocked, columns, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted, setTemplate, setHistoryTarget]
+    [isMain, editingBlocked, columns, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted, setHistoryTarget, setBatchGenerateConfig]
   );
 
-  // Column definitions for AG Grid
+  // Column definitions for AG Grid with draft visualization
   const colDefs: ColDef[] = useMemo(() => {
+    const pkCol = columns.find((c) => c.primary_key);
     const visibleCols = columns.filter((col) => !hiddenColumns.has(col.name));
 
     return visibleCols.map((col) => ({
@@ -255,11 +325,38 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
       sortable: true,
       filter: true,
       resizable: true,
-      cellStyle: col.primary_key
-        ? { backgroundColor: "#f0f0f5", fontWeight: 600 }
-        : undefined,
+      cellStyle: (params: CellClassParams) => {
+        // PK column always has a subtle bg
+        const base: Record<string, string> = col.primary_key
+          ? { backgroundColor: "#f0f0f5", fontWeight: "600" }
+          : {};
+
+        if (!pkCol || !params.data) return base;
+        const pkVal = String(params.data[pkCol.name]);
+        const draft = draftIndex.get(pkVal);
+        if (!draft) return base;
+
+        // Row-level draft markers
+        if (draft.type === "insert") {
+          return { ...base, backgroundColor: "#dcfce7", ...(col === visibleCols[0] ? { borderLeft: "3px solid #16a34a" } : {}) };
+        }
+        if (draft.type === "delete") {
+          return { ...base, backgroundColor: "#fee2e2", textDecoration: "line-through", color: "#888", ...(col === visibleCols[0] ? { borderLeft: "3px solid #dc2626" } : {}) };
+        }
+        if (draft.type === "update") {
+          // Cell-level: highlight only changed columns
+          if (draft.changedCols.has(col.name)) {
+            return { ...base, backgroundColor: "#fef3c7", fontWeight: "600", ...(col === visibleCols[0] ? { borderLeft: "3px solid #f59e0b" } : {}) };
+          }
+          // Row marker on first visible column
+          if (col === visibleCols[0]) {
+            return { ...base, borderLeft: "3px solid #f59e0b" };
+          }
+        }
+        return base;
+      },
     }));
-  }, [columns, hiddenColumns, editingBlocked]);
+  }, [columns, hiddenColumns, editingBlocked, draftIndex]);
 
   // Auto-size columns to fit content on first data render
   const onFirstDataRendered = useCallback((event: FirstDataRenderedEvent) => {
@@ -288,23 +385,23 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   );
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const showPagination = totalPages > 1;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="table-info">
-        <span>{tableName}</span>
-        <span>{totalCount} rows</span>
-        <span>
-          Page {page} / {totalPages}
+      {/* Column toggle (top-right corner of grid) */}
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px", background: "#fafafa", borderBottom: "1px solid #e8e8f0", flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: "#888", marginRight: "auto" }}>
+          {totalCount.toLocaleString()} rows {loading && "• Loading..."}
         </span>
-        {loading && <span>Loading...</span>}
-        <div style={{ flex: 1 }} />
         <ColumnToggle
           columns={columns}
           hiddenColumns={hiddenColumns}
           onToggle={handleColumnToggle}
         />
       </div>
+
+      {/* AG Grid */}
       <div style={{ flex: 1, minHeight: 0 }}>
         <AgGridReact
           ref={gridRef}
@@ -320,17 +417,21 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           getContextMenuItems={getContextMenuItems}
         />
       </div>
-      <div className="toolbar" style={{ justifyContent: "center" }}>
-        <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-          Prev
-        </button>
-        <span style={{ fontSize: 13 }}>
-          {page} / {totalPages}
-        </span>
-        <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-          Next
-        </button>
-      </div>
+
+      {/* Footer pagination (only when multiple pages) */}
+      {showPagination && (
+        <div className="toolbar" style={{ justifyContent: "center" }}>
+          <button disabled={page <= 1} onClick={() => setPage(page - 1)} style={{ fontSize: 12 }}>
+            ◀
+          </button>
+          <span style={{ fontSize: 12, color: "#666" }}>
+            {page} / {totalPages}
+          </span>
+          <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} style={{ fontSize: 12 }}>
+            ▶
+          </button>
+        </div>
+      )}
 
       {historyTarget && (
         <RecordHistoryPopup
@@ -338,6 +439,16 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           pkJson={historyTarget.pkJson}
           pkLabel={historyTarget.pkLabel}
           onClose={() => setHistoryTarget(null)}
+        />
+      )}
+
+      {batchGenerateConfig && (
+        <BatchGenerateModal
+          templateRow={batchGenerateConfig.templateRow}
+          templateTable={tableName}
+          templateColumns={columns}
+          changeColumn={batchGenerateConfig.changeColumn}
+          onClose={() => setBatchGenerateConfig(null)}
         />
       )}
     </div>

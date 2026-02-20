@@ -1,18 +1,26 @@
 import { useState } from "react";
 import { useContextStore } from "../../store/context";
-import { useTemplateStore } from "../../store/template";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
-import type { CommitOp, PreviewError } from "../../types/api";
+import type { CommitOp, PreviewError, ColumnSchema } from "../../types/api";
 
 interface BatchGenerateModalProps {
+  templateRow: Record<string, unknown>;
+  templateTable: string;
+  templateColumns: ColumnSchema[];
+  changeColumn?: string;
   onClose: () => void;
 }
 
-export function BatchGenerateModal({ onClose }: BatchGenerateModalProps) {
+export function BatchGenerateModal({
+  templateRow,
+  templateTable,
+  templateColumns,
+  changeColumn,
+  onClose
+}: BatchGenerateModalProps) {
   const { targetId, dbName, branchName } = useContextStore();
-  const { templateRow, templateTable, templateColumns, changeColumn } = useTemplateStore();
   const addOp = useDraftStore((s) => s.addOp);
   const setBaseState = useUIStore((s) => s.setBaseState);
 
@@ -96,7 +104,7 @@ export function BatchGenerateModal({ onClose }: BatchGenerateModalProps) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ minWidth: 520 }} onClick={(e) => e.stopPropagation()}>
-        <h2>Batch Generate</h2>
+        <h2>Batch Generate...</h2>
 
         <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
           Template: <strong>{templateTable}</strong> / {pkCol.name} = {String(templateRow[pkCol.name])}

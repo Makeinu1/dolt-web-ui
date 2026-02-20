@@ -7,6 +7,7 @@ export function CLIRunbook() {
   const { targetId, dbName, branchName } = useContextStore();
   const { baseState, setBaseState, setError } = useUIStore();
   const [checking, setChecking] = useState(false);
+  const [minimized, setMinimized] = useState(false);
 
   if (
     baseState !== "SchemaConflictDetected" &&
@@ -87,6 +88,47 @@ CALL DOLT_MERGE('--abort');`;
     }
   };
 
+  // Minimized: small banner at bottom
+  if (minimized) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background: isSchema ? "#dc3545" : "#fd7e14",
+          color: "#fff",
+          padding: "6px 16px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          zIndex: 1000,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        <span>⚠ {title} — CLI で解決してください</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => setMinimized(false)}
+            style={{ fontSize: 11, padding: "2px 8px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 3, cursor: "pointer" }}
+          >
+            Expand
+          </button>
+          <button
+            onClick={handleRefreshCheck}
+            disabled={checking}
+            style={{ fontSize: 11, padding: "2px 8px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 3, cursor: "pointer" }}
+          >
+            {checking ? "..." : "Refresh & Check"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Full overlay
   return (
     <div
       style={{
@@ -193,7 +235,13 @@ CALL DOLT_MERGE('--abort');`;
           CLIで解決後、「Dismiss & Refresh」を押してUIを再読み込みしてください。
         </p>
 
-        <div style={{ textAlign: "right" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            onClick={() => setMinimized(true)}
+            style={{ fontSize: 13 }}
+          >
+            Minimize
+          </button>
           <button
             className="primary"
             onClick={handleRefreshCheck}

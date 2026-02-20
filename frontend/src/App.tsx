@@ -13,8 +13,6 @@ import * as api from "./api/client";
 import type { Table } from "./types/api";
 import "./App.css";
 
-type TopTab = "work" | "history" | "requests";
-
 function stateLabel(state: BaseState): { text: string; className: string } {
   switch (state) {
     case "Idle":
@@ -30,11 +28,11 @@ function stateLabel(state: BaseState): { text: string; className: string } {
     case "MergeConflictsPresent":
       return { text: "Conflicts", className: "state-conflict" };
     case "SchemaConflictDetected":
-      return { text: "Schema Conflict (CLI)", className: "state-conflict" };
+      return { text: "Schema Conflict", className: "state-conflict" };
     case "ConstraintViolationDetected":
-      return { text: "Constraint Violation (CLI)", className: "state-conflict" };
+      return { text: "Constraint Violation", className: "state-conflict" };
     case "StaleHeadDetected":
-      return { text: "Stale HEAD", className: "state-conflict" };
+      return { text: "Stale", className: "state-conflict" };
   }
 }
 
@@ -46,16 +44,18 @@ function App() {
   const [tables, setTables] = useState<Table[]>([]);
   const [selectedTable, setSelectedTable] = useState("");
   const [expectedHead, setExpectedHead] = useState("");
-  const [activeTopTab, setActiveTopTab] = useState<TopTab>("work");
   const [showCommit, setShowCommit] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
+  const [showApprover, setShowApprover] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showOverflow, setShowOverflow] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory;
   useEffect(() => {
     if (anyModalOpen) {
       document.body.classList.add("modal-open");
@@ -104,7 +104,6 @@ function App() {
     api
       .getHead(targetId, dbName, branchName)
       .then((h) => {
-        // Only apply if branch hasn't changed since request was made
         if (branchRef.current === requestBranch) {
           setExpectedHead(h.hash);
         }
@@ -138,7 +137,7 @@ function App() {
 
   const handleSync = async () => {
     if (hasDraft()) {
-      setError("Discard draft before syncing.");
+      setError("ドラフトを破棄してから同期してください。");
       return;
     }
     setBaseState("Syncing");
@@ -171,6 +170,7 @@ function App() {
 
   const handleRefresh = () => {
     refreshHead();
+    setRefreshKey((k) => k + 1);
     if (baseState === "StaleHeadDetected") {
       setBaseState(hasDraft() ? "DraftEditing" : "Idle");
       setError(null);
@@ -187,33 +187,162 @@ function App() {
     setBaseState("Idle");
   };
 
+  // Close overflow menu on outside click
+  const overflowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showOverflow) return;
+    const handler = (e: MouseEvent) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
+        setShowOverflow(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showOverflow]);
+
   const label = stateLabel(baseState);
 
   // Count tables with pending changes
   const tablesWithChanges = new Set(ops.map((op) => op.table));
 
+  // State-driven action button
+  const actionButton = () => {
+    if (isMain) return null;
+    if (baseState === "StaleHeadDetected") {
+      return (
+        <button className="action-btn action-refresh" onClick={handleRefresh}>
+          ↻ Refresh
+        </button>
+      );
+    }
+    if (hasDraft()) {
+      return (
+        <button
+          className="action-btn action-commit"
+          onClick={() => setShowCommit(true)}
+          disabled={
+            baseState === "Committing" ||
+            baseState === "Syncing" ||
+            baseState === "MergeConflictsPresent" ||
+            baseState === "SchemaConflictDetected" ||
+            baseState === "ConstraintViolationDetected"
+          }
+        >
+          Commit ({ops.length})
+        </button>
+      );
+    }
+    return null;
+  };
+
+  // Build overflow menu items
+  const overflowItems = () => {
+    const items: { label: string; onClick: () => void; disabled?: boolean; disabledReason?: string; danger?: boolean }[] = [];
+
+    if (!isMain) {
+      // Sync
+      const syncDisabled = hasDraft() || baseState === "Syncing" || baseState === "Committing" ||
+        baseState === "MergeConflictsPresent" || baseState === "SchemaConflictDetected" ||
+        baseState === "ConstraintViolationDetected";
+      items.push({
+        label: "↻ Sync with Main",
+        onClick: () => { handleSync(); setShowOverflow(false); },
+        disabled: syncDisabled,
+        disabledReason: syncDisabled
+          ? (hasDraft() ? "ドラフトがあると同期できません" : "処理中は同期できません")
+          : undefined,
+      });
+
+      // Submit
+      const submitDisabled = hasDraft() || baseState !== "Idle";
+      items.push({
+        label: "📤 Submit for Approval",
+        onClick: () => { setShowSubmit(true); setShowOverflow(false); },
+        disabled: submitDisabled,
+        disabledReason: submitDisabled
+          ? (hasDraft() ? "先にコミットしてください" : "Idle状態でないとSubmitできません")
+          : undefined,
+      });
+
+      // Refresh
+      items.push({
+        label: "🔄 Refresh",
+        onClick: () => { handleRefresh(); setShowOverflow(false); },
+      });
+    }
+
+    // Compare Versions (History)
+    items.push({
+      label: "📊 Compare Versions...",
+      onClick: () => { setShowHistory(true); setShowOverflow(false); },
+    });
+
+    return items;
+  };
+
   return (
     <div className="app-layout">
-      {/* Unified Header: State badge + Context + HEAD + Request badge */}
+      {/* === Single-line Header (36px) === */}
       <header className="unified-header">
         <div className="header-left">
           <span className={`state-badge ${label.className}`}>{label.text}</span>
-        </div>
-        <div className="header-center">
           <ContextSelector />
-        </div>
-        <div className="header-right">
-          {expectedHead && (
-            <span className="head-hash">HEAD: {expectedHead.substring(0, 7)}</span>
+          {/* Table selector */}
+          {isContextReady && tables.length > 0 && (
+            <select
+              className="header-table-select"
+              value={selectedTable}
+              onChange={(e) => setSelectedTable(e.target.value)}
+            >
+              {tables.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name} {tablesWithChanges.has(t.name) ? "●" : ""}
+                </option>
+              ))}
+            </select>
           )}
+        </div>
+
+        <div className="header-right">
+          {/* State-driven action button */}
+          {actionButton()}
+
+          {/* Approver badge */}
           {requestPending && (
             <button
-              className="badge badge-info"
-              onClick={() => setActiveTopTab("requests")}
-              style={{ cursor: "pointer", border: "none" }}
+              className="approver-badge"
+              onClick={() => setShowApprover(true)}
+              title="承認待ちリクエストを表示"
             >
-              📋 Requests
+              📋
             </button>
+          )}
+
+          {/* Overflow menu */}
+          {isContextReady && (
+            <div className="overflow-wrapper" ref={overflowRef}>
+              <button
+                className="overflow-btn"
+                onClick={() => setShowOverflow(!showOverflow)}
+              >
+                ⋮
+              </button>
+              {showOverflow && (
+                <div className="overflow-menu">
+                  {overflowItems().map((item, i) => (
+                    <button
+                      key={i}
+                      className={`overflow-item ${item.danger ? "danger" : ""}`}
+                      onClick={item.onClick}
+                      disabled={item.disabled}
+                      title={item.disabledReason}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </header>
@@ -222,165 +351,42 @@ function App() {
       {error && (
         <div className="error-banner">
           <span>{error}</span>
-          <button onClick={() => setError(null)}>Dismiss</button>
+          <button onClick={() => setError(null)}>✕</button>
         </div>
       )}
 
       {!isContextReady ? (
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#888",
-          }}
-        >
+        <div className="empty-state">
           Select a target, database, and branch to get started.
         </div>
       ) : (
-        <>
-          {/* Top tab bar */}
-          <div className="tab-bar">
-            <button
-              className={activeTopTab === "work" ? "active" : ""}
-              onClick={() => setActiveTopTab("work")}
-            >
-              Work
-            </button>
-            <button
-              className={activeTopTab === "history" ? "active" : ""}
-              onClick={() => setActiveTopTab("history")}
-            >
-              History
-            </button>
-            <button
-              className={activeTopTab === "requests" ? "active" : ""}
-              onClick={() => setActiveTopTab("requests")}
-              style={requestPending ? { color: "#3730a3", fontWeight: 600 } : undefined}
-            >
-              Requests {requestPending ? "●" : ""}
-            </button>
+        <div className="work-content">
+          {/* Conflict alert banner */}
+          {baseState === "MergeConflictsPresent" && (
+            <div className="conflict-banner">
+              <strong>⚠ Merge Conflicts Detected</strong>
+              <p>コンフリクトを解決してください。</p>
+            </div>
+          )}
+
+          {/* Grid fills all remaining space */}
+          <div className="grid-container">
+            {selectedTable && <TableGrid tableName={selectedTable} refreshKey={refreshKey} />}
           </div>
 
-          {/* Work tab */}
-          {activeTopTab === "work" && (
-            <div className="work-content">
-              {/* Conflict alert banner (inline, only when conflicts exist) */}
-              {baseState === "MergeConflictsPresent" && (
-                <div className="conflict-banner">
-                  <strong>⚠ Merge Conflicts Detected</strong>
-                  <p>Conflicts must be resolved to continue. Click below to resolve.</p>
-                  <button
-                    className="primary"
-                    onClick={() => setBaseState("MergeConflictsPresent")}
-                    style={{ fontSize: 12, padding: "4px 12px" }}
-                  >
-                    Resolve Conflicts
-                  </button>
-                </div>
-              )}
-
-              {/* Unified Toolbar: Table selector + Pagination + Action buttons */}
-              <div className="unified-toolbar">
-                <div className="toolbar-left">
-                  <label style={{ fontSize: 12, fontWeight: 600, marginRight: 6 }}>Table</label>
-                  <select
-                    value={selectedTable}
-                    onChange={(e) => setSelectedTable(e.target.value)}
-                    style={{ fontSize: 13 }}
-                  >
-                    {tables.map((t) => (
-                      <option key={t.name} value={t.name}>
-                        {t.name} {tablesWithChanges.has(t.name) ? "●" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="toolbar-center">
-                  {/* Pagination placeholder - will be implemented by TableGrid */}
-                </div>
-                <div className="toolbar-right">
-                  {!isMain ? (
-                    <>
-                      <button
-                        onClick={handleSync}
-                        disabled={
-                          hasDraft() ||
-                          baseState === "Syncing" ||
-                          baseState === "Committing" ||
-                          baseState === "MergeConflictsPresent" ||
-                          baseState === "SchemaConflictDetected" ||
-                          baseState === "ConstraintViolationDetected"
-                        }
-                      >
-                        Sync
-                      </button>
-                      <button
-                        className="primary"
-                        onClick={() => setShowCommit(true)}
-                        disabled={
-                          !hasDraft() ||
-                          baseState === "Committing" ||
-                          baseState === "Syncing" ||
-                          baseState === "StaleHeadDetected" ||
-                          baseState === "MergeConflictsPresent" ||
-                          baseState === "SchemaConflictDetected" ||
-                          baseState === "ConstraintViolationDetected"
-                        }
-                      >
-                        Commit ({ops.length})
-                      </button>
-                      <button
-                        onClick={() => setShowSubmit(true)}
-                        disabled={hasDraft() || baseState !== "Idle"}
-                      >
-                        Submit
-                      </button>
-                      <button onClick={handleRefresh}>Refresh</button>
-                    </>
-                  ) : (
-                    <span style={{ fontSize: 13, color: "#666" }}>
-                      main is read-only
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Table Grid (full width, max height) */}
-              <div className="grid-container">
-                {selectedTable && <TableGrid tableName={selectedTable} refreshKey={refreshKey} />}
-              </div>
-
-              {/* ConflictView overlay (shown when resolving conflicts) */}
-              {baseState === "MergeConflictsPresent" && (
-                <div className="conflict-overlay">
-                  <ConflictView
-                    expectedHead={expectedHead}
-                    onResolved={onConflictResolved}
-                  />
-                </div>
-              )}
+          {/* ConflictView overlay */}
+          {baseState === "MergeConflictsPresent" && (
+            <div className="conflict-overlay">
+              <ConflictView
+                expectedHead={expectedHead}
+                onResolved={onConflictResolved}
+              />
             </div>
           )}
-
-          {/* History tab */}
-          {activeTopTab === "history" && (
-            <div className="content-area">
-              <HistoryTab />
-            </div>
-          )}
-
-          {/* Requests tab: approval inbox */}
-          {activeTopTab === "requests" && (
-            <div className="content-area">
-              <ApproverInbox />
-            </div>
-          )}
-        </>
+        </div>
       )}
 
-      {/* Modals */}
+      {/* === Modals === */}
       {showCommit && (
         <CommitDialog
           expectedHead={expectedHead}
@@ -394,6 +400,28 @@ function App() {
           onClose={() => setShowSubmit(false)}
           onSubmitted={() => setRequestPending(true)}
         />
+      )}
+      {showApprover && (
+        <div className="modal-overlay" onClick={() => setShowApprover(false)}>
+          <div className="modal" style={{ minWidth: 700, maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0 }}>承認待ちリクエスト</h2>
+              <button onClick={() => setShowApprover(false)} style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer" }}>✕</button>
+            </div>
+            <ApproverInbox />
+          </div>
+        </div>
+      )}
+      {showHistory && (
+        <div className="modal-overlay" onClick={() => setShowHistory(false)}>
+          <div className="modal" style={{ minWidth: 700, maxWidth: 900, maxHeight: "80vh" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0 }}>Compare Versions</h2>
+              <button onClick={() => setShowHistory(false)} style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer" }}>✕</button>
+            </div>
+            <HistoryTab />
+          </div>
+        </div>
       )}
       {/* CLI intervention screen for fatal states */}
       <CLIRunbook />

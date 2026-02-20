@@ -1,4 +1,4 @@
-/* Layout */
+/* ========== Layout ========== */
 .app-layout {
   display: flex;
   flex-direction: column;
@@ -6,68 +6,162 @@
   overflow: hidden;
 }
 
-/* Unified Header: State + Context + HEAD + Request badge */
+/* ========== Unified Header (36px single line) ========== */
 .unified-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 16px;
+  padding: 0 12px;
   background: #1a1a2e;
   color: #fff;
   border-bottom: 2px solid #4361ee;
   height: 36px;
   flex-shrink: 0;
+  gap: 8px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.header-center {
+  min-width: 0;
   flex: 1;
-  display: flex;
-  justify-content: center;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.head-hash {
-  font-size: 11px;
-  color: #a0a0c0;
-  font-family: monospace;
-}
-
+/* State badge */
 .state-badge {
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 3px;
   font-weight: 600;
-  font-size: 11px;
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .state-idle { background: #065f46; color: #d1fae5; }
 .state-draft { background: #92400e; color: #fef3c7; }
 .state-conflict { background: #991b1b; color: #fee2e2; }
-.state-request { background: #3730a3; color: #e0e7ff; }
 
-/* Context selector (inside unified header) */
+/* Table selector in header */
+.header-table-select {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: #2a2a3e;
+  color: #fff;
+  border: 1px solid #4361ee;
+  border-radius: 3px;
+  max-width: 200px;
+}
+
+/* ========== State-driven Action Button ========== */
+.action-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.action-commit {
+  background: #4361ee;
+  color: #fff;
+}
+.action-commit:hover:not(:disabled) { background: #3451de; }
+.action-commit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.action-refresh {
+  background: #f59e0b;
+  color: #fff;
+}
+.action-refresh:hover { background: #d97706; }
+
+/* ========== Approver Badge ========== */
+.approver-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #3730a3;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  width: 28px;
+  height: 24px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.approver-badge:hover { background: #4338ca; }
+
+/* ========== Overflow Menu (⋮) ========== */
+.overflow-wrapper {
+  position: relative;
+}
+
+.overflow-btn {
+  background: transparent;
+  color: #a0a0c0;
+  border: none;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.overflow-btn:hover { color: #fff; }
+
+.overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 60;
+  background: #fff;
+  border: 1px solid #d0d0d8;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  padding: 4px 0;
+  min-width: 200px;
+  margin-top: 4px;
+}
+
+.overflow-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.overflow-item:hover:not(:disabled) { background: #f0f0f5; }
+.overflow-item:disabled {
+  color: #aaa;
+  cursor: not-allowed;
+}
+.overflow-item.danger { color: #991b1b; }
+
+/* ========== Context Selector (inside header) ========== */
 .context-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .context-bar label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: #a0a0c0;
-  margin-right: 4px;
+  margin-right: 2px;
 }
 
 .context-bar select {
@@ -80,48 +174,30 @@
 }
 
 .context-bar button {
-  font-size: 11px;
-  padding: 3px 8px;
+  font-size: 10px;
+  padding: 2px 6px;
 }
 
 .context-bar input[type="text"] {
   background: #2a2a3e;
   color: #fff;
   border: 1px solid #4361ee;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
-/* Top Tabs */
-.tab-bar {
+/* ========== Empty State ========== */
+.empty-state {
+  flex: 1;
   display: flex;
-  gap: 0;
-  background: #e8e8f0;
-  border-bottom: 1px solid #d0d0d8;
-  padding: 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  font-size: 14px;
 }
 
-.tab-bar button {
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: none;
-  padding: 8px 16px;
-  font-size: 13px;
-  color: #666;
-  cursor: pointer;
-}
-
-.tab-bar button.active {
-  color: #4361ee;
-  border-bottom-color: #4361ee;
-  font-weight: 600;
-}
-
-.tab-bar button:hover {
-  color: #4361ee;
-  background: none;
-}
-
-/* Work Content (max vertical space) */
+/* ========== Work Content (max vertical space) ========== */
 .work-content {
   flex: 1;
   display: flex;
@@ -130,9 +206,9 @@
   overflow: hidden;
 }
 
-/* Conflict Banner (inline alert, only when conflicts exist) */
+/* ========== Conflict Banner ========== */
 .conflict-banner {
-  padding: 12px 16px;
+  padding: 8px 16px;
   background: #fee2e2;
   border-bottom: 2px solid #fca5a5;
   color: #991b1b;
@@ -142,53 +218,22 @@
 .conflict-banner strong {
   font-size: 13px;
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .conflict-banner p {
   font-size: 12px;
-  margin: 0 0 8px 0;
+  margin: 0;
 }
 
-/* Unified Toolbar: Table selector + Pagination + Action buttons */
-.unified-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 16px;
-  background: #f5f5f8;
-  border-bottom: 1px solid #d0d0d8;
-  flex-shrink: 0;
-  height: 32px;
-}
-
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.toolbar-center {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Grid Container (full width, max height) */
+/* ========== Grid Container (full width, max height) ========== */
 .grid-container {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-/* ConflictView Overlay (shown when resolving conflicts) */
+/* ========== ConflictView Overlay ========== */
 .conflict-overlay {
   position: fixed;
   inset: 0;
@@ -208,41 +253,29 @@
   overflow: auto;
 }
 
-/* Toolbar (used by pagination etc.) */
-.toolbar {
+/* ========== Error Banner ========== */
+.error-banner {
+  padding: 6px 16px;
+  background: #fee2e2;
+  color: #991b1b;
+  border-bottom: 1px solid #fca5a5;
+  font-size: 12px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e8e8f0;
+  flex-shrink: 0;
 }
 
-.toolbar .spacer {
-  flex: 1;
+.error-banner button {
+  margin-left: auto;
+  font-size: 14px;
+  background: none;
+  border: none;
+  color: #991b1b;
+  cursor: pointer;
 }
 
-/* Content area (full-width for Conflicts/Requests tabs) */
-.content-area {
-  flex: 1;
-  padding: 0;
-  overflow: auto;
-}
-
-/* Badge styles */
-.badge {
-  padding: 2px 8px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.badge-info {
-  background: #3730a3;
-  color: #e0e7ff;
-}
-
-/* Modal overlay — blocks backdrop scroll */
+/* ========== Modal (shared) ========== */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -255,7 +288,6 @@
   overscroll-behavior: contain;
 }
 
-/* When any modal is open, prevent body scroll */
 body.modal-open {
   overflow: hidden;
 }
@@ -283,30 +315,20 @@ body.modal-open {
   margin-top: 16px;
 }
 
-/* Error banner */
-.error-banner {
-  padding: 8px 16px;
-  background: #fee2e2;
-  color: #991b1b;
-  border-bottom: 1px solid #fca5a5;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* ========== Badge styles ========== */
+.badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
-.error-banner button {
-  margin-left: auto;
-  font-size: 12px;
+.badge-info {
+  background: #3730a3;
+  color: #e0e7ff;
 }
 
-/* Template row highlight in AG Grid */
-.template-row {
-  background-color: #e0e7ff !important;
-  border-left: 3px solid #4361ee;
-}
-
-/* Draft count badge */
+/* ========== Draft count badge ========== */
 .draft-count {
   display: inline-flex;
   align-items: center;
@@ -322,7 +344,13 @@ body.modal-open {
   margin-left: 4px;
 }
 
-/* Column toggle dropdown */
+/* ========== Template row highlight ========== */
+.template-row {
+  background-color: #e0e7ff !important;
+  border-left: 3px solid #4361ee;
+}
+
+/* ========== Column toggle dropdown ========== */
 .column-toggle-wrapper {
   position: relative;
 }
@@ -363,4 +391,26 @@ body.modal-open {
 .column-toggle-item.pk-col {
   color: #888;
   cursor: default;
+}
+
+/* ========== Toolbar (used by pagination) ========== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  background: #fff;
+  border-top: 1px solid #e8e8f0;
+  flex-shrink: 0;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+/* ========== Content area ========== */
+.content-area {
+  flex: 1;
+  padding: 0;
+  overflow: auto;
 }

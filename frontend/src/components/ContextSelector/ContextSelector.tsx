@@ -12,6 +12,8 @@ export function ContextSelector() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [databases, setDatabases] = useState<Database[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+
+  const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [workItemName, setWorkItemName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -126,99 +128,90 @@ export function ContextSelector() {
 
   return (
     <div className="context-bar">
-      <div>
-        <label>Target</label>
-        <select
-          value={targetId}
-          onChange={(e) => setTarget(e.target.value)}
-        >
-          <option value="">-- Select --</option>
-          {targets.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.id}
-            </option>
-          ))}
-        </select>
+      {/* Active Target/DB clickable text */}
+      <div
+        onClick={() => setShowSettings(true)}
+        style={{
+          cursor: "pointer",
+          fontWeight: 600,
+          fontSize: 13,
+          color: targetId && dbName ? "#fff" : "#f59e0b",
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          marginRight: 8,
+        }}
+        title="Settings (Target / Database)"
+      >
+        {targetId && dbName ? `${dbName}@${targetId}` : "⚙ Setup Context"}
+        <span style={{ fontSize: 10, color: "#888" }}>▼</span>
       </div>
 
-      <div>
-        <label>Database</label>
-        <select
-          value={dbName}
-          onChange={(e) => setDatabase(e.target.value)}
-          disabled={!targetId}
-        >
-          <option value="">-- Select --</option>
-          {databases.map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label>Branch</label>
+      {/* Branch Dropdown */}
+      {targetId && dbName && (
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <select
             value={branchName}
             onChange={(e) => setBranch(e.target.value)}
-            disabled={!dbName}
+            style={{ minWidth: 120 }}
           >
-            <option value="">-- Select --</option>
+            <option value="">-- Branch --</option>
             {branches.map((b) => (
               <option key={b.name} value={b.name}>
-                {b.name === "main" ? `\u{1F512} ${b.name}` : b.name}
+                {b.name === "main" ? `🔒 ${b.name}` : `🌿 ${b.name}`}
               </option>
             ))}
           </select>
-          {targetId && dbName && (
-            <>
-              <button
-                onClick={() => setShowCreate(!showCreate)}
-                style={{ fontSize: 11, padding: "4px 8px", whiteSpace: "nowrap" }}
-              >
-                + New
-              </button>
-              {branchName && !isMain && (
-                <button
-                  onClick={handleDeleteBranch}
-                  disabled={deleting}
-                  style={{
-                    fontSize: 11,
-                    padding: "4px 8px",
-                    whiteSpace: "nowrap",
-                    color: "#991b1b",
-                  }}
-                >
-                  {deleting ? "..." : "Delete"}
-                </button>
-              )}
-            </>
+
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            style={{ fontSize: 12, padding: "3px 8px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}
+            title="Create new work branch"
+          >
+            +
+          </button>
+
+          {branchName && !isMain && (
+            <button
+              onClick={handleDeleteBranch}
+              disabled={deleting}
+              style={{
+                fontSize: 12,
+                padding: "3px 8px",
+                background: "#fef2f2",
+                color: "#991b1b",
+                border: "1px solid #fecaca",
+                borderRadius: 4,
+                cursor: "pointer"
+              }}
+              title="Delete current branch"
+            >
+              {deleting ? "..." : "🗑"}
+            </button>
           )}
         </div>
-      </div>
+      )}
 
-      {showCreate && (
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>wi /</span>
+      {/* Inline Create Branch form */}
+      {showCreate && targetId && dbName && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center", marginLeft: 8, background: "#1e293b", padding: "2px 8px", borderRadius: 4, border: "1px solid #334155" }}>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>wi /</span>
           <input
             type="text"
             value={workItemName}
             onChange={(e) => setWorkItemName(e.target.value)}
-            placeholder="work-item-name"
-            style={{ fontSize: 12, padding: "4px 8px", width: 160 }}
+            placeholder="ticket-123"
+            style={{ fontSize: 12, padding: "2px 6px", width: 120, background: "#fff", color: "#000", border: "none", borderRadius: 2 }}
             onKeyDown={(e) => {
               if (e.key === "Enter") handleCreateBranch();
             }}
             autoFocus
           />
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>/ {nextRound}</span>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>/ {nextRound}</span>
           <button
-            className="primary"
             onClick={handleCreateBranch}
             disabled={creating || !workItemValid}
-            style={{ fontSize: 11, padding: "4px 8px" }}
+            style={{ fontSize: 11, padding: "2px 8px", background: "#10b981", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginLeft: 4 }}
           >
             {creating ? "..." : "Create"}
           </button>
@@ -228,23 +221,61 @@ export function ContextSelector() {
               setCreateError(null);
               setWorkItemName("");
             }}
-            style={{ fontSize: 11, padding: "4px 8px" }}
+            style={{ fontSize: 11, padding: "2px 8px", background: "transparent", color: "#cbd5e1", border: "none", cursor: "pointer" }}
           >
             Cancel
           </button>
-          {workItemName.trim() && !workItemValid && (
-            <span style={{ color: "#c00", fontSize: 11 }}>
-              A-Z, a-z, 0-9, ., _, - only
-            </span>
-          )}
           {createError && (
-            <span style={{ color: "#c00", fontSize: 11 }}>{createError}</span>
+            <span style={{ color: "#fca5a5", fontSize: 10 }}>{createError}</span>
           )}
-          {fullBranchName && workItemValid && (
-            <span style={{ fontSize: 11, color: "#065f46" }}>
-              → {fullBranchName}
-            </span>
-          )}
+        </div>
+      )}
+
+      {/* Settings Modal (Target / Database) */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 400 }}>
+            <h2>⚙ Context Settings</h2>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 600, color: "#555" }}>
+                Target Server
+              </label>
+              <select
+                value={targetId}
+                onChange={(e) => setTarget(e.target.value)}
+                style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
+              >
+                <option value="">-- Select Target --</option>
+                {targets.map((t) => (
+                  <option key={t.id} value={t.id}>{t.id}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 600, color: "#555" }}>
+                Database
+              </label>
+              <select
+                value={dbName}
+                onChange={(e) => setDatabase(e.target.value)}
+                disabled={!targetId}
+                style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
+              >
+                <option value="">-- Select Database --</option>
+                {databases.map((d) => (
+                  <option key={d.name} value={d.name}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="modal-actions">
+              <button className="primary" onClick={() => setShowSettings(false)} style={{ minWidth: 100 }}>
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
