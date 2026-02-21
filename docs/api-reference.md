@@ -530,7 +530,7 @@ Merge main branch into work branch (two-stage merge). **MainGuard applies.**
 
 ### GET /diff/table
 
-Get row-level diff between two refs for a table.
+Get row-level diff between two refs for a table. Supports pagination.
 
 **Query Parameters:**
 
@@ -544,6 +544,9 @@ Get row-level diff between two refs for a table.
 | `to_ref` | Yes | | Target ref (e.g., `wi/work-1`) |
 | `mode` | No | `two_dot` | `two_dot` or `three_dot` |
 | `skinny` | No | `false` | If `true`, return PK-only diffs |
+| `diff_type` | No | | Filter by type: `added`, `modified`, or `removed` |
+| `page` | No | `1` | Page number (must be > 0) |
+| `page_size` | No | `50` | Rows per page (1-200) |
 
 **Response:**
 
@@ -552,6 +555,7 @@ Get row-level diff between two refs for a table.
   "rows": [
     {
       "diff_type": "added",
+      "from": {},
       "to": { "id": 201, "name": "New Item" }
     },
     {
@@ -561,17 +565,55 @@ Get row-level diff between two refs for a table.
     },
     {
       "diff_type": "removed",
-      "from": { "id": 50, "name": "Deleted Item" }
+      "from": { "id": 50, "name": "Deleted Item" },
+      "to": {}
     }
-  ]
+  ],
+  "total_count": 42,
+  "page": 1,
+  "page_size": 50
 }
 ```
 
 ---
 
+### GET /diff/export-zip
+
+Export all diff rows across all tables as a ZIP archive containing per-table, per-diff-type CSV files.
+
+**Query Parameters:**
+
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `target_id` | Yes | | Target ID |
+| `db_name` | Yes | | Database name |
+| `branch_name` | Yes | | Branch name (connection context) |
+| `from_ref` | Yes | | Source ref |
+| `to_ref` | Yes | | Target ref |
+| `mode` | No | `three_dot` | `two_dot` or `three_dot` |
+
+**Response:**
+
+Binary ZIP file with `Content-Type: application/zip` and `Content-Disposition: attachment; filename="diff-{from}-{to}.zip"`.
+
+**ZIP contents:**
+
+| File | Contents |
+|------|----------|
+| `{table}_insert.csv` | Added rows (new values only) |
+| `{table}_update.csv` | Modified rows (new values only; old values not included) |
+| `{table}_delete.csv` | Removed rows (old values) |
+
+Files for unchanged tables or empty diff types are omitted.
+
+**Errors:**
+- `400 INVALID_ARGUMENT` - Missing required parameters or invalid ref format
+
+---
+
 ### GET /history/commits
 
-Get commit history for a branch.
+Get commit history for a branch. Supports filtering by commit type.
 
 **Query Parameters:**
 
@@ -582,6 +624,7 @@ Get commit history for a branch.
 | `branch_name` | Yes | | Branch name |
 | `page` | No | `1` | Page number (must be > 0) |
 | `page_size` | No | `20` | Commits per page (1-100) |
+| `filter` | No | `all` | `all`, `merges_only` (main: merge commits only), or `exclude_auto_merge` (work branch: exclude auto-sync commits) |
 
 **Response:**
 
@@ -971,7 +1014,7 @@ The frontend manages a state machine with the following states:
 | `ConstraintViolationDetected` | Constraint violations after sync | CLI intervention required |
 | `StaleHeadDetected` | HEAD hash mismatch | Refresh HEAD |
 
-**Orthogonal Flag:** `requestPending` (boolean) - indicates a pending approval request exists.
+**Orthogonal Counter:** `requestCount` (number) - count of pending approval requests. Auto-fetched on app load and context switch. `0` means none pending.
 
 ### UI Guards
 
