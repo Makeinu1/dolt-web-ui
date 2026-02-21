@@ -130,6 +130,18 @@ function App() {
     }
   }, [branchRefreshKey]);
 
+  // Auto-detect pending approval requests on context change and after approve/reject
+  useEffect(() => {
+    if (!isContextReady) return;
+    api.listRequests(targetId, dbName)
+      .then((requests) => {
+        setRequestPending(requests.length > 0);
+      })
+      .catch(() => {
+        // silently ignore — non-critical
+      });
+  }, [targetId, dbName, branchRefreshKey]);
+
   // Update base state based on draft
   useEffect(() => {
     if (hasDraft() && baseState === "Idle") {
