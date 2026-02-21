@@ -136,6 +136,9 @@ curl http://localhost:8080/health  # 起動確認
 - `CALL DOLT_COMMIT('--allow-empty', '--all', '-m', 'message')` — 引数は個別に渡す（`-Am` の組み合わせ不可）
 - `autocommit=1` はプールされたコネクションに永続するので使用後は `SET autocommit=0` でリセット
 - Dolt merge コンフリクトは `autocommit=1` 時に MySQL error 1105 として返る（`conflicts > 0` ではなく `err.Error()` をチェック）
+- `dolt_commit_ancestors` テーブルでマージコミット判定: `GROUP BY commit_hash HAVING COUNT(*) > 1` → 親2つ以上 = マージコミット
+- `DOLT_DIFF()` テーブル関数はページネーション可: `SELECT COUNT(*) FROM DOLT_DIFF(?,?)` + `LIMIT ? OFFSET ?`
+- `DOLT_DIFF()` の `diff_type` 列は `"added"` / `"modified"` / `"removed"` の3値（WHERE 句でフィルタ可）
 
 ### `/health` エンドポイント
 
@@ -150,6 +153,41 @@ curl http://localhost:8080/health  # 起動確認
 - Data grid: AG Grid Community 35
 - Draft data stored in sessionStorage only (volatile)
 - TemplatePanel / template store は廃止済み（右クリック直接操作に移行）
+
+### CSS 詳細度の落とし穴
+
+`index.css` にグローバルな `button.danger`, `button.primary` 等のスタイルが定義されている。
+コンポーネント固有の `<button>` に別クラスを付けても、グローバルスタイルの詳細度が勝つ場合がある。
+
+- 例: `.overflow-item { background: none }` (0,1,0) < `button.danger { background: red }` (0,1,1)
+- 修正: `.overflow-item.danger { background: none }` (0,2,0) で明示的にオーバーライド
+
+**原則**: コンポーネント固有のボタンスタイルでは `background`, `color`, `border` を明示的に指定する。
+
+### AG Grid 型の注意点
+
+- `getRowStyle` の `params.data` は `T | undefined`（`RowClassParams` 型）。引数型は `params: { data?: T }` でオプショナルとして扱うこと。
+- AG Grid Community 35 はサーバーサイドモデル非対応。クライアントサイドで `rowData` を渡す方式のみ。
+
+### UI 言語方針
+
+- ユーザー向けテキストはすべて **日本語**
+- 技術的識別子（API パス、関数名、ブランチ名パターン）は英語のまま
+- アイコン＋短ラベル（📤, 🔄 等）は言語非依存で可
+
+### 承認リクエストの自動検出パターン
+
+`requestPending` フラグはセッション内で Submit 後にのみ立つ設計だったが、
+App.tsx の `useEffect` で `listRequests()` を自動呼び出して起動時・コンテキスト切替時に同期する:
+
+```tsx
+useEffect(() => {
+  if (!isContextReady) return;
+  api.listRequests(targetId, dbName)
+    .then((requests) => setRequestPending(requests.length > 0))
+    .catch(() => {}); // 非致命的なので無視
+}, [targetId, dbName, branchRefreshKey]);
+```
 
 ---
 
@@ -271,6 +309,32 @@ User: root
 Password: (none)
 Database: Test
 ```
+
+---
+
+## 実装済み機能一覧
+
+### コア機能
+- AG Grid によるスプレッドシート編集（セル編集、フィルタ、ソート、ページネーション）
+- ドラフト管理（sessionStorage、Insert/Update/Delete の色分け表示）
+- ブランチ作成・削除（`wi/{WorkItem}/{Round}` パターン）
+- コミット（楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
+- Main との同期（DOLT_MERGE、コンフリクト検出・解決 UI）
+- 承認ワークフロー（Submit → Approve/Reject、`req/*` タグベース）
+- 承認リクエスト自動検出（アプリ起動・コンテキスト切替時に自動チェック）
+
+### データ閲覧・比較
+- バージョン比較（DiffSummary → DiffGrid フルスクリーン AG Grid）
+  - サーバーサイドページネーション（50件/ページ）
+  - diff_type フィルタ（全て / 追加 / 変更 / 削除）
+- コミット履歴フィルタリング（main: マージのみ / 作業ブランチ: 自動マージ除外）
+- セル単位の変更履歴（RecordHistoryPopup、直近20件）
+- 行クローン（自動PK採番）、一括クローン（BatchGenerateModal）
+
+### 運用
+- CLIRunbook（致命的エラー時の手動復旧手順表示）
+- 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
+- macOS / Linux amd64 クロスコンパイル
 
 ---
 
