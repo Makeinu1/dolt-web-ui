@@ -79,9 +79,9 @@ export function CommitDialog({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ minWidth: 520 }} onClick={(e) => e.stopPropagation()}>
-        <h2>Commit Changes</h2>
+        <h2>変更をコミット</h2>
         <p style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
-          {ops.length} operation(s) on branch <strong>{branchName}</strong>
+          <strong>{branchName}</strong> ブランチへの {ops.length} 件の操作
         </p>
 
         {/* Change preview */}

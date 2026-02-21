@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useContextStore } from "./store/context";
 import { useDraftStore } from "./store/draft";
 import { useUIStore, type BaseState } from "./store/ui";
@@ -39,7 +39,7 @@ function stateLabel(state: BaseState): { text: string; className: string } {
 function App() {
   const { targetId, dbName, branchName, branchRefreshKey, setBranch, triggerBranchRefresh } = useContextStore();
   const { ops, loadDraft, hasDraft } = useDraftStore();
-  const { baseState, requestPending, error, setBaseState, setRequestPending, setError } = useUIStore();
+  const { baseState, requestCount, error, setBaseState, setRequestCount, setError } = useUIStore();
 
   const [tables, setTables] = useState<Table[]>([]);
   const [selectedTable, setSelectedTable] = useState("");
@@ -135,7 +135,7 @@ function App() {
     if (!isContextReady) return;
     api.listRequests(targetId, dbName)
       .then((requests) => {
-        setRequestPending(requests.length > 0);
+        setRequestCount(requests.length);
       })
       .catch(() => {
         // silently ignore — non-critical
@@ -236,8 +236,19 @@ function App() {
 
   const label = stateLabel(baseState);
 
-  // Count tables with pending changes
-  const tablesWithChanges = new Set(ops.map((op) => op.table));
+  // Count tables with pending changes (insert/update/delete per table)
+  const tableChanges = useMemo(
+    () =>
+      ops.reduce((acc, op) => {
+        const cur = acc.get(op.table) ?? { inserts: 0, updates: 0, deletes: 0 };
+        if (op.type === "insert") cur.inserts++;
+        else if (op.type === "update") cur.updates++;
+        else if (op.type === "delete") cur.deletes++;
+        acc.set(op.table, cur);
+        return acc;
+      }, new Map<string, { inserts: number; updates: number; deletes: number }>()),
+    [ops]
+  );
 
   // State-driven action button
   const actionButton = () => {
@@ -337,11 +348,21 @@ function App() {
               value={selectedTable}
               onChange={(e) => setSelectedTable(e.target.value)}
             >
-              {tables.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name} {tablesWithChanges.has(t.name) ? "●" : ""}
-                </option>
-              ))}
+              {tables.map((t) => {
+                const c = tableChanges.get(t.name);
+                const indicator = c
+                  ? ` (${[
+                      c.inserts > 0 ? `+${c.inserts}` : "",
+                      c.updates > 0 ? `~${c.updates}` : "",
+                      c.deletes > 0 ? `-${c.deletes}` : "",
+                    ].filter(Boolean).join(" ")})`
+                  : "";
+                return (
+                  <option key={t.name} value={t.name}>
+                    {t.name}{indicator}
+                  </option>
+                );
+              })}
             </select>
           )}
         </div>
@@ -351,13 +372,13 @@ function App() {
           {actionButton()}
 
           {/* Approver badge */}
-          {requestPending && (
+          {requestCount > 0 && (
             <button
               className="approver-badge"
               onClick={() => setShowApprover(true)}
               title="承認待ちリクエストを表示"
             >
-              📋
+              📋 {requestCount}
             </button>
           )}
 
@@ -441,7 +462,7 @@ function App() {
         <SubmitDialog
           expectedHead={expectedHead}
           onClose={() => setShowSubmit(false)}
-          onSubmitted={() => setRequestPending(true)}
+          onSubmitted={() => setRequestCount(requestCount + 1)}
         />
       )}
       {showApprover && (

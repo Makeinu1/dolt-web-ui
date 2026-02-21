@@ -102,7 +102,15 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   const [loading, setLoading] = useState(false);
   const [serverFilter, setServerFilter] = useState("");
   const [serverSort, setServerSort] = useState("");
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const colVisibilityKey = `colVisibility/${targetId}/${dbName}/${tableName}`;
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(`colVisibility/${targetId}/${dbName}/${tableName}`);
+      return saved ? new Set<string>(JSON.parse(saved) as string[]) : new Set<string>();
+    } catch {
+      return new Set<string>();
+    }
+  });
   const [historyTarget, setHistoryTarget] = useState<{ pkJson: string; pkLabel: string } | null>(null);
   const [batchGenerateConfig, setBatchGenerateConfig] = useState<{
     templateRow: Record<string, unknown>;
@@ -110,6 +118,13 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
   } | null>(null);
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const gridRef = useRef<AgGridReact>(null);
+
+  // Persist column visibility to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(colVisibilityKey, JSON.stringify([...hiddenColumns]));
+    } catch { /* ignore */ }
+  }, [hiddenColumns, colVisibilityKey]);
 
   const isMain = branchName === "main";
   const baseState = useUIStore((s) => s.baseState);

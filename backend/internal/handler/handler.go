@@ -47,6 +47,7 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		// Diff & History
 		r.Get("/diff/table", h.DiffTable)
 		r.Get("/diff/summary", h.DiffSummary)
+		r.Get("/diff/export-zip", h.ExportDiffZip)
 		r.Get("/history/commits", h.HistoryCommits)
 		r.Get("/history/row", h.HistoryRow)
 

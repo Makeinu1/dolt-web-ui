@@ -61,10 +61,14 @@ function DiffSummaryTable({
   entries,
   onSelectTable,
   selectedTable,
+  onExportZip,
+  exportingZip,
 }: {
   entries: DiffSummaryEntry[];
   onSelectTable: (table: string) => void;
   selectedTable: string | null;
+  onExportZip?: () => void;
+  exportingZip?: boolean;
 }) {
   if (entries.length === 0) {
     return <div style={{ fontSize: 12, color: "#888", padding: 8 }}>変更はありません。</div>;
@@ -78,7 +82,18 @@ function DiffSummaryTable({
           <th style={{ textAlign: "right", padding: "4px 8px", color: "#065f46" }}>+追加</th>
           <th style={{ textAlign: "right", padding: "4px 8px", color: "#92400e" }}>~変更</th>
           <th style={{ textAlign: "right", padding: "4px 8px", color: "#991b1b" }}>-削除</th>
-          <th style={{ textAlign: "center", padding: "4px 8px", width: 60 }}></th>
+          <th style={{ textAlign: "center", padding: "4px 8px", width: 100 }}>
+            {onExportZip && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onExportZip(); }}
+                disabled={exportingZip}
+                title="全テーブルの差分を ZIP でダウンロード"
+                style={{ fontSize: 11, padding: "2px 6px", cursor: "pointer", background: "#f0f4ff", border: "1px solid #4361ee", borderRadius: 4, color: "#4361ee" }}
+              >
+                {exportingZip ? "生成中..." : "📥 ZIP"}
+              </button>
+            )}
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -576,6 +591,7 @@ export function HistoryTab() {
 
   // Fullscreen DiffGrid
   const [diffGridTable, setDiffGridTable] = useState<string | null>(null);
+  const [exportingZip, setExportingZip] = useState(false);
 
   // Load branches
   useEffect(() => {
@@ -638,6 +654,26 @@ export function HistoryTab() {
   // Open fullscreen DiffGrid for a table
   const handleSelectTable = (table: string) => {
     setDiffGridTable(table);
+  };
+
+  // Download all diff tables as ZIP
+  const handleExportZip = async () => {
+    const fromRef = resolveRef(fromBranch, fromVersion);
+    const toRef = resolveRef(toBranch, toVersion);
+    setExportingZip(true);
+    try {
+      const { blob, filename } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromRef, toRef, "two_dot");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently ignore — user can retry
+    } finally {
+      setExportingZip(false);
+    }
   };
 
   const fromRefStr = resolveRef(fromBranch, fromVersion);
@@ -708,6 +744,8 @@ export function HistoryTab() {
               entries={entries}
               onSelectTable={handleSelectTable}
               selectedTable={diffGridTable}
+              onExportZip={entries.length > 0 ? handleExportZip : undefined}
+              exportingZip={exportingZip}
             />
           </div>
         )}

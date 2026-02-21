@@ -76,6 +76,35 @@ func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.DiffSummaryResponse{Entries: entries})
 }
 
+func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
+	targetID := r.URL.Query().Get("target_id")
+	dbName := r.URL.Query().Get("db_name")
+	branchName := r.URL.Query().Get("branch_name")
+	fromRef := r.URL.Query().Get("from_ref")
+	toRef := r.URL.Query().Get("to_ref")
+	if targetID == "" || dbName == "" || branchName == "" || fromRef == "" || toRef == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
+			"target_id, db_name, branch_name, from_ref, and to_ref are required")
+		return
+	}
+
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "three_dot"
+	}
+
+	data, zipName, err := h.svc.ExportDiffZip(r.Context(), targetID, dbName, branchName, fromRef, toRef, mode)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+zipName+`"`)
+	w.WriteHeader(http.StatusOK)
+	w.Write(data) //nolint:errcheck
+}
+
 func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	targetID := r.URL.Query().Get("target_id")
 	dbName := r.URL.Query().Get("db_name")

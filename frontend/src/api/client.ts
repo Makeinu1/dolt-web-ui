@@ -270,3 +270,25 @@ export const rejectRequest = (body: import("../types/api").RejectRequest) =>
     method: "POST",
     body: JSON.stringify(body),
   });
+
+// Diff ZIP export — returns a Blob (application/zip)
+export const exportDiffZip = async (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  fromRef: string,
+  toRef: string,
+  mode = "three_dot"
+): Promise<{ blob: Blob; filename: string }> => {
+  const qs = queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, from_ref: fromRef, to_ref: toRef, mode });
+  const res = await fetch(`${API_BASE}/diff/export-zip${qs}`);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ code: "INTERNAL", message: res.statusText }));
+    throw error;
+  }
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : "diff-export.zip";
+  const blob = await res.blob();
+  return { blob, filename };
+};

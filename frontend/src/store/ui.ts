@@ -14,20 +14,20 @@ export type BaseState =
 
 interface UIState {
   baseState: BaseState;
-  requestPending: boolean; // orthogonal flag per v6f spec
+  requestCount: number; // number of pending approval requests (0 = none)
   error: string | null;
   setBaseState: (state: BaseState) => void;
-  setRequestPending: (pending: boolean) => void;
+  setRequestCount: (count: number) => void;
   setError: (error: string | null) => void;
   reset: () => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
   baseState: "Idle",
-  requestPending: false,
+  requestCount: 0,
   error: null,
   setBaseState: (baseState) => set({ baseState, error: null }),
-  setRequestPending: (requestPending) => set({ requestPending }),
+  setRequestCount: (requestCount) => set({ requestCount }),
   setError: (error) => set({ error }),
-  reset: () => set({ baseState: "Idle", requestPending: false, error: null }),
+  reset: () => set({ baseState: "Idle", requestCount: 0, error: null }),
 }));

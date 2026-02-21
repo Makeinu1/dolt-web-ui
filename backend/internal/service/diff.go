@@ -1,7 +1,10 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -331,6 +334,121 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// ExportDiffZip generates a ZIP archive containing per-table, per-diff-type CSV files.
+// Files are named {table}_insert.csv / {table}_update.csv / {table}_delete.csv.
+// Update rows contain new values only (no old_ columns).
+func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchName, fromRef, toRef, mode string) ([]byte, string, error) {
+	if err := validateRef("from", fromRef); err != nil {
+		return nil, "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+	if err := validateRef("to", toRef); err != nil {
+		return nil, "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+
+	// Get diff summary to know which tables have changes
+	entries, err := s.DiffSummary(ctx, targetID, dbName, branchName, fromRef, toRef, mode)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get diff summary: %w", err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	for _, entry := range entries {
+		diffTypes := []struct {
+			diffType string
+			suffix   string
+		}{
+			{"added", "insert"},
+			{"modified", "update"},
+			{"removed", "delete"},
+		}
+
+		for _, dt := range diffTypes {
+			count := 0
+			switch dt.diffType {
+			case "added":
+				count = entry.Added
+			case "modified":
+				count = entry.Modified
+			case "removed":
+				count = entry.Removed
+			}
+			if count == 0 {
+				continue
+			}
+
+			// Fetch all rows for this table/diffType (no pagination)
+			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, 1, count+100)
+			if err != nil || len(resp.Rows) == 0 {
+				continue
+			}
+
+			// Collect column names from first row's To map (or From for removed)
+			var sample map[string]interface{}
+			if dt.diffType == "removed" {
+				sample = resp.Rows[0].From
+			} else {
+				sample = resp.Rows[0].To
+			}
+			cols := make([]string, 0, len(sample))
+			for k := range sample {
+				cols = append(cols, k)
+			}
+			// Sort for deterministic order
+			for i := 0; i < len(cols)-1; i++ {
+				for j := i + 1; j < len(cols); j++ {
+					if cols[i] > cols[j] {
+						cols[i], cols[j] = cols[j], cols[i]
+					}
+				}
+			}
+
+			fname := fmt.Sprintf("%s_%s.csv", entry.Table, dt.suffix)
+			fw, err := zw.Create(fname)
+			if err != nil {
+				continue
+			}
+			cw := csv.NewWriter(fw)
+
+			// Write header
+			if err := cw.Write(cols); err != nil {
+				continue
+			}
+
+			// Write data rows
+			for _, row := range resp.Rows {
+				var src map[string]interface{}
+				if dt.diffType == "removed" {
+					src = row.From
+				} else {
+					src = row.To
+				}
+				record := make([]string, len(cols))
+				for i, col := range cols {
+					v := src[col]
+					if v == nil {
+						record[i] = ""
+					} else {
+						record[i] = fmt.Sprintf("%v", v)
+					}
+				}
+				if err := cw.Write(record); err != nil {
+					break
+				}
+			}
+			cw.Flush()
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, "", fmt.Errorf("failed to close zip: %w", err)
+	}
+
+	zipName := fmt.Sprintf("diff-%s-%s.zip", fromRef, toRef)
+	return buf.Bytes(), zipName, nil
 }
 
 // parseSinglePK parses a URL-encoded JSON PK and returns the single value.
