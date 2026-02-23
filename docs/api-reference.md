@@ -152,7 +152,7 @@ Get the current HEAD hash for a branch.
 
 ### GET /tables
 
-List user tables (excludes `dolt_*` system tables).
+List user tables (excludes `dolt_*` system tables and `_cell_*` internal tables).
 
 **Query Parameters:**
 
@@ -624,7 +624,17 @@ Get commit history for a branch. Supports filtering by commit type.
 | `branch_name` | Yes | | Branch name |
 | `page` | No | `1` | Page number (must be > 0) |
 | `page_size` | No | `20` | Commits per page (1-100) |
-| `filter` | No | `all` | `all`, `merges_only` (main: merge commits only), or `exclude_auto_merge` (work branch: exclude auto-sync commits) |
+| `filter` | No | `all` | See filter values below |
+
+**Filter Values:**
+
+| Value | Description |
+|-------|-------------|
+| `all` | All commits (default) |
+| `merges_only` | Merge commits only (useful for main branch) |
+| `exclude_auto_merge` | Exclude auto-sync merge commits (useful for work branches) |
+| `exclude_comments` | Exclude `[comment]`-prefixed commits created by the cell comment feature |
+| `exclude_auto_merge_and_comments` | Combine `exclude_auto_merge` + `exclude_comments` (default filter in the HistoryTab UI) |
 
 **Response:**
 
@@ -981,6 +991,213 @@ Get a DB-wide change summary across all tables between two refs. Used by the His
 ```
 
 Returns an `entries` array with one entry per table. Tables with zero changes are included if they appear in the diff. Returns `{"entries": []}` if no changes.
+
+---
+
+## Cell Comments
+
+Stores per-cell notes (table + PK + column) in a `_cell_comments` Dolt table on the branch. Each add/delete operation creates an immediate Dolt commit with the `[comment]` prefix. UUID primary keys prevent merge conflicts between parallel branches.
+
+**Comment object:**
+
+```json
+{
+  "comment_id": "550e8400-e29b-41d4-a716-446655440000",
+  "table_name": "items",
+  "pk_value": "42",
+  "column_name": "price",
+  "comment_text": "REQ-123: 帯域制限を200Mbpsに変更",
+  "created_at": "2026-02-20T14:30:00Z"
+}
+```
+
+---
+
+### GET /comments
+
+Get all comments for a specific cell (table + PK + column combination), sorted oldest-first.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `table` | Yes | Table name |
+| `pk` | Yes | Primary key value |
+| `column` | Yes | Column name |
+
+**Response:**
+
+```json
+[
+  {
+    "comment_id": "550e8400-...",
+    "table_name": "items",
+    "pk_value": "42",
+    "column_name": "price",
+    "comment_text": "初期設定値",
+    "created_at": "2026-02-15T09:15:00Z"
+  }
+]
+```
+
+Returns `[]` if no comments exist or if the `_cell_comments` table does not exist yet.
+
+---
+
+### GET /comments/map
+
+Get the set of cells that have at least one comment for a given table. Used by the frontend to render amber triangle markers on commented cells.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `table` | Yes | Table name |
+
+**Response:**
+
+```json
+{ "cells": ["42:price", "55:name"] }
+```
+
+Each entry is formatted as `"{pk_value}:{column_name}"`. Returns `{"cells": []}` if no comments exist.
+
+---
+
+### POST /comments
+
+Add a new comment to a cell. **MainGuard applies.**
+
+Creates an immediate Dolt commit with the message `[comment] {table}/{pk}/{column}`.
+
+**Request Body:**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/work-1",
+  "table_name": "items",
+  "pk_value": "42",
+  "column_name": "price",
+  "comment_text": "REQ-123: 帯域制限を200Mbpsに変更"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `table_name` | Yes | Table name (validated identifier) |
+| `pk_value` | Yes | Primary key value as string |
+| `column_name` | Yes | Column name (validated identifier) |
+| `comment_text` | Yes | Comment content (1–5000 characters) |
+
+**Response:**
+
+```json
+{ "comment_id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+**Errors:**
+- `400 INVALID_ARGUMENT` - Empty or oversized `comment_text`, invalid table/column name
+- `403 FORBIDDEN` - MainGuard (write to main)
+
+**Note:** Row existence is not validated. Comments can be written to any table/PK/column combination. If the referenced row is later deleted, the comment is automatically cascade-deleted.
+
+---
+
+### POST /comments/delete
+
+Delete a comment by ID. **MainGuard applies.**
+
+Creates an immediate Dolt commit with message `[comment] deleted`. Deletion is idempotent — if the comment ID does not exist, the operation succeeds with 0 rows deleted.
+
+**Request Body:**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/work-1",
+  "comment_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Response:**
+
+```json
+{ "status": "deleted" }
+```
+
+**Errors:**
+- `403 FORBIDDEN` - MainGuard (write to main)
+
+---
+
+### GET /comments/search
+
+Search comments by keyword within a branch (partial match, case-sensitive `LIKE`). Returns results sorted newest-first.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `q` | Yes | Search keyword (non-empty) |
+
+**Response:**
+
+Array of comment objects sorted by `created_at DESC`.
+
+```json
+[
+  {
+    "comment_id": "...",
+    "table_name": "items",
+    "pk_value": "42",
+    "column_name": "price",
+    "comment_text": "REQ-123: 帯域制限を200Mbpsに変更",
+    "created_at": "2026-02-20T14:30:00Z"
+  }
+]
+```
+
+Returns `[]` if no matches or if `_cell_comments` does not exist.
+
+**Errors:**
+- `400 INVALID_ARGUMENT` - Empty `q` parameter
+
+---
+
+### GET /comments/for-pks
+
+Batch-fetch all comments for a set of primary key values in a single table. Used by `DiffCommentsPanel` to display comments for changed rows in a diff view.
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `table` | Yes | Table name |
+| `pks` | Yes | Comma-separated PK values (e.g., `42,55,99`). Empty string returns `[]`. |
+
+**Response:**
+
+Array of comment objects for the given PKs (all columns), sorted by `pk_value`, then `column_name`, then `created_at`.
+
+Returns `[]` if no comments exist or `pks` is empty.
 
 ---
 
