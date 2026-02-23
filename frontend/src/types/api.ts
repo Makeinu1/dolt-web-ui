@@ -229,3 +229,31 @@ export interface DiffSummaryEntry {
 export interface DiffSummaryResponse {
   entries: DiffSummaryEntry[];
 }
+
+// --- Cell Comments ---
+
+export interface CellComment {
+  comment_id: string;
+  table_name: string;
+  pk_value: string;
+  column_name: string;
+  comment_text: string;
+  created_at: string;
+}
+
+export interface AddCommentRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table_name: string;
+  pk_value: string;
+  column_name: string;
+  comment_text: string;
+}
+
+export interface DeleteCommentRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  comment_id: string;
+}

@@ -9,8 +9,11 @@ import { ConflictView } from "./components/ConflictView/ConflictView";
 import { SubmitDialog, ApproverInbox } from "./components/RequestDialog/RequestDialog";
 import { HistoryTab } from "./components/HistoryTab/HistoryTab";
 import { CLIRunbook } from "./components/CLIRunbook/CLIRunbook";
+import { CellCommentPanel } from "./components/CellCommentPanel/CellCommentPanel";
+import { CommentSearchModal } from "./components/CommentSearchModal/CommentSearchModal";
 import * as api from "./api/client";
 import type { Table } from "./types/api";
+import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -52,12 +55,17 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [selectedCell, setSelectedCell] = useState<SelectedCellInfo | null>(null);
+  const [showCommentPanel, setShowCommentPanel] = useState(false);
+  const [commentRefreshKey, setCommentRefreshKey] = useState(0);
+  const [showCommentSearch, setShowCommentSearch] = useState(false);
+  const [filterByPk, setFilterByPk] = useState<string | null>(null);
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showCommentSearch;
   useEffect(() => {
     if (anyModalOpen) {
       document.body.classList.add("modal-open");
@@ -221,6 +229,19 @@ function App() {
     setBaseState("Idle");
   };
 
+  // Called after comment add/delete: refresh HEAD (immediate commit changed it) and comment markers
+  const onCommentChanged = useCallback(() => {
+    refreshHead();
+    setCommentRefreshKey((k) => k + 1);
+  }, [refreshHead]);
+
+  // Navigate to a specific row from comment search
+  const handleCommentNavigate = useCallback((table: string, pkValue: string) => {
+    setSelectedTable(table);
+    setFilterByPk(pkValue);
+    setShowCommentSearch(false);
+  }, []);
+
   // Close overflow menu on outside click
   const overflowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -322,6 +343,12 @@ function App() {
       onClick: () => { setShowHistory(true); setShowOverflow(false); },
     });
 
+    // Comment search
+    items.push({
+      label: "🔍 コメント検索...",
+      onClick: () => { setShowCommentSearch(true); setShowOverflow(false); },
+    });
+
     // Delete Branch (non-main only)
     if (!isMain && branchName) {
       items.push({
@@ -370,6 +397,19 @@ function App() {
         <div className="header-right">
           {/* State-driven action button */}
           {actionButton()}
+
+          {/* Comment panel button */}
+          {isContextReady && (
+            <button
+              className="toolbar-btn"
+              style={{ fontSize: 13 }}
+              title={selectedCell ? `コメント: ${selectedCell.column}` : "セルを選択してください"}
+              disabled={!selectedCell}
+              onClick={() => setShowCommentPanel(true)}
+            >
+              💬
+            </button>
+          )}
 
           {/* Approver badge */}
           {requestCount > 0 && (
@@ -435,7 +475,18 @@ function App() {
 
           {/* Grid fills all remaining space */}
           <div className="grid-container">
-            {selectedTable && <TableGrid tableName={selectedTable} refreshKey={refreshKey} />}
+            {selectedTable && (
+              <TableGrid
+                tableName={selectedTable}
+                refreshKey={refreshKey}
+                commentRefreshKey={commentRefreshKey}
+                onCellSelected={(info) => {
+                  setSelectedCell(info);
+                  if (!info) setShowCommentPanel(false);
+                }}
+                filterByPk={filterByPk}
+              />
+            )}
           </div>
 
           {/* ConflictView overlay */}
@@ -510,6 +561,31 @@ function App() {
           </div>
         </div>
       )}
+      {/* Cell comment panel (slide-in panel, not modal overlay) */}
+      {showCommentPanel && selectedCell && (
+        <CellCommentPanel
+          targetId={targetId}
+          dbName={dbName}
+          branchName={branchName}
+          table={selectedCell.table}
+          pk={selectedCell.pk}
+          column={selectedCell.column}
+          onClose={() => setShowCommentPanel(false)}
+          onChanged={onCommentChanged}
+        />
+      )}
+
+      {/* Comment search modal */}
+      {showCommentSearch && (
+        <CommentSearchModal
+          targetId={targetId}
+          dbName={dbName}
+          branchName={branchName}
+          onClose={() => setShowCommentSearch(false)}
+          onNavigate={handleCommentNavigate}
+        />
+      )}
+
       {/* CLI intervention screen for fatal states */}
       <CLIRunbook />
     </div>

@@ -12,6 +12,7 @@ import {
   type FilterChangedEvent,
   type SortChangedEvent,
   type RowClickedEvent,
+  type CellClickedEvent,
 } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
@@ -83,12 +84,24 @@ function ColumnToggle({
 }
 
 // --- Main TableGrid component ---
+export interface SelectedCellInfo {
+  table: string;
+  pk: string;
+  column: string;
+}
+
 interface TableGridProps {
   tableName: string;
   refreshKey?: number;
+  /** Increment to force comment map refresh (e.g. after adding/deleting a comment). */
+  commentRefreshKey?: number;
+  /** Called when the user clicks a cell. Null when focus leaves. */
+  onCellSelected?: (info: SelectedCellInfo | null) => void;
+  /** When set, server-side filter is applied to show only rows matching this PK value. */
+  filterByPk?: string | null;
 }
 
-export function TableGrid({ tableName, refreshKey }: TableGridProps) {
+export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSelected, filterByPk }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
@@ -117,6 +130,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     changeColumn?: string;
   } | null>(null);
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
+  const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
   const gridRef = useRef<AgGridReact>(null);
 
   // Persist column visibility to localStorage
@@ -205,6 +219,14 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
     loadRows();
   }, [loadRows]);
 
+  // Load comment map (which cells have comments)
+  useEffect(() => {
+    if (!tableName || !targetId || !dbName || !branchName) return;
+    api.getCommentMap(targetId, dbName, branchName, tableName)
+      .then((res) => setCommentCells(new Set(res.cells)))
+      .catch(() => setCommentCells(new Set()));
+  }, [targetId, dbName, branchName, tableName, commentRefreshKey]);
+
   // Optimistic row insert (used after clone)
   const onRowInserted = useCallback((row: Record<string, unknown>) => {
     setRowData((prev) => [...prev, row]);
@@ -218,6 +240,26 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
 
   // --- Shared action functions (used by both right-click menu and toolbar buttons) ---
   const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns]);
+
+  // Cell click handler — notifies parent of selected cell for comment panel
+  const onCellClicked = useCallback((event: CellClickedEvent) => {
+    if (!onCellSelected || !pkCol || !event.data) {
+      onCellSelected?.(null);
+      return;
+    }
+    const colName = event.column.getColDef().field ?? "";
+    const pkVal = String((event.data as Record<string, unknown>)[pkCol.name]);
+    onCellSelected({ table: tableName, pk: pkVal, column: colName });
+  }, [onCellSelected, pkCol, tableName]);
+
+  // Apply server-side PK filter when filterByPk prop changes
+  useEffect(() => {
+    if (!pkCol) return;
+    if (filterByPk) {
+      setServerFilter(JSON.stringify([{ column: pkCol.name, op: "eq", value: filterByPk }]));
+      setPage(1);
+    }
+  }, [filterByPk, pkCol]);
 
   const handleShowHistory = useCallback((row: Record<string, unknown>) => {
     if (!pkCol) return;
@@ -424,10 +466,24 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
             return { ...base, borderLeft: "3px solid #f59e0b" };
           }
         }
+
+        // Comment marker: amber triangle in top-right corner (CSS gradient)
+        const cellKey = `${pkVal}:${col.name}`;
+        if (commentCells.has(cellKey)) {
+          const bg = base.backgroundColor || "#ffffff";
+          // Remove backgroundColor to avoid conflict with background shorthand
+          const { backgroundColor: _bg, ...rest } = base;
+          void _bg;
+          return {
+            ...rest,
+            background: `linear-gradient(225deg, #f59e0b 6px, transparent 6px) no-repeat top right, ${bg}`,
+          };
+        }
+
         return base;
       },
     }));
-  }, [columns, hiddenColumns, editingBlocked, draftIndex]);
+  }, [columns, hiddenColumns, editingBlocked, draftIndex, commentCells]);
 
   // Auto-size columns to fit content on first data render
   const onFirstDataRendered = useCallback((event: FirstDataRenderedEvent) => {
@@ -528,6 +584,7 @@ export function TableGrid({ tableName, refreshKey }: TableGridProps) {
           suppressClickEdit={editingBlocked}
           getContextMenuItems={getContextMenuItems}
           onRowClicked={onRowClicked}
+          onCellClicked={onCellClicked}
           onFilterChanged={onFilterChanged}
           onSortChanged={onSortChanged}
         />

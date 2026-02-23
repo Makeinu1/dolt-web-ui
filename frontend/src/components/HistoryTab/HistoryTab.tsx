@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, CellClassParams } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
+import { DiffCommentsPanel } from "../DiffCommentsPanel/DiffCommentsPanel";
 import * as api from "../../api/client";
 import type { Branch, HistoryCommit, DiffSummaryEntry, DiffRow } from "../../types/api";
 
@@ -369,6 +370,18 @@ function DiffGrid({
         />
       </div>
 
+      {/* DiffCommentsPanel — comments for changed rows */}
+      <div style={{ maxHeight: 200, overflowY: "auto", borderTop: "1px solid #e0e0e0", flexShrink: 0, background: "#fffbf5" }}>
+        <DiffCommentsPanel
+          table={tableName}
+          targetId={targetId}
+          dbName={dbName}
+          branchName={branchName}
+          fromRef={fromRef}
+          toRef={toRef}
+        />
+      </div>
+
       {/* Footer: stats + pagination */}
       <div style={{
         display: "flex",
@@ -430,6 +443,7 @@ function CommitLog({ targetId, dbName, branchName }: {
   const [expandedCommit, setExpandedCommit] = useState<string | null>(null);
   const [commitDiff, setCommitDiff] = useState<DiffSummaryEntry[]>([]);
   const [loadingDiff, setLoadingDiff] = useState(false);
+  const [showComments, setShowComments] = useState(false);
   const pageSize = 20;
 
   useEffect(() => {
@@ -441,7 +455,10 @@ function CommitLog({ targetId, dbName, branchName }: {
     if (!expanded) return;
     setLoading(true);
     setError(null);
-    const filter = branchName === "main" ? "merges_only" : "exclude_auto_merge";
+    const baseFilter = branchName === "main" ? "merges_only" : "exclude_auto_merge";
+    const filter = !showComments
+      ? (branchName === "main" ? "merges_only" : "exclude_auto_merge_and_comments")
+      : baseFilter;
     api.getHistoryCommits(targetId, dbName, branchName, page, pageSize, filter)
       .then((data) => setCommits(data || []))
       .catch((err) => {
@@ -449,7 +466,7 @@ function CommitLog({ targetId, dbName, branchName }: {
         setError(e?.error?.message || "コミット履歴の読み込みに失敗しました");
       })
       .finally(() => setLoading(false));
-  }, [targetId, dbName, branchName, page, expanded]);
+  }, [targetId, dbName, branchName, page, expanded, showComments]);
 
   // Load DiffSummary for a specific commit (compare commit vs its parent)
   const handleExpandCommit = async (hash: string) => {
@@ -475,12 +492,24 @@ function CommitLog({ targetId, dbName, branchName }: {
 
   return (
     <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: 8, marginTop: 12 }}>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        style={{ fontSize: 12, fontWeight: 600, color: "#555", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-      >
-        {expanded ? "▼" : "▶"} コミット履歴 — {branchName}
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{ fontSize: 12, fontWeight: 600, color: "#555", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+        >
+          {expanded ? "▼" : "▶"} コミット履歴 — {branchName}
+        </button>
+        {expanded && (
+          <label style={{ fontSize: 11, color: "#666", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+            <input
+              type="checkbox"
+              checked={showComments}
+              onChange={(e) => { setShowComments(e.target.checked); setPage(1); }}
+            />
+            コメントコミットを表示
+          </label>
+        )}
+      </div>
       {expanded && (
         <div style={{ marginTop: 8 }}>
           {loading && <div style={{ fontSize: 12, color: "#888" }}>読み込み中...</div>}

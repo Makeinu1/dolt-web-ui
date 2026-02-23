@@ -195,5 +195,9 @@ func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}
 	}
 
+	// Cascade-delete comments for the deleted row (ignore error if _cell_comments doesn't exist).
+	conn.ExecContext(ctx, "DELETE FROM `_cell_comments` WHERE `table_name` = ? AND `pk_value` = ?", //nolint:errcheck
+		op.Table, fmt.Sprint(pkVal))
+
 	return nil
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { DiffTableDetail } from "../common/DiffTableDetail";
+import { DiffCommentsPanel } from "../DiffCommentsPanel/DiffCommentsPanel";
 import * as api from "../../api/client";
 import type { RequestSummary, DiffSummaryEntry } from "../../types/api";
 
@@ -79,8 +80,14 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
               {expandedTable === e.table && (
                 <tr key={`${e.table}-detail`}>
                   <td colSpan={4} style={{ padding: 0, background: "#fafafa", borderBottom: "2px solid #e0e0e8" }}>
-                    <div style={{ maxHeight: 300, overflowY: "auto", padding: "4px 0" }}>
+                    <div style={{ maxHeight: 400, overflowY: "auto", padding: "4px 0" }}>
                       <DiffTableDetail
+                        table={e.table}
+                        targetId={targetId}
+                        dbName={dbName}
+                        branchName={branchName}
+                      />
+                      <DiffCommentsPanel
                         table={e.table}
                         targetId={targetId}
                         dbName={dbName}

@@ -271,6 +271,62 @@ export const rejectRequest = (body: import("../types/api").RejectRequest) =>
     body: JSON.stringify(body),
   });
 
+// Cell Comments
+export const listComments = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  table: string,
+  pk: string,
+  column: string
+) =>
+  request<import("../types/api").CellComment[]>(
+    `/comments${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pk, column })}`
+  );
+
+export const getCommentMap = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  table: string
+) =>
+  request<{ cells: string[] }>(
+    `/comments/map${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table })}`
+  );
+
+export const addComment = (body: import("../types/api").AddCommentRequest) =>
+  request<{ comment_id: string }>("/comments", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const deleteComment = (body: import("../types/api").DeleteCommentRequest) =>
+  request<{ status: string }>("/comments/delete", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const searchComments = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  keyword: string
+) =>
+  request<import("../types/api").CellComment[]>(
+    `/comments/search${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, q: keyword })}`
+  );
+
+export const listCommentsForPks = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  table: string,
+  pks: string[]
+) =>
+  request<import("../types/api").CellComment[]>(
+    `/comments/for-pks${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pks: pks.join(",") })}`
+  );
+
 // Diff ZIP export — returns a Blob (application/zip)
 export const exportDiffZip = async (
   targetId: string,

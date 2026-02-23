@@ -31,8 +31,8 @@ func (s *Service) ListTables(ctx context.Context, targetID, dbName, branchName s
 		if err := rows.Scan(&name, &tableType); err != nil {
 			return nil, fmt.Errorf("failed to scan table: %w", err)
 		}
-		// Exclude dolt_ system tables
-		if strings.HasPrefix(name, "dolt_") {
+		// Exclude dolt_ system tables and _cell_ internal tables
+		if strings.HasPrefix(name, "dolt_") || strings.HasPrefix(name, "_cell_") {
 			continue
 		}
 		tables = append(tables, model.TableResponse{Name: name})

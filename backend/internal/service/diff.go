@@ -246,6 +246,20 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 			WHERE message NOT LIKE 'Merge branch%'
 			  AND message != 'Merge main with conflict resolution'
 			ORDER BY date DESC LIMIT ? OFFSET ?`
+	case "exclude_comments":
+		// Hide [comment] commits from history view
+		query = `SELECT commit_hash, committer, message, date
+			FROM dolt_log
+			WHERE message NOT LIKE '[comment]%'
+			ORDER BY date DESC LIMIT ? OFFSET ?`
+	case "exclude_auto_merge_and_comments":
+		// Combine: exclude both auto-merge and [comment] commits
+		query = `SELECT commit_hash, committer, message, date
+			FROM dolt_log
+			WHERE message NOT LIKE 'Merge branch%'
+			  AND message != 'Merge main with conflict resolution'
+			  AND message NOT LIKE '[comment]%'
+			ORDER BY date DESC LIMIT ? OFFSET ?`
 	default:
 		query = "SELECT commit_hash, committer, message, date FROM dolt_log ORDER BY date DESC LIMIT ? OFFSET ?"
 	}

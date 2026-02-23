@@ -62,6 +62,14 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Get("/request", h.GetRequest)
 		r.Post("/request/approve", h.ApproveRequest)
 		r.Post("/request/reject", h.RejectRequest)
+
+		// Cell Comments
+		r.Get("/comments", h.ListComments)
+		r.Get("/comments/map", h.GetCommentMap)
+		r.Post("/comments", h.AddComment)
+		r.Post("/comments/delete", h.DeleteComment)
+		r.Get("/comments/search", h.SearchComments)
+		r.Get("/comments/for-pks", h.ListCommentsForPks)
 	})
 
 	// Health check

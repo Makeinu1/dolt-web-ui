@@ -316,3 +316,34 @@ type ConflictsSummaryEntry struct {
 	DataConflicts   int    `json:"data_conflicts"`
 	SchemaConflicts int    `json:"schema_conflicts"`
 }
+
+// --- Cell Comments ---
+
+// CellComment represents a single comment attached to a cell.
+type CellComment struct {
+	CommentID   string `json:"comment_id"`
+	TableName   string `json:"table_name"`
+	PkValue     string `json:"pk_value"`
+	ColumnName  string `json:"column_name"`
+	CommentText string `json:"comment_text"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// AddCommentRequest represents a request to add a comment to a cell.
+type AddCommentRequest struct {
+	TargetID    string `json:"target_id"`
+	DbName      string `json:"db_name"`
+	BranchName  string `json:"branch_name"`
+	TableName   string `json:"table_name"`
+	PkValue     string `json:"pk_value"`
+	ColumnName  string `json:"column_name"`
+	CommentText string `json:"comment_text"`
+}
+
+// DeleteCommentRequest represents a request to delete a comment.
+type DeleteCommentRequest struct {
+	TargetID   string `json:"target_id"`
+	DbName     string `json:"db_name"`
+	BranchName string `json:"branch_name"`
+	CommentID  string `json:"comment_id"`
+}
