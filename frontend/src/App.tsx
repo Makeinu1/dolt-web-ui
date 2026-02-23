@@ -373,7 +373,7 @@ function App() {
             <select
               className="header-table-select"
               value={selectedTable}
-              onChange={(e) => setSelectedTable(e.target.value)}
+              onChange={(e) => { setSelectedTable(e.target.value); setFilterByPk(null); }}
             >
               {tables.map((t) => {
                 const c = tableChanges.get(t.name);
