@@ -682,6 +682,9 @@ Get commit history for a branch. Supports filtering by commit type.
 | `page` | No | `1` | Page number (must be > 0) |
 | `page_size` | No | `20` | Commits per page (1-100) |
 | `filter` | No | `all` | See filter values below |
+| `keyword` | No | | Substring match on commit message (e.g., `TR-9999`) |
+| `from_date` | No | | Start date inclusive (`YYYY-MM-DD`) |
+| `to_date` | No | | End date inclusive (`YYYY-MM-DD`) |
 
 **Filter Values:**
 
