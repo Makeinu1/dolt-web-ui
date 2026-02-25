@@ -85,9 +85,7 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 		collisionQuery := fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE `%s` IN (%s)",
 			req.Table, pkCol, strings.Join(placeholders, ","))
 		args := make([]interface{}, len(req.NewPKs))
-		for i, pk := range req.NewPKs {
-			args[i] = pk
-		}
+		copy(args, req.NewPKs)
 		var collisions int
 		if err := conn.QueryRowContext(ctx, collisionQuery, args...).Scan(&collisions); err == nil && collisions > 0 {
 			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("%d new PKs already exist in table", collisions)}

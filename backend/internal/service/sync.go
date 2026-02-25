@@ -15,15 +15,20 @@ import (
 //  2. Merge (AUTOCOMMIT=1)
 //  3. If merge fails (conflicts>0), re-run preview to distinguish conflict types
 func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncResponse, error) {
-	if validation.IsMainBranch(req.BranchName) {
-		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "sync on main branch is forbidden"}
+	if validation.IsProtectedBranch(req.BranchName) {
+		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "sync on protected branch is forbidden"}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
+
+	// Step -1: Branch lock check
+	if apiErr := checkBranchLocked(ctx, conn, req.BranchName); apiErr != nil {
+		return nil, apiErr
+	}
 
 	// Step 0: expected_head check
 	var currentHead string

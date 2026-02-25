@@ -70,12 +70,16 @@ func (h *Handler) GetTableRows(w http.ResponseWriter, r *http.Request) {
 	filter := r.URL.Query().Get("filter")
 	sort := r.URL.Query().Get("sort")
 
-	result, err := h.svc.GetTableRows(r.Context(), targetID, dbName, branchName, table, page, pageSize, filter, sort)
-	if err != nil {
+	w.Header().Set("Content-Type", "application/json")
+	if err := h.svc.GetTableRows(r.Context(), targetID, dbName, branchName, table, page, pageSize, filter, sort, w); err != nil {
+		// Note: if the response has already started being written (streaming), it's too late to
+		// write a clean error JSON response. We distinguish two cases:
+		// 1. Pre-stream errors (e.g., validation, schema lookup): handleServiceError still works.
+		// 2. Mid-stream errors: we log them but can't rewrite the response header.
+		// The service layer currently does all validation before writing the first byte,
+		// so handleServiceError should succeed for all practical cases.
 		handleServiceError(w, err)
-		return
 	}
-	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) GetTableRow(w http.ResponseWriter, r *http.Request) {

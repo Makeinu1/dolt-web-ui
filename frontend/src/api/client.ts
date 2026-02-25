@@ -1,4 +1,5 @@
 const API_BASE = "/api/v1";
+import { ApiError } from "./errors";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -7,11 +8,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({
+    const body = await res.json().catch(() => ({
       code: "INTERNAL",
       message: res.statusText,
     }));
-    throw error;
+    throw new ApiError(res.status, body);
   }
 
   return res.json();
@@ -129,6 +130,12 @@ export const commit = (body: import("../types/api").CommitRequest) =>
 
 export const sync = (body: import("../types/api").SyncRequest) =>
   request<import("../types/api").SyncResponse>("/sync", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const revert = (body: import("../types/api").RevertRequest) =>
+  request<import("../types/api").RevertResponse>("/revert", {
     method: "POST",
     body: JSON.stringify(body),
   });

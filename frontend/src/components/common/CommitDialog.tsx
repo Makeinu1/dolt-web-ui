@@ -29,7 +29,15 @@ export function CommitDialog({
 
   const handleCommit = async () => {
     if (ops.length === 0) return;
-    const commitMsg = message.trim() || `auto commit (${ops.length} ops)`;
+
+    // Generate smart auto-commit message
+    let commitMsg = message.trim();
+    if (!commitMsg) {
+      const tables = Array.from(new Set(ops.map(op => op.table)));
+      const tableText = tables.length === 1 ? `${tables[0]}テーブル` : `${tables.length}つのテーブル`;
+      commitMsg = `[自動保存] ${tableText}の変更 (${ops.length}件)`;
+    }
+
     setSubmitting(true);
     setBaseState("Committing");
 

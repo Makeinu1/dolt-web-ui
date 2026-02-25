@@ -31,10 +31,11 @@ func New(cfg *config.Config) (*Repository, error) {
 			return nil, fmt.Errorf("failed to connect to target %q: %w", target.ID, err)
 		}
 		db.SetMaxOpenConns(20)
-		// MaxIdleConns=0: Dolt branch contexts persist on pooled connections.
-		// A connection last used for a deleted branch will fail USE on reuse.
-		// Setting MaxIdleConns=0 closes connections on release, avoiding stale contexts.
-		db.SetMaxIdleConns(0)
+		// Re-enable connection pooling to fix performance bottleneck
+		// Previously MaxIdleConns=0 was used to avoid Stale Context,
+		// but we now use stateless revision specifiers (`db/branch`).
+		db.SetMaxIdleConns(10)
+		db.SetConnMaxLifetime(0) // Connections can be reused indefinitely
 		r.pools[target.ID] = db
 	}
 
@@ -42,8 +43,8 @@ func New(cfg *config.Config) (*Repository, error) {
 }
 
 // Conn acquires a connection for a specific target, database, and branch.
-// Uses USE + DOLT_CHECKOUT to handle branch names containing slashes (e.g. wi/work/01).
-// 1 request = 1 connection = 1 branch session.
+// We use Dolt's revision specifier in the USE statement: USE `db/branch`
+// This makes the connection stateless and safe for pooling.
 func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
@@ -57,9 +58,36 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 
-	// USE `db` to select the database, then DOLT_CHECKOUT to switch branch.
-	// Backtick-quoting the full "db/branch" path breaks when branch names
-	// contain slashes (e.g. wi/work/01), so we split into two steps.
+	// USE `dbName/branchName` is the standard Dolt way to specify a revision database.
+	// This avoids stateful CALL DOLT_CHECKOUT(?) which pollutes the connection pool.
+	revisionDb := fmt.Sprintf("%s/%s", dbName, branchName)
+	useStmt := fmt.Sprintf("USE `%s`", revisionDb)
+
+	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to set db context %s: %w", revisionDb, err)
+	}
+
+	return conn, nil
+}
+
+// ConnWrite acquires a writable connection for a specific target, database, and branch.
+// Uses USE + DOLT_CHECKOUT to ensure the session is on the correct branch.
+// Required for write operations: INSERT, UPDATE, DELETE, DOLT_COMMIT, DOLT_ADD, etc.
+// Read-only queries should use Conn() which uses stateless revision specifiers.
+func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	r.mu.RLock()
+	pool, ok := r.pools[targetID]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("target %q not found", targetID)
+	}
+
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection: %w", err)
+	}
+
 	useStmt := fmt.Sprintf("USE `%s`", dbName)
 	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
 		conn.Close()
@@ -78,7 +106,7 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 // ConnDB acquires a connection for a specific target and database on main branch.
 // Used for operations that don't target a specific work branch.
 func (r *Repository) ConnDB(ctx context.Context, targetID, dbName string) (*sql.Conn, error) {
-	return r.Conn(ctx, targetID, dbName, "main")
+	return r.ConnWrite(ctx, targetID, dbName, "main")
 }
 
 func (r *Repository) Close() {

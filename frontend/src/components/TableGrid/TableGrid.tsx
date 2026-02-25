@@ -142,6 +142,10 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
 
   const isMain = branchName === "main";
   const baseState = useUIStore((s) => s.baseState);
+  const removeOp = useDraftStore((s) => s.removeOp);
+  const [undoableOpIndex, setUndoableOpIndex] = useState<number | null>(null);
+
+  const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns]);
 
   // Editing is only allowed in Idle or DraftEditing states on non-main branches
   const editingBlocked =
@@ -152,6 +156,33 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     baseState === "SchemaConflictDetected" ||
     baseState === "ConstraintViolationDetected" ||
     baseState === "StaleHeadDetected";
+
+  // Draft operations lookup for Undo functionality
+  useEffect(() => {
+    if (!pkCol || !selectedRow) {
+      setUndoableOpIndex(null);
+      return;
+    }
+    const pkValue = selectedRow[pkCol.name];
+
+    // Find latest operation on this row
+    let foundIdx: number | null = null;
+    for (let i = draftOps.length - 1; i >= 0; i--) {
+      const op = draftOps[i];
+      if (op.table === tableName && op.pk && String(op.pk[pkCol.name]) === String(pkValue)) {
+        foundIdx = i;
+        break;
+      }
+    }
+    setUndoableOpIndex(foundIdx);
+  }, [draftOps, selectedRow, pkCol, tableName]);
+
+  // Handle Undo (remove the latest draft op for this row)
+  const handleUndoRow = useCallback(() => {
+    if (undoableOpIndex !== null) {
+      removeOp(undoableOpIndex);
+    }
+  }, [undoableOpIndex, removeOp]);
 
   // Build draft index for visualization:
   // Map of pkValue -> { type, changedCols }
@@ -239,7 +270,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   }, []);
 
   // --- Shared action functions (used by both right-click menu and toolbar buttons) ---
-  const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns]);
 
   // Cell click handler — notifies parent of selected cell for comment panel
   const onCellClicked = useCallback((event: CellClickedEvent) => {
@@ -428,7 +458,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
 
   // Column definitions for AG Grid with draft visualization
   const colDefs: ColDef[] = useMemo(() => {
-    const pkCol = columns.find((c) => c.primary_key);
     const visibleCols = columns.filter((col) => !hiddenColumns.has(col.name));
 
     return visibleCols.map((col) => ({
@@ -500,6 +529,13 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
       const changedCol = event.colDef.field;
       if (!changedCol) return;
 
+      // Auto-cancel logic from TableGrid side:
+      // If the new value exactly matches the original value from the grid's initial load,
+      // we can explicitly remove the specific column update from the draft store, or prevent adding it.
+      // This is more robust than just merging in draft.ts.
+      // event.oldValue is just the previous *edited* value, so we'd need to compare against the *original* server response
+      // For now, we rely on the draft store's merge logic, but we can pass `event.oldValue` in the future if we track pristine data.
+
       addOp({
         type: "update",
         table: tableName,
@@ -557,6 +593,15 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
                 >
                   削除
                 </button>
+                {undoableOpIndex !== null && (
+                  <button
+                    onClick={handleUndoRow}
+                    style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#4b5563", border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
+                    title="この行の最新の編集を取り消す"
+                  >
+                    ⟲ 元に戻す
+                  </button>
+                )}
               </>
             )}
           </div>

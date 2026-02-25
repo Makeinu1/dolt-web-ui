@@ -124,9 +124,10 @@ curl http://localhost:8080/health  # 起動確認
 - Router: `github.com/go-chi/chi/v5`
 - Config: YAML via `gopkg.in/yaml.v3`
 - DB driver: `github.com/go-sql-driver/mysql` (Dolt uses MySQL protocol)
-- 1 request = 1 connection = 1 branch session
+- 接続プール: `Conn()`（リード、ステートレス revision specifier `USE \`db/branch\``）/ `ConnWrite()`（ライト、`USE db` + `DOLT_CHECKOUT`）。`MaxIdleConns=10`
 - All write endpoints validate `expected_head` (optimistic locking)
-- Main branch is read-only (MainGuard middleware)
+- Protected branches: `main` + `audit` は読み取り専用（`IsProtectedBranch()` + ProtectedBranchGuard middleware）
+- Branch lock: Submit中（`req/*` タグ存在時）は Commit/Sync/Revert をブロック（HTTP 423 `BRANCH_LOCKED`）
 
 ### Dolt/SQL 注意事項
 
@@ -150,9 +151,12 @@ curl http://localhost:8080/health  # 起動確認
 
 - Package manager: npm
 - State management: Zustand (3 stores: context / draft / ui)
+  - **ストア分離原則**: `context.ts` は他ストア（draft/ui）を直接呼ばない。副作用（ドラフトクリア等）は App.tsx の `useEffect` で処理（C-3パターン）
 - Data grid: AG Grid Community 35
 - Draft data stored in sessionStorage only (volatile)
 - TemplatePanel / template store は廃止済み（右クリック直接操作に移行）
+- エラー処理: `ApiError` クラス（`api/errors.ts`）で status/code/details を型安全に伝搬
+- App.tsx リファクタ: HEAD管理は `useHeadSync` フック、モーダル群は `ModalManager` コンポーネントに分離
 
 ### CSS 詳細度の落とし穴
 
@@ -328,13 +332,22 @@ Database: Test
   - サーバーサイドページネーション（50件/ページ）
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - コミット履歴フィルタリング（main: マージのみ / 作業ブランチ: 自動マージ除外）
+- コミット復元（Revert）— HistoryTab から任意コミットを `DOLT_REVERT` で打ち消し
 - セル単位の変更履歴（RecordHistoryPopup、直近20件）
 - 行クローン（自動PK採番）、一括クローン（BatchGenerateModal）
+
+### 編集補助
+- 行 Undo（「⟲ 元に戻す」ボタン、直近の操作を取り消し）
+- 変更をクリア（ドラフト全消去ボタン）
+- ドラフト更新マージ（同一行の連続 update を自動統合）
+- ドラフト SQL エクスポート（StaleHead 時に `📥 ドラフトをSQLで退避` でファイルダウンロード）
+- スマート自動コミットメッセージ（空欄時: `[自動保存] {table}テーブルの変更 ({N}件)`）
 
 ### 運用
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
+- Playwright ブラウザテスト（19テスト、APIモックベース、`frontend/tests/e2e/`）
 
 ---
 

@@ -10,22 +10,50 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
+// checkBranchLocked returns a BRANCH_LOCKED APIError if the branch has a pending
+// approval request (req/ tag). Called before commit/revert/sync on work branches.
+func checkBranchLocked(ctx context.Context, conn *sql.Conn, branchName string) *model.APIError {
+	// Only work branches follow the wi/...  naming; others are skipped.
+	if !strings.HasPrefix(branchName, "wi/") {
+		return nil
+	}
+	reqTag := "req/" + strings.TrimPrefix(branchName, "wi/")
+	var count int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_tags WHERE tag_name = ?", reqTag).Scan(&count); err != nil {
+		return nil // DB error: fail open (don't block on lock check failure)
+	}
+	if count > 0 {
+		return &model.APIError{
+			Status:  423,
+			Code:    model.CodeBranchLocked,
+			Msg:     "承認申請中のブランチは編集できません。却下されるとロックが解除されます。",
+			Details: map[string]string{"request_tag": reqTag},
+		}
+	}
+	return nil
+}
+
 // Commit applies draft operations to the work branch.
 // Per v6f spec section 4.1: expected_head check, START TRANSACTION, apply ops,
 // DOLT_VERIFY_CONSTRAINTS, DOLT_ADD, DOLT_COMMIT.
 func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.CommitResponse, error) {
-	if validation.IsMainBranch(req.BranchName) {
+	if validation.IsProtectedBranch(req.BranchName) {
 		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
 	if len(req.Ops) == 0 {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "ops must not be empty"}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
+
+	// Step -1: Branch lock check (Submit後はロック)
+	if apiErr := checkBranchLocked(ctx, conn, req.BranchName); apiErr != nil {
+		return nil, apiErr
+	}
 
 	// Step 0: expected_head check
 	var currentHead string
@@ -153,7 +181,10 @@ func applyUpdate(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 
 	query := fmt.Sprintf("UPDATE `%s` SET %s WHERE `%s` = ?",
 		op.Table, strings.Join(setParts, ", "), pkCol)
-	args := append(setArgs, pkVal)
+	// A-2: safe copy to avoid append() mutating setArgs backing array
+	args := make([]interface{}, 0, len(setArgs)+1)
+	args = append(args, setArgs...)
+	args = append(args, pkVal)
 
 	result, err := conn.ExecContext(ctx, query, args...)
 	if err != nil {

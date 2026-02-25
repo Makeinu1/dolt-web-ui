@@ -29,12 +29,13 @@ All errors use the envelope format:
 | `MERGE_CONFLICTS_PRESENT` | 409 | Merge produced data conflicts |
 | `SCHEMA_CONFLICTS_PRESENT` | 409 | Merge produced schema conflicts |
 | `CONSTRAINT_VIOLATIONS_PRESENT` | 409 | Merge produced constraint violations |
+| `BRANCH_LOCKED` | 423 | Branch is locked (pending approval request exists) |
 | `PRECONDITION_FAILED` | 412 | Precondition check failed |
 | `INTERNAL` | 500 | Internal server error |
 
-### MainGuard
+### ProtectedBranchGuard
 
-Write operations on the `main` branch are forbidden. Affected endpoints return:
+Write operations on protected branches (`main` and `audit`) are forbidden. Affected endpoints return:
 
 ```json
 {
@@ -42,6 +43,20 @@ Write operations on the `main` branch are forbidden. Affected endpoints return:
     "code": "FORBIDDEN",
     "message": "write operations on main branch are forbidden",
     "details": { "reason": "main_guard", "branch": "main" }
+  }
+}
+```
+
+### BranchLock
+
+Work branches with a pending approval request (`req/*` tag) are locked. Commit, Sync, and Revert operations are blocked until the request is approved or rejected.
+
+```json
+{
+  "error": {
+    "code": "BRANCH_LOCKED",
+    "message": "承認申請中のブランチは編集できません。却下されるとロックが解除されます。",
+    "details": { "request_tag": "req/work-1/1707744000" }
   }
 }
 ```
@@ -108,7 +123,7 @@ List branches for a database.
 
 ### POST /branches/create
 
-Create a new work branch from main. **MainGuard applies.**
+Create a new work branch from main. **ProtectedBranchGuard applies.**
 
 **Request Body:**
 
@@ -202,7 +217,7 @@ Get column definitions for a table.
 
 ### GET /table/rows
 
-Get paginated rows with optional filtering and sorting.
+Get paginated rows with optional filtering and sorting. Response is streamed row-by-row to prevent OOM on large tables.
 
 **Query Parameters:**
 
@@ -267,7 +282,7 @@ Get a single row by primary key.
 
 ## Preview Operations
 
-All preview endpoints generate `CommitOp` arrays that can be applied to a draft without writing to the database. **MainGuard does not apply** (preview is read-only).
+All preview endpoints generate `CommitOp` arrays that can be applied to a draft without writing to the database. **ProtectedBranchGuard does not apply** (preview is read-only).
 
 ### POST /preview/clone
 
@@ -440,7 +455,7 @@ When the `errors` array is non-empty, individual row errors are returned:
 
 ### POST /commit
 
-Apply draft operations to a branch. **MainGuard applies.**
+Apply draft operations to a branch. **ProtectedBranchGuard applies.** **BranchLock applies.**
 
 Uses optimistic locking: `expected_head` must match the branch's current HEAD hash, otherwise `STALE_HEAD` is returned.
 
@@ -490,15 +505,16 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
 
 **Errors:**
 - `400 INVALID_ARGUMENT` - Empty ops array, invalid table/column name, or empty pk
-- `403 FORBIDDEN` - MainGuard (write to main)
+- `403 FORBIDDEN` - ProtectedBranchGuard (write to main/audit)
 - `404 NOT_FOUND` - Row not found (update/delete with non-existent pk)
 - `409 STALE_HEAD` - expected_head mismatch
+- `423 BRANCH_LOCKED` - Branch has pending approval request
 
 ---
 
 ### POST /sync
 
-Merge main branch into work branch (two-stage merge). **MainGuard applies.**
+Merge main branch into work branch (two-stage merge). **ProtectedBranchGuard applies.** **BranchLock applies.**
 
 **Request Body:**
 
@@ -518,11 +534,52 @@ Merge main branch into work branch (two-stage merge). **MainGuard applies.**
 ```
 
 **Errors:**
-- `403 FORBIDDEN` - MainGuard
+- `403 FORBIDDEN` - ProtectedBranchGuard
 - `409 STALE_HEAD` - expected_head mismatch
 - `409 MERGE_CONFLICTS_PRESENT` - Data conflicts detected
+- `423 BRANCH_LOCKED` - Branch has pending approval request
 - `409 SCHEMA_CONFLICTS_PRESENT` - Schema conflicts detected (requires CLI intervention)
 - `409 CONSTRAINT_VIOLATIONS_PRESENT` - Constraint violations detected (requires CLI intervention)
+
+---
+
+### POST /revert
+
+Revert a specific commit on a work branch. Creates a new revert commit. **ProtectedBranchGuard applies.** **BranchLock applies.**
+
+Uses optimistic locking: `expected_head` must match the branch's current HEAD hash.
+
+**Request Body:**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/work-1",
+  "expected_head": "abc123...",
+  "revert_hash": "def456..."
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+| `expected_head` | Yes | Expected HEAD hash for optimistic locking |
+| `revert_hash` | Yes | Hash of the commit to revert |
+
+**Response:**
+
+```json
+{ "hash": "newheadhash123..." }
+```
+
+**Errors:**
+- `400 INVALID_ARGUMENT` - Empty `revert_hash`
+- `403 FORBIDDEN` - ProtectedBranchGuard (write to main/audit)
+- `409 STALE_HEAD` - expected_head mismatch
+- `423 BRANCH_LOCKED` - Branch has pending approval request
 
 ---
 
@@ -731,7 +788,7 @@ Get detailed conflicts for a specific table.
 
 ### POST /conflicts/resolve
 
-Resolve all conflicts in a table using a strategy. **MainGuard applies.**
+Resolve all conflicts in a table using a strategy. **ProtectedBranchGuard applies.**
 
 **Request Body:**
 
@@ -762,7 +819,7 @@ Resolve all conflicts in a table using a strategy. **MainGuard applies.**
 
 ### POST /request/submit
 
-Submit a work branch for review. **MainGuard applies.**
+Submit a work branch for review. **ProtectedBranchGuard applies.**
 
 **Auto-sync behavior**: Before creating the `req/` tag, this endpoint automatically merges `main` into the work branch (`DOLT_MERGE('main')`). If the merge produces conflicts, `409 MERGE_CONFLICTS_PRESENT` is returned and no tag is created. The caller must resolve conflicts and retry.
 
@@ -1072,7 +1129,7 @@ Each entry is formatted as `"{pk_value}:{column_name}"`. Returns `{"cells": []}`
 
 ### POST /comments
 
-Add a new comment to a cell. **MainGuard applies.**
+Add a new comment to a cell. **ProtectedBranchGuard applies.**
 
 Creates an immediate Dolt commit with the message `[comment] {table}/{pk}/{column}`.
 
@@ -1108,7 +1165,7 @@ Creates an immediate Dolt commit with the message `[comment] {table}/{pk}/{colum
 
 **Errors:**
 - `400 INVALID_ARGUMENT` - Empty or oversized `comment_text`, invalid table/column name
-- `403 FORBIDDEN` - MainGuard (write to main)
+- `403 FORBIDDEN` - ProtectedBranchGuard (write to main)
 
 **Note:** Row existence is not validated. Comments can be written to any table/PK/column combination. If the referenced row is later deleted, the comment is automatically cascade-deleted.
 
@@ -1116,7 +1173,7 @@ Creates an immediate Dolt commit with the message `[comment] {table}/{pk}/{colum
 
 ### POST /comments/delete
 
-Delete a comment by ID. **MainGuard applies.**
+Delete a comment by ID. **ProtectedBranchGuard applies.**
 
 Creates an immediate Dolt commit with message `[comment] deleted`. Deletion is idempotent — if the comment ID does not exist, the operation succeeds with 0 rows deleted.
 
@@ -1138,7 +1195,7 @@ Creates an immediate Dolt commit with message `[comment] deleted`. Deletion is i
 ```
 
 **Errors:**
-- `403 FORBIDDEN` - MainGuard (write to main)
+- `403 FORBIDDEN` - ProtectedBranchGuard (write to main)
 
 ---
 
@@ -1235,7 +1292,8 @@ The frontend manages a state machine with the following states:
 
 ### UI Guards
 
-- **MainGuard**: All editing, clone, bulk update, commit, sync, and submit operations are disabled on the `main` branch.
+- **ProtectedBranchGuard**: All editing, clone, bulk update, commit, sync, and submit operations are disabled on protected branches (`main` and `audit`).
+- **BranchLockGuard**: Commit, Sync, and Revert operations are blocked while a pending approval request (`req/*` tag) exists for the branch.
 - **DraftGuard**: Sync and Submit Request are disabled while draft operations exist.
 - **ConflictGuard**: All editing, clone, bulk update, commit, sync, and submit are disabled while in any conflict state (`MergeConflictsPresent`, `SchemaConflictDetected`, `ConstraintViolationDetected`).
 - **StaleHeadGuard**: Commit is disabled when HEAD is stale. User must refresh HEAD first.

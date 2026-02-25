@@ -114,7 +114,7 @@ func (s *Service) GetConflictsTable(ctx context.Context, targetID, dbName, branc
 // Per v6f spec section 8.3: expected_head check → START TRANSACTION →
 // schema pre-check → DOLT_MERGE → DOLT_CONFLICTS_RESOLVE → verify → DOLT_COMMIT.
 func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflictsRequest) (*model.CommitResponse, error) {
-	if validation.IsMainBranch(req.BranchName) {
+	if validation.IsProtectedBranch(req.BranchName) {
 		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
 	if err := validation.ValidateIdentifier("table", req.Table); err != nil {
@@ -124,7 +124,7 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "strategy must be 'ours' or 'theirs'"}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}

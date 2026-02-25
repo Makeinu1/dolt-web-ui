@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -80,17 +81,17 @@ func (s *Service) GetTableSchema(ctx context.Context, targetID, dbName, branchNa
 	return &model.SchemaResponse{Table: table, Columns: columns}, rows.Err()
 }
 
-// GetTableRows returns paginated rows with optional filter and sort.
+// GetTableRows streams paginated rows directly to the writer as JSON to avoid OOM.
 // Per v6f spec section 9: column names are validated against schema allowlist.
-func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName, table string, page, pageSize int, filterJSON, sortStr string) (*model.RowsResponse, error) {
+func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName, table string, page, pageSize int, filterJSON, sortStr string, w io.Writer) error {
 	if err := validation.ValidateIdentifier("table", table); err != nil {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
 	}
 
 	// Get schema for column allowlist
 	schema, err := s.GetTableSchema(ctx, targetID, dbName, branchName, table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema: %w", err)
+		return fmt.Errorf("failed to get schema: %w", err)
 	}
 
 	allowedCols := make(map[string]bool)
@@ -103,12 +104,12 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 	}
 
 	if pkCol == "" {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key (not supported)"}
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key (not supported)"}
 	}
 
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
@@ -118,11 +119,11 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 	if filterJSON != "" {
 		var filters []model.FilterCondition
 		if err := json.Unmarshal([]byte(filterJSON), &filters); err != nil {
-			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid filter JSON"}
+			return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid filter JSON"}
 		}
 		for _, f := range filters {
 			if !allowedCols[f.Column] {
-				return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in filter: %s", f.Column)}
+				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in filter: %s", f.Column)}
 			}
 			switch f.Op {
 			case "eq":
@@ -147,7 +148,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 			case "in":
 				vals, ok := f.Value.([]interface{})
 				if !ok {
-					return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "in filter value must be an array"}
+					return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "in filter value must be an array"}
 				}
 				placeholders := make([]string, len(vals))
 				for i, v := range vals {
@@ -156,7 +157,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 				}
 				whereParts = append(whereParts, fmt.Sprintf("`%s` IN (%s)", f.Column, strings.Join(placeholders, ",")))
 			default:
-				return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown filter operator: %s", f.Op)}
+				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown filter operator: %s", f.Op)}
 			}
 		}
 	}
@@ -184,7 +185,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 				col = token[1:]
 			}
 			if !allowedCols[col] {
-				return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in sort: %s", col)}
+				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in sort: %s", col)}
 			}
 			orderParts = append(orderParts, fmt.Sprintf("`%s` %s", col, dir))
 			if col == pkCol {
@@ -204,26 +205,38 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM `%s` %s", table, whereClause)
 	var totalCount int
 	if err := conn.QueryRowContext(ctx, countQuery, whereArgs...).Scan(&totalCount); err != nil {
-		return nil, fmt.Errorf("failed to count rows: %w", err)
+		return fmt.Errorf("failed to count rows: %w", err)
 	}
 
 	// Fetch rows
 	offset := (page - 1) * pageSize
 	dataQuery := fmt.Sprintf("SELECT * FROM `%s` %s %s LIMIT ? OFFSET ?", table, whereClause, orderByClause)
-	dataArgs := append(whereArgs, pageSize, offset)
+	// A-2: safe copy to avoid append() mutating the whereArgs backing array
+	dataArgs := make([]interface{}, 0, len(whereArgs)+2)
+	dataArgs = append(dataArgs, whereArgs...)
+	dataArgs = append(dataArgs, pageSize, offset)
 
 	rows, err := conn.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query rows: %w", err)
+		return fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer rows.Close()
 
 	colNames, err := rows.Columns()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
+		return fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	result := make([]map[string]interface{}, 0)
+	// A-1: Write the JSON response header fields manually.
+	// We use json.Marshal (not json.Encoder.Encode) because Encoder.Encode appends '\n'
+	// after each object, producing invalid JSON when embedded inside the outer object.
+	w.Write([]byte(`{`))
+	w.Write([]byte(fmt.Sprintf(`"page":%d,`, page)))
+	w.Write([]byte(fmt.Sprintf(`"page_size":%d,`, pageSize)))
+	w.Write([]byte(fmt.Sprintf(`"total_count":%d,`, totalCount)))
+	w.Write([]byte(`"rows":[`))
+
+	first := true
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
 		valuePtrs := make([]interface{}, len(colNames))
@@ -231,7 +244,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 			valuePtrs[i] = &values[i]
 		}
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+			return fmt.Errorf("failed to scan row: %w", err)
 		}
 		row := make(map[string]interface{})
 		for i, col := range colNames {
@@ -242,15 +255,22 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 				row[col] = val
 			}
 		}
-		result = append(result, row)
+
+		rowBytes, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("failed to marshal row: %w", err)
+		}
+		if !first {
+			w.Write([]byte(`,`))
+		}
+		first = false
+		w.Write(rowBytes)
 	}
 
-	return &model.RowsResponse{
-		Rows:       result,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalCount: totalCount,
-	}, rows.Err()
+	// End JSON array and object
+	w.Write([]byte(`]}`))
+
+	return rows.Err()
 }
 
 // GetTableRow returns a single row by PK.

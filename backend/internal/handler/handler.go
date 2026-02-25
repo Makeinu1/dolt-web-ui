@@ -43,6 +43,7 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		// Write operations
 		r.Post("/commit", h.Commit)
 		r.Post("/sync", h.Sync)
+		r.Post("/revert", h.Revert)
 
 		// Diff & History
 		r.Get("/diff/table", h.DiffTable)

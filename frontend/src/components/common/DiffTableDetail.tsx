@@ -118,9 +118,12 @@ export function DiffTableDetail({
                                     // Modified
                                     if (changed) {
                                         return (
-                                            <td key={col} style={{ padding: "3px 6px", fontFamily: "monospace" }}>
-                                                <span style={{ color: "#991b1b", textDecoration: "line-through", fontSize: 10 }}>{String(fromVal ?? "")}</span>
-                                                <span style={{ color: "#065f46", fontWeight: 600, marginLeft: 4 }}>→ {String(toVal ?? "")}</span>
+                                            <td
+                                                key={col}
+                                                style={{ padding: "3px 6px", fontFamily: "monospace", backgroundColor: "#fde68a", fontWeight: 600, color: "#065f46" }}
+                                                title={`旧: ${String(fromVal ?? "")}`}
+                                            >
+                                                {String(toVal ?? "")}
                                             </td>
                                         );
                                     }

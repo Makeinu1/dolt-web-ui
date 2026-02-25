@@ -20,7 +20,8 @@ func ValidateIdentifier(name, value string) error {
 	return nil
 }
 
-// IsMainBranch returns true if the branch name is "main".
-func IsMainBranch(branchName string) bool {
-	return branchName == "main"
+// IsProtectedBranch returns true if the branch is protected from direct writes.
+// Protected branches: "main" (source of truth) and "audit" (PSX import snapshot).
+func IsProtectedBranch(branchName string) bool {
+	return branchName == "main" || branchName == "audit"
 }

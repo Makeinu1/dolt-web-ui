@@ -29,6 +29,7 @@ const (
 	CodeSchemaConflictsPresent      = "SCHEMA_CONFLICTS_PRESENT"
 	CodeConstraintViolationsPresent = "CONSTRAINT_VIOLATIONS_PRESENT"
 	CodePreconditionFailed          = "PRECONDITION_FAILED"
+	CodeBranchLocked                = "BRANCH_LOCKED"
 	CodeInternal                    = "INTERNAL"
 )
 
@@ -114,6 +115,20 @@ type CommitOp struct {
 
 // CommitResponse represents the result of a commit.
 type CommitResponse struct {
+	Hash string `json:"hash"`
+}
+
+// RevertRequest represents a request to revert a commit.
+type RevertRequest struct {
+	TargetID     string `json:"target_id"`
+	DBName       string `json:"db_name"`
+	BranchName   string `json:"branch_name"`
+	ExpectedHead string `json:"expected_head"`
+	RevertHash   string `json:"revert_hash"`
+}
+
+// RevertResponse represents the result of a revert.
+type RevertResponse struct {
 	Hash string `json:"hash"`
 }
 

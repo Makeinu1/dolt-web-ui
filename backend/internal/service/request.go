@@ -27,8 +27,8 @@ var nextRoundRe = regexp.MustCompile(`^wi/(.+)/(\d{2})$`)
 // Per v6f spec section 9.1: derives request_id from work branch name,
 // captures hashes, and creates/upserts a dolt_tag.
 func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequest) (*model.SubmitRequestResponse, error) {
-	if validation.IsMainBranch(req.BranchName) {
-		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "cannot submit request from main branch"}
+	if validation.IsProtectedBranch(req.BranchName) {
+		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "cannot submit request from protected branch"}
 	}
 
 	// Validate branch name pattern: wi/<WorkItem>/<Round>

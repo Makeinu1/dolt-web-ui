@@ -41,7 +41,7 @@ func generateUUID() (string, error) {
 
 // AddComment inserts a comment for a cell and immediately commits with a [comment] prefix.
 func (s *Service) AddComment(ctx context.Context, req model.AddCommentRequest) (string, error) {
-	if validation.IsMainBranch(req.BranchName) {
+	if validation.IsProtectedBranch(req.BranchName) {
 		return "", &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
 	if req.CommentText == "" {
@@ -92,7 +92,7 @@ func (s *Service) AddComment(ctx context.Context, req model.AddCommentRequest) (
 // DeleteComment deletes a comment by ID and immediately commits.
 // Idempotent: if the comment does not exist, it succeeds silently.
 func (s *Service) DeleteComment(ctx context.Context, req model.DeleteCommentRequest) error {
-	if validation.IsMainBranch(req.BranchName) {
+	if validation.IsProtectedBranch(req.BranchName) {
 		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
 

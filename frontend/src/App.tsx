@@ -4,14 +4,13 @@ import { useDraftStore } from "./store/draft";
 import { useUIStore, type BaseState } from "./store/ui";
 import { ContextSelector } from "./components/ContextSelector/ContextSelector";
 import { TableGrid } from "./components/TableGrid/TableGrid";
-import { CommitDialog } from "./components/common/CommitDialog";
 import { ConflictView } from "./components/ConflictView/ConflictView";
-import { SubmitDialog, ApproverInbox } from "./components/RequestDialog/RequestDialog";
-import { HistoryTab } from "./components/HistoryTab/HistoryTab";
 import { CLIRunbook } from "./components/CLIRunbook/CLIRunbook";
-import { CellCommentPanel } from "./components/CellCommentPanel/CellCommentPanel";
-import { CommentSearchModal } from "./components/CommentSearchModal/CommentSearchModal";
+import { ModalManager } from "./components/ModalManager/ModalManager";
+import { useHeadSync } from "./hooks/useHeadSync";
 import * as api from "./api/client";
+import { ApiError } from "./api/errors";
+import { downloadDraftSQL } from "./utils/exportDraft";
 import type { Table } from "./types/api";
 import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import "./App.css";
@@ -41,12 +40,10 @@ function stateLabel(state: BaseState): { text: string; className: string } {
 
 function App() {
   const { targetId, dbName, branchName, branchRefreshKey, setBranch, triggerBranchRefresh } = useContextStore();
-  const { ops, loadDraft, hasDraft } = useDraftStore();
   const { baseState, requestCount, error, setBaseState, setRequestCount, setError } = useUIStore();
 
   const [tables, setTables] = useState<Table[]>([]);
   const [selectedTable, setSelectedTable] = useState("");
-  const [expectedHead, setExpectedHead] = useState("");
   const [showCommit, setShowCommit] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
   const [showApprover, setShowApprover] = useState(false);
@@ -76,6 +73,11 @@ function App() {
   }, [anyModalOpen]);
 
   // Load draft from sessionStorage
+  const hasDraft = useDraftStore((s) => s.hasDraft);
+  const loadDraft = useDraftStore((s) => s.loadDraft);
+  const clearDraft = useDraftStore((s) => s.clearDraft);
+  const ops = useDraftStore((s) => s.ops);
+
   useEffect(() => {
     loadDraft();
   }, [loadDraft]);
@@ -96,44 +98,41 @@ function App() {
         }
       })
       .catch((err) => {
-        const e = err as { error?: { message?: string } };
-        setError(e?.error?.message || "テーブルの読み込みに失敗しました");
+        const msg = err instanceof ApiError ? err.message : "テーブルの読み込みに失敗しました";
+        setError(msg);
       });
   }, [targetId, dbName, branchName, isContextReady]);
 
-  // Track current branchName to guard against stale async responses
-  const branchRef = useRef(branchName);
+  // C-3: React to context changes to clear draft and reset UI state.
+  // Previously this was done inside context.ts by calling other stores directly
+  // (tight coupling). Now each store is independent; we handle side-effects here.
+  const prevContextRef = useRef({ targetId, dbName, branchName });
   useEffect(() => {
-    branchRef.current = branchName;
-  }, [branchName]);
+    const prev = prevContextRef.current;
+    const targetChanged = prev.targetId !== targetId;
+    const dbChanged = prev.dbName !== dbName;
+    const branchChanged = prev.branchName !== branchName && prev.branchName !== "";
+    if (targetChanged || dbChanged || branchChanged) {
+      clearDraft();
+      setBaseState("Idle");
+      setError(null);
+    }
+    prevContextRef.current = { targetId, dbName, branchName };
+  }, [targetId, dbName, branchName, clearDraft, setBaseState, setError]);
 
-  // Load HEAD hash (with race condition guard)
-  const refreshHead = useCallback(() => {
-    if (!isContextReady) return;
-    const requestBranch = branchName;
-    api
-      .getHead(targetId, dbName, branchName)
-      .then((h) => {
-        if (branchRef.current === requestBranch) {
-          setExpectedHead(h.hash);
-        }
-      })
-      .catch((err) => {
-        const e = err as { error?: { message?: string } };
-        if (branchRef.current === requestBranch) {
-          setError(e?.error?.message || "HEADの取得に失敗しました");
-        }
-      });
-  }, [targetId, dbName, branchName, isContextReady]);
-
-  useEffect(() => {
-    refreshHead();
-  }, [refreshHead]);
+  // C-1: Delegate HEAD management to the useHeadSync hook
+  const { expectedHead, setExpectedHead, refreshHead } = useHeadSync({
+    targetId,
+    dbName,
+    branchName,
+    branchRefreshKey,
+    isContextReady,
+    onError: (msg) => setError(msg),
+  });
 
   // Refresh data when branchRefreshKey changes (e.g. after approve/reject)
   useEffect(() => {
     if (branchRefreshKey > 0) {
-      refreshHead();
       setRefreshKey((k) => k + 1);
     }
   }, [branchRefreshKey]);
@@ -148,7 +147,7 @@ function App() {
       .catch(() => {
         // silently ignore — non-critical
       });
-  }, [targetId, dbName, branchRefreshKey]);
+  }, [targetId, dbName, branchRefreshKey, isContextReady]);
 
   // Update base state based on draft
   useEffect(() => {
@@ -173,8 +172,9 @@ function App() {
       setExpectedHead(result.hash);
       setBaseState("Idle");
     } catch (err: unknown) {
-      const e = err as { error?: { code?: string; message?: string } };
-      const code = e?.error?.code;
+      // ApiError carries flat .code and .message fields
+      const code = err instanceof ApiError ? err.code : (err as { code?: string })?.code;
+      const message = err instanceof ApiError ? err.message : (err as { message?: string })?.message;
       if (code === "MERGE_CONFLICTS_PRESENT") {
         setBaseState("MergeConflictsPresent");
       } else if (code === "SCHEMA_CONFLICTS_PRESENT") {
@@ -186,7 +186,7 @@ function App() {
       } else {
         setBaseState("Idle");
       }
-      setError(e?.error?.message || "同期に失敗しました");
+      setError(message || "同期に失敗しました");
     }
   };
 
@@ -197,6 +197,14 @@ function App() {
       setBaseState(hasDraft() ? "DraftEditing" : "Idle");
       setError(null);
     }
+  };
+
+  const exportDraftAsSQL = () => {
+    if (ops.length === 0) {
+      alert("エクスポートするドラフトがありません");
+      return;
+    }
+    downloadDraftSQL(ops, { targetId, dbName, branchName });
   };
 
   const handleDeleteBranch = async () => {
@@ -276,9 +284,21 @@ function App() {
     if (isMain) return null;
     if (baseState === "StaleHeadDetected") {
       return (
-        <button className="action-btn action-refresh" onClick={handleRefresh}>
-          ↻ Refresh
-        </button>
+        <div style={{ display: "flex", gap: 8, marginRight: 8 }}>
+          {hasDraft() && (
+            <button
+              className="toolbar-btn"
+              style={{ fontSize: 13, color: '#0369a1', background: '#e0f2fe', border: '1px solid #bae6fd', padding: '4px 12px', borderRadius: 4 }}
+              onClick={exportDraftAsSQL}
+              title="競合が発生したためドラフトをSQLとしてエクスポートして一時退避します"
+            >
+              📥 ドラフトをSQLで退避
+            </button>
+          )}
+          <button className="action-btn action-refresh" onClick={handleRefresh}>
+            ↻ Refresh & Force Sync
+          </button>
+        </div>
       );
     }
     if (hasDraft()) {
@@ -379,10 +399,10 @@ function App() {
                 const c = tableChanges.get(t.name);
                 const indicator = c
                   ? ` (${[
-                      c.inserts > 0 ? `+${c.inserts}` : "",
-                      c.updates > 0 ? `~${c.updates}` : "",
-                      c.deletes > 0 ? `-${c.deletes}` : "",
-                    ].filter(Boolean).join(" ")})`
+                    c.inserts > 0 ? `+${c.inserts}` : "",
+                    c.updates > 0 ? `~${c.updates}` : "",
+                    c.deletes > 0 ? `-${c.deletes}` : "",
+                  ].filter(Boolean).join(" ")})`
                   : "";
                 return (
                   <option key={t.name} value={t.name}>
@@ -396,6 +416,23 @@ function App() {
 
         <div className="header-right">
           {/* State-driven action button */}
+          {hasDraft() && (
+            <button
+              className="toolbar-btn"
+              style={{ fontSize: 13, color: '#DC2626', background: '#FEE2E2', border: '1px solid #FECACA', padding: '4px 12px', marginRight: 8, borderRadius: 4 }}
+              onClick={() => {
+                if (window.confirm("現在のドラフト（未保存の変更）をすべて破棄します。よろしいですか？")) {
+                  clearDraft();
+                  setBaseState("Idle");
+                  setRefreshKey(k => k + 1);
+                }
+              }}
+              title="すべての未保存の変更を破棄する"
+            >
+              変更をクリア
+            </button>
+          )}
+
           {actionButton()}
 
           {/* Comment panel button */}
@@ -501,90 +538,34 @@ function App() {
         </div>
       )}
 
-      {/* === Modals === */}
-      {showCommit && (
-        <CommitDialog
-          expectedHead={expectedHead}
-          onClose={() => setShowCommit(false)}
-          onCommitSuccess={onCommitSuccess}
-        />
-      )}
-      {showSubmit && (
-        <SubmitDialog
-          expectedHead={expectedHead}
-          onClose={() => setShowSubmit(false)}
-          onSubmitted={() => setRequestCount(requestCount + 1)}
-        />
-      )}
-      {showApprover && (
-        <div className="modal-overlay" onClick={() => setShowApprover(false)}>
-          <div className="modal" style={{ minWidth: 700, maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <h2 style={{ margin: 0 }}>承認待ちリクエスト</h2>
-              <button onClick={() => setShowApprover(false)} style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer" }}>✕</button>
-            </div>
-            <ApproverInbox />
-          </div>
-        </div>
-      )}
-      {showHistory && (
-        <div className="modal-overlay" onClick={() => setShowHistory(false)}>
-          <div className="modal" style={{ minWidth: 700, maxWidth: 900, maxHeight: "80vh" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <h2 style={{ margin: 0 }}>バージョン比較</h2>
-              <button onClick={() => setShowHistory(false)} style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer" }}>✕</button>
-            </div>
-            <HistoryTab />
-          </div>
-        </div>
-      )}
-      {/* Delete branch confirmation */}
-      {showDeleteConfirm && (
-        <div className="modal-overlay" onClick={() => setShowDeleteConfirm(false)}>
-          <div className="modal" style={{ minWidth: 380, maxWidth: 450 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ margin: "0 0 12px", fontSize: 16 }}>ブランチの削除</h2>
-            <p style={{ fontSize: 13, color: "#555", margin: "0 0 16px" }}>
-              ブランチ <code style={{ fontSize: 12, background: "#f1f5f9", padding: "1px 4px", borderRadius: 2 }}>{branchName}</code> を完全に削除します。この操作は元に戻せません。
-            </p>
-            <div className="modal-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setShowDeleteConfirm(false)} style={{ padding: "6px 16px", fontSize: 13, background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}>
-                キャンセル
-              </button>
-              <button
-                onClick={handleDeleteBranch}
-                disabled={deleting}
-                style={{ padding: "6px 16px", fontSize: 13, background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 600 }}
-              >
-                {deleting ? "削除中..." : "削除する"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Cell comment panel (slide-in panel, not modal overlay) */}
-      {showCommentPanel && selectedCell && (
-        <CellCommentPanel
-          targetId={targetId}
-          dbName={dbName}
-          branchName={branchName}
-          table={selectedCell.table}
-          pk={selectedCell.pk}
-          column={selectedCell.column}
-          onClose={() => setShowCommentPanel(false)}
-          onChanged={onCommentChanged}
-        />
-      )}
-
-      {/* Comment search modal */}
-      {showCommentSearch && (
-        <CommentSearchModal
-          targetId={targetId}
-          dbName={dbName}
-          branchName={branchName}
-          onClose={() => setShowCommentSearch(false)}
-          onNavigate={handleCommentNavigate}
-        />
-      )}
+      {/* === Modals & Panels (C-2: delegated to ModalManager) === */}
+      <ModalManager
+        targetId={targetId}
+        dbName={dbName}
+        branchName={branchName}
+        expectedHead={expectedHead}
+        showCommit={showCommit}
+        showSubmit={showSubmit}
+        showApprover={showApprover}
+        showHistory={showHistory}
+        showDeleteConfirm={showDeleteConfirm}
+        showCommentPanel={showCommentPanel}
+        showCommentSearch={showCommentSearch}
+        onCloseCommit={() => setShowCommit(false)}
+        onCloseSubmit={() => setShowSubmit(false)}
+        onCloseApprover={() => setShowApprover(false)}
+        onCloseHistory={() => setShowHistory(false)}
+        onCloseDeleteConfirm={() => setShowDeleteConfirm(false)}
+        onCloseCommentPanel={() => setShowCommentPanel(false)}
+        onCloseCommentSearch={() => setShowCommentSearch(false)}
+        onCommitSuccess={onCommitSuccess}
+        onSubmitted={() => setRequestCount(requestCount + 1)}
+        onDeleteConfirm={handleDeleteBranch}
+        onCommentChanged={onCommentChanged}
+        onCommentNavigate={handleCommentNavigate}
+        deleting={deleting}
+        selectedCell={selectedCell}
+      />
 
       {/* CLI intervention screen for fatal states */}
       <CLIRunbook />
