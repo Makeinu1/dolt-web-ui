@@ -116,9 +116,10 @@ export interface HistoryCommit {
 
 export interface ConflictsSummaryEntry {
   table: string;
-  schema_conflicts: number;
   data_conflicts: number;
-  constraint_violations: number;
+  schema_conflicts: number;
+  /** Currently not returned by Go backend; included for future Dolt versions. */
+  constraint_violations?: number;
 }
 
 export interface ConflictRow {
@@ -183,7 +184,12 @@ export interface PreviewCloneRequest {
   branch_name: string;
   table: string;
   template_pk: Record<string, unknown>;
-  new_pks: unknown[];
+  /** PK column whose value varies across cloned rows (required for composite PK). */
+  vary_column?: string;
+  /** New values for vary_column in each cloned row. */
+  new_values?: unknown[];
+  /** @deprecated Use new_values instead (single-PK backward compat). */
+  new_pks?: unknown[];
   change_column?: string;
   change_value?: unknown;
 }
@@ -194,7 +200,12 @@ export interface PreviewBatchGenerateRequest {
   branch_name: string;
   table: string;
   template_pk: Record<string, unknown>;
-  new_pks: unknown[];
+  /** PK column whose value varies across cloned rows (required for composite PK). */
+  vary_column?: string;
+  /** New values for vary_column in each cloned row. */
+  new_values?: unknown[];
+  /** @deprecated Use new_values instead (single-PK backward compat). */
+  new_pks?: unknown[];
   change_column?: string;
   change_values?: unknown[];
 }
