@@ -278,7 +278,9 @@ func (s *Service) PreviewBulkUpdate(ctx context.Context, req model.PreviewBulkUp
 		for j, col := range schemaPKCols {
 			pkMap[col] = strings.TrimSpace(fields[j])
 		}
-		pkKeyBytes, _ := json.Marshal(pkMap)
+		// BUG-12 fix: use normalizePkJSON to get deterministic JSON key order
+		// (Go map iteration order is non-deterministic; same PK may produce different JSON)
+		pkKeyBytes, _ := json.Marshal(normalizePkJSON(pkMap))
 		pkKey := string(pkKeyBytes)
 		if seenPKs[pkKey] {
 			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("duplicate PK in TSV: %s", pkKey)}

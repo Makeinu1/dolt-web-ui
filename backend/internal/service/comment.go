@@ -90,7 +90,10 @@ func (s *Service) AddComment(ctx context.Context, req model.AddCommentRequest) (
 		return "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid column_name"}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DbName, req.BranchName)
+	// BUG-13 fix: AddComment issues DOLT_ADD + DOLT_COMMIT, which requires a write
+	// session (ConnWrite: USE db + DOLT_CHECKOUT). Conn uses a read-only revision DB
+	// (USE db/branch) which may not support commit operations reliably.
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DbName, req.BranchName)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect: %w", err)
 	}
@@ -129,7 +132,8 @@ func (s *Service) DeleteComment(ctx context.Context, req model.DeleteCommentRequ
 		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "write operations on main branch are forbidden"}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DbName, req.BranchName)
+	// BUG-13 fix: use ConnWrite for write-session (DOLT_COMMIT requires writable branch session)
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DbName, req.BranchName)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}

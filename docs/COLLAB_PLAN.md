@@ -9,7 +9,7 @@
 ## 現在のプロジェクト状態
 
 **最終更新**: 2026-02-26
-**最終コミット**: `787a9db` — fix: QAバグ修正 — SQL injection防止(BUG-5/7/9) + mainGuard audit保護(BUG-4) + PK_COLLISION定数(BUG-3)
+**最終コミット**: BUG-12/13/14修正コミット (本ブランチ最新) — 詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
@@ -50,6 +50,12 @@ git push origin master
 | **BUG-1修正** | rowPkId アルファベット順ソート正規化（コメントセルキー不一致修正） | `cb67014` |
 | **BUG-2修正** | cascade-delete に旧コメント(単純文字列PK)対応 + normalizePkJSON追加 | `cb67014` |
 | **E2Eテスト追加** | composite-pk.spec.ts — 複合PKのCRUD・PK_COLLISION・後方互換（GAP-1/2/3カバー） | `cb67014` |
+| **BUG-3/4修正** | PK_COLLISION定数追加 + mainGuard audit保護統一 | `787a9db` |
+| **BUG-5/7/9修正** | conflict.go/sync.go SQL injection防止 (validateRef追加) | `787a9db` |
+| **BUG-10/11修正** | TS PreviewCloneRequest vary_column/new_values追加 + constraint_violations optional化 | `dd7e69f` |
+| **BUG-12修正** | preview.go PreviewBulkUpdate — pkMap JSON正規化(複合PK重複検出安定化) | 最新コミット |
+| **BUG-13修正** | comment.go AddComment/DeleteComment を ConnWrite (書き込みセッション) に変更 | 最新コミット |
+| **BUG-14修正** | BatchGenerateModal — pkCols.filter で全PK列取得・template_pk全列送信 | 最新コミット |
 
 ---
 
@@ -80,13 +86,14 @@ git push origin master
 |---|----------|------|------|
 | P1 | Lost Write Prevention | ✅ | expected_head + ConnWrite |
 | P2 | ドラフト永続性 | ⚠️ | sessionStorage（揮発性）。exportDraftSQL で緩和。将来課題。 |
-| P3 | main/audit 書き込み保護 | ✅ | IsProtectedBranch (API層) — 改修1で audit 追加 |
+| P3 | main/audit 書き込み保護 | ✅ | handler `mainGuard` (BUG-4修正後) + service `IsProtectedBranch` 二重ガード |
 | P4 | 承認なしマージ防止 | ✅ | main への唯一経路は ApproveRequest。Sync は pull のみ。 |
 | P5 | 作者追跡 | ✅ | Dolt commit metadata |
 | P6 | 選択的マージ | ✅ | PJ ブランチにはPJ編集のみ入る運用前提 |
 | P7 | 100万行対応 | ✅ | サーバーサイドページネーション + ストリーミング |
 | P8 | ブランチロック | ✅ | req/タグ存在時に commit/revert/sync を HTTP 423 で拒否 — 改修2 |
-| — | 複合PK安全性 | ✅ | BUG-1/2修正済み。P1〜P8 は複合PK変更で毀損されないことを静的証明済み（2026-02-26）|
+| — | 複合PK安全性 | ✅ | BUG-1/2/12/14修正済み。P1〜P8は複合PK変更で毀損されないことを3ラウンド静的証明済み（2026-02-26）|
+| — | QA状況 | ✅ | 全14バグ修正済み。詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照 |
 
 ---
 

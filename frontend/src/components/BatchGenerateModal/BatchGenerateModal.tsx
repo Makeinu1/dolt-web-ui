@@ -24,7 +24,9 @@ export function BatchGenerateModal({
   const addOp = useDraftStore((s) => s.addOp);
   const setBaseState = useUIStore((s) => s.setBaseState);
 
-  const pkCol = templateColumns.find((c) => c.primary_key);
+  // BUG-14 fix: use filter to get ALL PK columns (find only returns the first match,
+  // which breaks composite PK tables where template_pk must include ALL PK columns).
+  const pkCols = templateColumns.filter((c) => c.primary_key);
 
   const [pkListText, setPkListText] = useState("");
   const [valuesText, setValuesText] = useState("");
@@ -34,7 +36,7 @@ export function BatchGenerateModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  if (!templateRow || !pkCol) return null;
+  if (!templateRow || pkCols.length === 0) return null;
 
   const pkList = pkListText
     .split("\n")
@@ -64,7 +66,8 @@ export function BatchGenerateModal({
         db_name: dbName,
         branch_name: branchName,
         table: templateTable,
-        template_pk: { [pkCol.name]: templateRow[pkCol.name] },
+        // BUG-14 fix: include ALL PK columns in template_pk (composite PK support)
+        template_pk: Object.fromEntries(pkCols.map((c) => [c.name, templateRow[c.name]])),
         new_pks: pkList,
         ...(changeColumn ? { change_column: changeColumn } : {}),
         ...(changeColumn && valuesList.length > 0 ? { change_values: valuesList } : {}),
@@ -107,7 +110,7 @@ export function BatchGenerateModal({
         <h2>Batch Generate...</h2>
 
         <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
-          Template: <strong>{templateTable}</strong> / {pkCol.name} = {String(templateRow[pkCol.name])}
+          Template: <strong>{templateTable}</strong> / {pkCols[0].name} = {String(templateRow[pkCols[0].name])}
           {changeColumn && <> / Change: <strong>{changeColumn}</strong></>}
         </div>
 
