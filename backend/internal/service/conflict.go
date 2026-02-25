@@ -12,6 +12,11 @@ import (
 // ListConflicts returns a summary of merge conflicts between work branch and main.
 // Per v6f spec section 8.1: uses DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY.
 func (s *Service) ListConflicts(ctx context.Context, targetID, dbName, branchName string) ([]model.ConflictsSummaryEntry, error) {
+	// BUG-5 fix: validate branchName before SQL interpolation (DOLT table function does not support ? bind)
+	if err := validateRef("branch", branchName); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid branch name"}
+	}
+
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -150,6 +155,11 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 	}
 
 	// Step 2: Schema conflict pre-check
+	// BUG-7 fix: validate branchName before SQL interpolation
+	if err := validateRef("branch", req.BranchName); err != nil {
+		conn.ExecContext(ctx, "ROLLBACK")
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid branch name"}
+	}
 	previewQuery := fmt.Sprintf("SELECT * FROM DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY('%s', 'main')", req.BranchName)
 	previewRows, err := conn.QueryContext(ctx, previewQuery)
 	if err != nil {

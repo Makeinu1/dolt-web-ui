@@ -92,6 +92,10 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 // previewMergeConflicts runs DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY and returns
 // an *APIError if conflicts are detected, or nil if clean.
 func (s *Service) previewMergeConflicts(ctx context.Context, conn *sql.Conn, branchName string) *model.APIError {
+	// BUG-9 fix: validate branchName before SQL interpolation (DOLT table function does not support ? bind)
+	if err := validateRef("branch", branchName); err != nil {
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid branch name"}
+	}
 	query := fmt.Sprintf("SELECT * FROM DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY('%s', 'main')", branchName)
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {

@@ -153,7 +153,7 @@ func applyInsert(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 		// Surface duplicate PK as PK_COLLISION (HTTP 400) rather than opaque DB error
 		errStr := err.Error()
 		if strings.Contains(errStr, "Duplicate entry") || strings.Contains(errStr, "PRIMARY") {
-			return &model.APIError{Status: 400, Code: "PK_COLLISION",
+			return &model.APIError{Status: 400, Code: model.CodePKCollision,
 				Msg: fmt.Sprintf("PK already exists in %s", op.Table)}
 		}
 		return fmt.Errorf("failed to insert into %s: %w", op.Table, err)

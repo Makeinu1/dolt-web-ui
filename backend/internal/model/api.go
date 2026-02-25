@@ -22,6 +22,7 @@ func NewError(code, message string, details interface{}) ErrorEnvelope {
 // Error codes per v6f error spec.
 const (
 	CodeInvalidArgument             = "INVALID_ARGUMENT"
+	CodePKCollision                 = "PK_COLLISION"
 	CodeForbidden                   = "FORBIDDEN"
 	CodeNotFound                    = "NOT_FOUND"
 	CodeStaleHead                   = "STALE_HEAD"

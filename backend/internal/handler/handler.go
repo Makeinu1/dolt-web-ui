@@ -7,6 +7,7 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/config"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/service"
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -98,13 +99,13 @@ func decodeJSON(r *http.Request, v interface{}) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// mainGuard returns true (and writes 403) if branchName is "main".
-// Per v6f spec: main branch is read-only for all write operations.
+// mainGuard returns true (and writes 403) if branchName is protected.
+// Per v6f spec: main and audit branches are read-only for all write operations.
 func mainGuard(w http.ResponseWriter, branchName string) bool {
-	if branchName == "main" {
+	if validation.IsProtectedBranch(branchName) {
 		writeErrorWithDetails(w, http.StatusForbidden, model.CodeForbidden,
-			"write operations on main branch are forbidden",
-			map[string]string{"reason": "main_guard", "branch": "main"})
+			"write operations on protected branch are forbidden",
+			map[string]string{"reason": "protected_branch_guard", "branch": branchName})
 		return true
 	}
 	return false
