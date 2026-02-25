@@ -320,6 +320,9 @@ Database: Test
 
 ### コア機能
 - AG Grid によるスプレッドシート編集（セル編集、フィルタ、ソート、ページネーション）
+- **複合PK対応** — 複数列を主キーとするテーブルの完全CRUD（INSERT/UPDATE/DELETE/行履歴）
+  - PK列の直接編集が可能（サーバー側で `PK_COLLISION` を検出）
+  - `rowPkId` でアルファベット順正規化された JSON キーを使用（コメントセルキーとの一致保証）
 - ドラフト管理（sessionStorage、Insert/Update/Delete の色分け表示）
 - ブランチ作成・削除（`wi/{WorkItem}/{Round}` パターン）
 - コミット（楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
@@ -335,7 +338,9 @@ Database: Test
 - コミット復元（Revert）— HistoryTab から任意コミットを `DOLT_REVERT` で打ち消し
 - セル単位の変更履歴（RecordHistoryPopup、直近20件）
 - 変更ログ検索（ActivityLog: キーワード・期間フィルタでマージログ横断検索）
-- 行クローン（自動PK採番）、一括クローン（BatchGenerateModal）
+- 行クローン（`vary_column` + `new_values` 方式、複合PK対応）
+- 一括クローン（BatchGenerateModal、複合PK対応）
+- 一括更新（PreviewBulkUpdate: TSV N列PK対応）
 
 ### 編集補助
 - 行 Undo（「⟲ 元に戻す」ボタン、直近の操作を取り消し）
@@ -348,7 +353,8 @@ Database: Test
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
-- Playwright ブラウザテスト（19テスト、APIモックベース、`frontend/tests/e2e/`）
+- Playwright ブラウザテスト（23テスト、APIモックベース、`frontend/tests/e2e/`）
+  - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
 
 ---
 
@@ -402,5 +408,5 @@ Database: Test
 1. **コンパイルエラーがないか**: `npx tsc --noEmit` + `go build`
 2. **仕様との整合性**: `docs/COLLAB_PLAN.md` の仕様と実装が一致しているか
 3. **既存パターンとの一貫性**: 既存コードのスタイル・パターンに従っているか
-4. **安全プロパティの維持**: 変更が P1〜P7 の安全プロパティを毀損していないか
+4. **安全プロパティの維持**: 変更が P1〜P8 の安全プロパティを毀損していないか
 5. **問題発見時**: 修正した上で、プランファイルに問題と修正内容を記録する

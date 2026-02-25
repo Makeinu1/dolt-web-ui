@@ -23,6 +23,7 @@ All errors use the envelope format:
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | `INVALID_ARGUMENT` | 400 | Missing or invalid request parameters |
+| `PK_COLLISION` | 400 | Insert would duplicate an existing primary key |
 | `FORBIDDEN` | 403 | Operation not allowed (e.g., write to main) |
 | `NOT_FOUND` | 404 | Resource not found |
 | `STALE_HEAD` | 409 | expected_head does not match current HEAD |
@@ -286,7 +287,7 @@ All preview endpoints generate `CommitOp` arrays that can be applied to a draft 
 
 ### POST /preview/clone
 
-Clone a template row with new primary keys.
+Clone a template row with new primary key values. Supports single and composite PKs.
 
 **Request Body:**
 
@@ -296,8 +297,9 @@ Clone a template row with new primary keys.
   "db_name": "psx_data",
   "branch_name": "wi/work-1",
   "table": "items",
-  "template_pk": { "id": 100 },
-  "new_pks": [201, 202, 203],
+  "template_pk": { "region": "JP", "circuit_id": 100 },
+  "vary_column": "circuit_id",
+  "new_values": [201, 202, 203],
   "change_column": "status",
   "change_value": "draft"
 }
@@ -309,16 +311,20 @@ Clone a template row with new primary keys.
 | `db_name` | Yes | Database name |
 | `branch_name` | Yes | Branch name |
 | `table` | Yes | Table name |
-| `template_pk` | Yes | Single PK to clone from (e.g., `{"id": 100}`) |
-| `new_pks` | Yes | Array of new PK values |
-| `change_column` | No | Column to override in all cloned rows |
-| `change_value` | No | Value for the change_column (required if change_column is set) |
+| `template_pk` | Yes | PK map of the row to clone from. All PK columns required for composite PK. |
+| `vary_column` | Conditional | PK column whose value differs in each cloned row. Required for composite PK; auto-detected for single PK. |
+| `new_values` | Yes | Array of new values for `vary_column` in each cloned row. |
+| `new_pks` | No | Deprecated alias for `new_values` (single-PK backward compat). |
+| `change_column` | No | Non-PK column to override uniformly in all cloned rows. |
+| `change_value` | No | Value for `change_column` (required if `change_column` is set). |
 
 **Validation:**
-- `template_pk` must contain exactly one key-value pair
-- `new_pks` must not be empty
-- All `new_pks` must not already exist in the table
-- `change_column` must exist in the table and must not be the PK column
+- `template_pk` must not be empty
+- `new_values` (or `new_pks`) must not be empty
+- `vary_column` must be present in `template_pk`
+- For composite PK tables, `vary_column` is required
+- Collisions are detected at commit time via `PK_COLLISION` (not at preview time)
+- `change_column` must exist in the table
 
 **Response:**
 
@@ -328,7 +334,7 @@ Clone a template row with new primary keys.
     {
       "type": "insert",
       "table": "items",
-      "values": { "id": 201, "name": "Item A", "status": "draft" }
+      "values": { "region": "JP", "circuit_id": 201, "name": "...", "status": "draft" }
     }
   ],
   "warnings": [],
@@ -337,14 +343,14 @@ Clone a template row with new primary keys.
 ```
 
 **Errors:**
-- `400 INVALID_ARGUMENT` - Invalid parameters, PK collisions, change_column not found
+- `400 INVALID_ARGUMENT` - Invalid parameters, vary_column not in template_pk, change_column not found
 - `404 NOT_FOUND` - Template row not found
 
 ---
 
 ### POST /preview/batch_generate
 
-Similar to clone but with per-row change values.
+Similar to `/preview/clone` but supports per-row `change_column` values.
 
 **Request Body:**
 
@@ -354,8 +360,9 @@ Similar to clone but with per-row change values.
   "db_name": "psx_data",
   "branch_name": "wi/work-1",
   "table": "items",
-  "template_pk": { "id": 100 },
-  "new_pks": [201, 202, 203],
+  "template_pk": { "region": "JP", "circuit_id": 100 },
+  "vary_column": "circuit_id",
+  "new_values": [201, 202, 203],
   "change_column": "status",
   "change_values": ["draft", "active", "pending"]
 }
@@ -367,18 +374,23 @@ Similar to clone but with per-row change values.
 | `db_name` | Yes | Database name |
 | `branch_name` | Yes | Branch name |
 | `table` | Yes | Table name |
-| `template_pk` | Yes | Single PK to clone from |
-| `new_pks` | Yes | Array of new PK values |
+| `template_pk` | Yes | PK map of the row to clone from |
+| `vary_column` | Conditional | PK column to vary (required for composite PK) |
+| `new_values` | Yes | Array of new values for `vary_column` |
+| `new_pks` | No | Deprecated alias for `new_values` |
 | `change_column` | No | Column to vary per row |
-| `change_values` | No | Per-row values (length must match `new_pks`) |
+| `change_values` | No | Per-row values for `change_column` (length must match `new_values`) |
 
-**Response:** Same as `/preview/clone`.
+**Response:** Same format as `/preview/clone`.
+
+**Errors:**
+- `400 INVALID_ARGUMENT` - change_values length mismatch, invalid column names, vary_column not in template_pk
 
 ---
 
 ### POST /preview/bulk_update
 
-Generate update ops from TSV data.
+Generate update ops from TSV data. Supports composite PK tables.
 
 **Request Body:**
 
@@ -387,8 +399,8 @@ Generate update ops from TSV data.
   "target_id": "production",
   "db_name": "psx_data",
   "branch_name": "wi/work-1",
-  "table": "items",
-  "tsv_data": "id\tstatus\tname\n100\tactive\tUpdated Item\n101\tdraft\tAnother Item"
+  "table": "circuits",
+  "tsv_data": "region\tcircuit_id\tstatus\nJP\t100\tactive\nEU\t200\tdraft"
 }
 ```
 
@@ -398,20 +410,27 @@ Generate update ops from TSV data.
 | `db_name` | Yes | Database name |
 | `branch_name` | Yes | Branch name |
 | `table` | Yes | Table name |
-| `tsv_data` | Yes | Tab-separated values (first column = PK, first row = header) |
+| `tsv_data` | Yes | Tab-separated values. Header row required. |
 
 **TSV Format:**
 - First row: column headers (tab-separated)
-- First column: must be the table's PK column
-- Subsequent rows: data values
+- First N columns: must match the table's PK columns **in schema order** (N ≥ 1)
+- Remaining columns: update target columns (must not include PK columns)
+- PK columns are determined from the table schema at request time
+
+**Example (composite PK: region + circuit_id):**
+```
+region\tcircuit_id\tstatus\tname
+JP\t100\tactive\tSuzuka
+EU\t200\tdraft\tMonza
+```
 
 **Validation:**
 - TSV must have header and at least one data row
-- Must have PK column and at least one update column
-- First column must match the table's PK column name
-- All column names must exist in the table schema
-- Duplicate PKs are not allowed
-- All PKs must exist in the table (updates only, not inserts)
+- First N headers must match schema PK column names in order
+- Update columns must exist in the table and must not be PK columns
+- Duplicate PK combinations are not allowed within the TSV
+- All PK combinations must exist in the table (bulk_update is update-only)
 
 **Response:**
 
@@ -420,9 +439,9 @@ Generate update ops from TSV data.
   "ops": [
     {
       "type": "update",
-      "table": "items",
-      "values": { "status": "active", "name": "Updated Item" },
-      "pk": { "id": "100" }
+      "table": "circuits",
+      "values": { "status": "active", "name": "Suzuka" },
+      "pk": { "region": "JP", "circuit_id": "100" }
     }
   ],
   "warnings": [],

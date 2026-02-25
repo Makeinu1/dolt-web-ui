@@ -9,7 +9,7 @@
 ## 現在のプロジェクト状態
 
 **最終更新**: 2026-02-26
-**最終コミット**: `d6eacef` — 改修4 Activity Log 実装
+**最終コミット**: `cb67014` — fix: BUG-1(rowPkId正規化) + BUG-2(cascade-delete旧コメント対応) + E2E複合PKテスト追加
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
@@ -44,6 +44,12 @@ git push origin master
 | 改修4 | Activity Log（変更ログ検索）— keyword/期間フィルタ + ActivityLog モーダル | `d6eacef` |
 | E2E改善統合 | Revert/BranchLock/ConnPool/行Undo/ModalManager | `d3dbd28` |
 | F8 コメント機能 | セル単位コメント（作業ノート） | `4b7ceeb` |
+| **複合PK Phase 1** | コアCRUD複合PK対応 — pkCols配列化・WHERE複合化・PK_COLLISION検出・PK列編集解放 | `4215ab0` |
+| **複合PK Phase 2** | clone/batch: vary_column方式 + bulk_update TSV N列PK対応 | `d9a49ff` |
+| **複合PK Phase 3** | コメント pk_value JSON化（onCellClicked → rowPkId 送信） | `3d86ae0` |
+| **BUG-1修正** | rowPkId アルファベット順ソート正規化（コメントセルキー不一致修正） | `cb67014` |
+| **BUG-2修正** | cascade-delete に旧コメント(単純文字列PK)対応 + normalizePkJSON追加 | `cb67014` |
+| **E2Eテスト追加** | composite-pk.spec.ts — 複合PKのCRUD・PK_COLLISION・後方互換（GAP-1/2/3カバー） | `cb67014` |
 
 ---
 
@@ -80,6 +86,7 @@ git push origin master
 | P6 | 選択的マージ | ✅ | PJ ブランチにはPJ編集のみ入る運用前提 |
 | P7 | 100万行対応 | ✅ | サーバーサイドページネーション + ストリーミング |
 | P8 | ブランチロック | ✅ | req/タグ存在時に commit/revert/sync を HTTP 423 で拒否 — 改修2 |
+| — | 複合PK安全性 | ✅ | BUG-1/2修正済み。P1〜P8 は複合PK変更で毀損されないことを静的証明済み（2026-02-26）|
 
 ---
 
