@@ -6,11 +6,44 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
+
+// normalizePkJSON returns a new map whose iteration order is alphabetically sorted,
+// so that json.Marshal produces a canonical string matching the frontend rowPkId.
+func normalizePkJSON(pk map[string]interface{}) map[string]interface{} {
+	if len(pk) <= 1 {
+		return pk // single-key map: order is trivially canonical
+	}
+	keys := make([]string, 0, len(pk))
+	for k := range pk {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make(map[string]interface{}, len(pk))
+	for _, k := range keys {
+		out[k] = pk[k]
+	}
+	return out
+}
+
+// legacyPkValue extracts the plain string representation of a single-PK map,
+// e.g. map["id":1] → "1". Used for cascade-delete backward compatibility
+// with comments written before Phase 3 (which stored just the raw value).
+func legacyPkValue(pk map[string]interface{}) string {
+	if len(pk) == 1 {
+		for _, v := range pk {
+			return fmt.Sprint(v)
+		}
+	}
+	// For composite PKs there is no single legacy value; return empty string
+	// so the OR condition never matches spurious rows.
+	return ""
+}
 
 const createCommentsTableSQL = `CREATE TABLE IF NOT EXISTS _cell_comments (
     comment_id   VARCHAR(36)   NOT NULL,

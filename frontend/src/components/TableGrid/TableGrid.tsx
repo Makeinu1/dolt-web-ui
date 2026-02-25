@@ -146,10 +146,18 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   const [undoableOpIndex, setUndoableOpIndex] = useState<number | null>(null);
 
   const pkCols = useMemo(() => columns.filter((c) => c.primary_key), [columns]);
-  // Helper: stable row ID from all PK columns (safe for values containing '|')
+  /**
+   * Stable, canonical row ID: JSON of PK columns sorted alphabetically by key.
+   * Sorted order ensures the string is identical regardless of:
+   *   - AG Grid data object key insertion order
+   *   - Go map iteration order (which is random)
+   * Must match the normalization applied server-side when saving pk_value.
+   */
   const rowPkId = useCallback(
-    (row: Record<string, unknown>) =>
-      JSON.stringify(Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]))),
+    (row: Record<string, unknown>) => {
+      const sorted = [...pkCols].sort((a, b) => a.name.localeCompare(b.name));
+      return JSON.stringify(Object.fromEntries(sorted.map((c) => [c.name, row[c.name]])));
+    },
     [pkCols]
   );
   // Deprecated alias for single-PK compatibility (removed after Phase 1 verification)

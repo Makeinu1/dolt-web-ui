@@ -233,10 +233,12 @@ func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 	if affected == 0 {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}
 	}
-	// Cascade-delete comments. pk_value stores JSON of the PK map (Phase 3).
-	if pkJSON, jsonErr := json.Marshal(op.PK); jsonErr == nil {
-		conn.ExecContext(ctx, "DELETE FROM `_cell_comments` WHERE `table_name` = ? AND `pk_value` = ?", //nolint:errcheck
-			op.Table, string(pkJSON))
+	// Cascade-delete comments for the deleted row.
+	// Handles both new format (JSON: {"id":1}) and legacy format (plain string: "1").
+	if pkJSON, jsonErr := json.Marshal(normalizePkJSON(op.PK)); jsonErr == nil {
+		conn.ExecContext(ctx, //nolint:errcheck
+			"DELETE FROM `_cell_comments` WHERE `table_name` = ? AND (`pk_value` = ? OR `pk_value` = ?)",
+			op.Table, string(pkJSON), legacyPkValue(op.PK))
 	}
 
 	return nil
