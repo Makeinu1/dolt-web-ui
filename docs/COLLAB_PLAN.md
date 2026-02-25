@@ -9,7 +9,7 @@
 ## 現在のプロジェクト状態
 
 **最終更新**: 2026-02-26
-**最終コミット**: `cb67014` — fix: BUG-1(rowPkId正規化) + BUG-2(cascade-delete旧コメント対応) + E2E複合PKテスト追加
+**最終コミット**: `787a9db` — fix: QAバグ修正 — SQL injection防止(BUG-5/7/9) + mainGuard audit保護(BUG-4) + PK_COLLISION定数(BUG-3)
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
