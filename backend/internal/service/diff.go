@@ -312,26 +312,10 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
 	}
 
-	// Get PK column from schema
-	schema, err := s.GetTableSchema(ctx, targetID, dbName, branchName, table)
-	if err != nil {
-		return nil, err
-	}
-	var pkCol string
-	for _, col := range schema.Columns {
-		if col.PrimaryKey {
-			pkCol = col.Name
-			break
-		}
-	}
-	if pkCol == "" {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key"}
-	}
-
-	// Parse PK value
-	pkVal, err := parseSinglePK(pkJSON)
-	if err != nil {
-		return nil, err
+	// Parse PK map — supports single and composite keys
+	var pkMap map[string]interface{}
+	if err := json.Unmarshal([]byte(pkJSON), &pkMap); err != nil || len(pkMap) == 0 {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk JSON"}
 	}
 
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
@@ -340,8 +324,21 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 	}
 	defer conn.Close()
 
-	query := fmt.Sprintf("SELECT * FROM dolt_history_%s WHERE `%s` = ? ORDER BY commit_date DESC LIMIT ?", table, pkCol)
-	rows, err := conn.QueryContext(ctx, query, pkVal, limit)
+	// Build WHERE from all PK columns
+	whereParts := make([]string, 0, len(pkMap))
+	whereArgs := make([]interface{}, 0, len(pkMap))
+	for k, v := range pkMap {
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column: " + k}
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		whereArgs = append(whereArgs, v)
+	}
+	whereArgs = append(whereArgs, limit)
+
+	query := fmt.Sprintf("SELECT * FROM dolt_history_%s WHERE %s ORDER BY commit_date DESC LIMIT ?",
+		table, strings.Join(whereParts, " AND "))
+	rows, err := conn.QueryContext(ctx, query, whereArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query row history: %w", err)
 	}
@@ -490,17 +487,15 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 	return buf.Bytes(), zipName, nil
 }
 
-// parseSinglePK parses a URL-encoded JSON PK and returns the single value.
-func parseSinglePK(pkJSON string) (interface{}, error) {
+// parsePK parses a URL-encoded JSON PK map and returns it as-is.
+// Supports both single and composite primary keys.
+func parsePK(pkJSON string) (map[string]interface{}, error) {
 	var pkMap map[string]interface{}
 	if err := json.Unmarshal([]byte(pkJSON), &pkMap); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk JSON"}
 	}
-	if len(pkMap) != 1 {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "single primary key required"}
+	if len(pkMap) < 1 {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "pk must not be empty"}
 	}
-	for _, v := range pkMap {
-		return v, nil
-	}
-	return nil, nil
+	return pkMap, nil
 }

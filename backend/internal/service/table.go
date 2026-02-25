@@ -95,15 +95,17 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 	}
 
 	allowedCols := make(map[string]bool)
-	var pkCol string
+	pkColSet := make(map[string]bool) // for hasPK detection
+	var pkCols []string
 	for _, col := range schema.Columns {
 		allowedCols[col.Name] = true
 		if col.PrimaryKey {
-			pkCol = col.Name
+			pkCols = append(pkCols, col.Name)
+			pkColSet[col.Name] = true
 		}
 	}
 
-	if pkCol == "" {
+	if len(pkCols) == 0 {
 		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key (not supported)"}
 	}
 
@@ -188,17 +190,24 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in sort: %s", col)}
 			}
 			orderParts = append(orderParts, fmt.Sprintf("`%s` %s", col, dir))
-			if col == pkCol {
+			if pkColSet[col] {
 				hasPK = true
 			}
 		}
-		// Per v6f spec: append PK ASC for stable paging
+		// Per v6f spec: append all PK cols ASC for stable paging if not covered
 		if !hasPK {
-			orderParts = append(orderParts, fmt.Sprintf("`%s` ASC", pkCol))
+			for _, pk := range pkCols {
+				orderParts = append(orderParts, fmt.Sprintf("`%s` ASC", pk))
+			}
 		}
 		orderByClause = "ORDER BY " + strings.Join(orderParts, ", ")
 	} else {
-		orderByClause = fmt.Sprintf("ORDER BY `%s` ASC", pkCol)
+		// Default: order by all PK cols
+		pkOrderParts := make([]string, len(pkCols))
+		for i, pk := range pkCols {
+			pkOrderParts[i] = fmt.Sprintf("`%s` ASC", pk)
+		}
+		orderByClause = "ORDER BY " + strings.Join(pkOrderParts, ", ")
 	}
 
 	// Count total
@@ -279,32 +288,28 @@ func (s *Service) GetTableRow(ctx context.Context, targetID, dbName, branchName,
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
 	}
 
-	// Parse PK (single key per v6f spec)
+	// Parse PK — supports single and composite keys
 	var pkMap map[string]interface{}
 	if err := json.Unmarshal([]byte(pkJSON), &pkMap); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk JSON"}
 	}
-	if len(pkMap) != 1 {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "single primary key required (composite PKs not supported)"}
+	if len(pkMap) < 1 {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "pk must not be empty"}
 	}
 
-	var pkCol string
-	var pkVal interface{}
+	// Validate key names and build WHERE
+	whereParts := make([]string, 0, len(pkMap))
+	whereArgs := make([]interface{}, 0, len(pkMap))
 	for k, v := range pkMap {
-		pkCol = k
-		pkVal = v
-	}
-
-	if err := validation.ValidateIdentifier("pk column", pkCol); err != nil {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
-	}
-
-	// Convert numeric JSON values to string for query
-	switch v := pkVal.(type) {
-	case float64:
-		if v == float64(int64(v)) {
-			pkVal = strconv.FormatInt(int64(v), 10)
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name: " + k}
 		}
+		// Convert float64 (JSON number) to integer string for query
+		if fv, ok := v.(float64); ok && fv == float64(int64(fv)) {
+			v = strconv.FormatInt(int64(fv), 10)
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		whereArgs = append(whereArgs, v)
 	}
 
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
@@ -313,8 +318,8 @@ func (s *Service) GetTableRow(ctx context.Context, targetID, dbName, branchName,
 	}
 	defer conn.Close()
 
-	query := fmt.Sprintf("SELECT * FROM `%s` WHERE `%s` = ? LIMIT 1", table, pkCol)
-	rows, err := conn.QueryContext(ctx, query, pkVal)
+	query := fmt.Sprintf("SELECT * FROM `%s` WHERE %s LIMIT 1", table, strings.Join(whereParts, " AND "))
+	rows, err := conn.QueryContext(ctx, query, whereArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query row: %w", err)
 	}

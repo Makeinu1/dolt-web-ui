@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -149,14 +150,20 @@ func applyInsert(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 	query := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)",
 		op.Table, strings.Join(cols, ", "), strings.Join(placeholders, ", "))
 	if _, err := conn.ExecContext(ctx, query, args...); err != nil {
+		// Surface duplicate PK as PK_COLLISION (HTTP 400) rather than opaque DB error
+		errStr := err.Error()
+		if strings.Contains(errStr, "Duplicate entry") || strings.Contains(errStr, "PRIMARY") {
+			return &model.APIError{Status: 400, Code: "PK_COLLISION",
+				Msg: fmt.Sprintf("PK already exists in %s", op.Table)}
+		}
 		return fmt.Errorf("failed to insert into %s: %w", op.Table, err)
 	}
 	return nil
 }
 
 func applyUpdate(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
-	if len(op.PK) != 1 {
-		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "single primary key required for update"}
+	if len(op.PK) < 1 {
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "pk must not be empty for update"}
 	}
 
 	setParts := make([]string, 0, len(op.Values))
@@ -169,22 +176,22 @@ func applyUpdate(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 		setArgs = append(setArgs, val)
 	}
 
-	var pkCol string
-	var pkVal interface{}
+	// Build WHERE from all PK columns (composite support)
+	whereParts := make([]string, 0, len(op.PK))
+	whereArgs := make([]interface{}, 0, len(op.PK))
 	for k, v := range op.PK {
-		pkCol = k
-		pkVal = v
-	}
-	if err := validation.ValidateIdentifier("pk column", pkCol); err != nil {
-		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name: " + k}
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		whereArgs = append(whereArgs, v)
 	}
 
-	query := fmt.Sprintf("UPDATE `%s` SET %s WHERE `%s` = ?",
-		op.Table, strings.Join(setParts, ", "), pkCol)
-	// A-2: safe copy to avoid append() mutating setArgs backing array
-	args := make([]interface{}, 0, len(setArgs)+1)
+	query := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s",
+		op.Table, strings.Join(setParts, ", "), strings.Join(whereParts, " AND "))
+	args := make([]interface{}, 0, len(setArgs)+len(whereArgs))
 	args = append(args, setArgs...)
-	args = append(args, pkVal)
+	args = append(args, whereArgs...)
 
 	result, err := conn.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -201,22 +208,23 @@ func applyUpdate(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 }
 
 func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
-	if len(op.PK) != 1 {
-		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "single primary key required for delete"}
+	if len(op.PK) < 1 {
+		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "pk must not be empty for delete"}
 	}
 
-	var pkCol string
-	var pkVal interface{}
+	// Build WHERE from all PK columns (composite support)
+	whereParts := make([]string, 0, len(op.PK))
+	whereArgs := make([]interface{}, 0, len(op.PK))
 	for k, v := range op.PK {
-		pkCol = k
-		pkVal = v
-	}
-	if err := validation.ValidateIdentifier("pk column", pkCol); err != nil {
-		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name: " + k}
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		whereArgs = append(whereArgs, v)
 	}
 
-	query := fmt.Sprintf("DELETE FROM `%s` WHERE `%s` = ?", op.Table, pkCol)
-	result, err := conn.ExecContext(ctx, query, pkVal)
+	query := fmt.Sprintf("DELETE FROM `%s` WHERE %s", op.Table, strings.Join(whereParts, " AND "))
+	result, err := conn.ExecContext(ctx, query, whereArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to delete from %s: %w", op.Table, err)
 	}
@@ -225,10 +233,11 @@ func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 	if affected == 0 {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}
 	}
-
-	// Cascade-delete comments for the deleted row (ignore error if _cell_comments doesn't exist).
-	conn.ExecContext(ctx, "DELETE FROM `_cell_comments` WHERE `table_name` = ? AND `pk_value` = ?", //nolint:errcheck
-		op.Table, fmt.Sprint(pkVal))
+	// Cascade-delete comments. pk_value stores JSON of the PK map (Phase 3).
+	if pkJSON, jsonErr := json.Marshal(op.PK); jsonErr == nil {
+		conn.ExecContext(ctx, "DELETE FROM `_cell_comments` WHERE `table_name` = ? AND `pk_value` = ?", //nolint:errcheck
+			op.Table, string(pkJSON))
+	}
 
 	return nil
 }

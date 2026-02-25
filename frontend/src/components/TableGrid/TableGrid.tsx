@@ -145,7 +145,16 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   const removeOp = useDraftStore((s) => s.removeOp);
   const [undoableOpIndex, setUndoableOpIndex] = useState<number | null>(null);
 
-  const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns]);
+  const pkCols = useMemo(() => columns.filter((c) => c.primary_key), [columns]);
+  // Helper: stable row ID from all PK columns (safe for values containing '|')
+  const rowPkId = useCallback(
+    (row: Record<string, unknown>) =>
+      JSON.stringify(Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]))),
+    [pkCols]
+  );
+  // Deprecated alias for single-PK compatibility (removed after Phase 1 verification)
+  const pkCol = pkCols[0] ?? null;
+
 
   // Editing is only allowed in Idle or DraftEditing states on non-main branches
   const editingBlocked =
@@ -159,23 +168,25 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
 
   // Draft operations lookup for Undo functionality
   useEffect(() => {
-    if (!pkCol || !selectedRow) {
+    if (pkCols.length === 0 || !selectedRow) {
       setUndoableOpIndex(null);
       return;
     }
-    const pkValue = selectedRow[pkCol.name];
+    const rowId = rowPkId(selectedRow as Record<string, unknown>);
 
     // Find latest operation on this row
     let foundIdx: number | null = null;
     for (let i = draftOps.length - 1; i >= 0; i--) {
       const op = draftOps[i];
-      if (op.table === tableName && op.pk && String(op.pk[pkCol.name]) === String(pkValue)) {
+      if (op.table === tableName && op.pk &&
+        JSON.stringify(op.pk) === rowId) {
         foundIdx = i;
         break;
       }
     }
     setUndoableOpIndex(foundIdx);
-  }, [draftOps, selectedRow, pkCol, tableName]);
+  }, [draftOps, selectedRow, pkCols, rowPkId, tableName]);
+
 
   // Handle Undo (remove the latest draft op for this row)
   const handleUndoRow = useCallback(() => {
@@ -185,18 +196,18 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   }, [undoableOpIndex, removeOp]);
 
   // Build draft index for visualization:
-  // Map of pkValue -> { type, changedCols }
+  // Map of rowPkId -> { type, changedCols }
   const draftIndex = useMemo(() => {
-    const pkCol = columns.find((c) => c.primary_key);
-    if (!pkCol) return new Map<string, { type: string; changedCols: Set<string> }>();
-
     const index = new Map<string, { type: string; changedCols: Set<string> }>();
+    if (pkCols.length === 0) return index;
     for (const op of draftOps) {
       if (op.table !== tableName) continue;
-      const pkVal = op.type === "insert"
-        ? String(op.values[pkCol.name])
-        : String(op.pk?.[pkCol.name]);
-      const existing = index.get(pkVal);
+      // Build the PK map from all PK columns
+      const pkMap = op.type === "insert"
+        ? Object.fromEntries(pkCols.map((c) => [c.name, op.values[c.name]]))
+        : (op.pk ?? {});
+      const rowId = JSON.stringify(pkMap);
+      const existing = index.get(rowId);
       if (existing) {
         // Accumulate changed columns
         if (op.values) {
@@ -213,11 +224,12 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
         if (op.pk) {
           for (const col of Object.keys(op.pk)) changedCols.add(col);
         }
-        index.set(pkVal, { type: op.type, changedCols });
+        index.set(rowId, { type: op.type, changedCols });
       }
     }
     return index;
-  }, [draftOps, tableName, columns]);
+  }, [draftOps, tableName, pkCols]);
+
 
   // Load schema
   useEffect(() => {
@@ -292,13 +304,13 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   }, [filterByPk, pkCol]);
 
   const handleShowHistory = useCallback((row: Record<string, unknown>) => {
-    if (!pkCol) return;
-    const pkVal = row[pkCol.name];
+    if (pkCols.length === 0) return;
     setHistoryTarget({
-      pkJson: JSON.stringify({ [pkCol.name]: pkVal }),
-      pkLabel: String(pkVal),
+      pkJson: rowPkId(row),
+      pkLabel: pkCols.map((c) => String(row[c.name])).join(", "),
     });
-  }, [pkCol]);
+  }, [pkCols, rowPkId]);
+
 
   const handleCloneRow = useCallback(async (row: Record<string, unknown>) => {
     if (!pkCol) return;
@@ -343,16 +355,17 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
   }, []);
 
   const handleDeleteRow = useCallback((row: Record<string, unknown>) => {
-    if (!pkCol) return;
-    const pkVal = row[pkCol.name];
+    if (pkCols.length === 0) return;
+    const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
     addOp({
       type: "delete",
       table: tableName,
       values: {},
-      pk: { [pkCol.name]: pkVal },
+      pk,
     });
     setBaseState("DraftEditing");
-  }, [pkCol, tableName, addOp, setBaseState]);
+  }, [pkCols, tableName, addOp, setBaseState]);
+
 
   // Toggle column visibility
   const handleColumnToggle = useCallback((colName: string) => {
@@ -463,7 +476,8 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     return visibleCols.map((col) => ({
       field: col.name,
       headerName: col.name,
-      editable: !editingBlocked && !col.primary_key,
+      editable: !editingBlocked,  // PK columns are also editable (PK_COLLISION caught server-side)
+
       sortable: true,
       filter: true,
       resizable: true,
@@ -473,9 +487,10 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
           ? { backgroundColor: "#f0f0f5", fontWeight: "600" }
           : {};
 
-        if (!pkCol || !params.data) return base;
-        const pkVal = String(params.data[pkCol.name]);
-        const draft = draftIndex.get(pkVal);
+        if (!params.data) return base;
+        const rowId = rowPkId(params.data as Record<string, unknown>);
+        const draft = draftIndex.get(rowId);
+
         if (!draft) return base;
 
         // Row-level draft markers
@@ -497,7 +512,8 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
         }
 
         // Comment marker: amber triangle in top-right corner (CSS gradient)
-        const cellKey = `${pkVal}:${col.name}`;
+        const cellKey = `${rowPkId(params.data as Record<string, unknown>)}:${col.name}`;
+
         if (commentCells.has(cellKey)) {
           const bg = base.backgroundColor || "#ffffff";
           // Remove backgroundColor to avoid conflict with background shorthand
@@ -512,40 +528,34 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
         return base;
       },
     }));
-  }, [columns, hiddenColumns, editingBlocked, draftIndex, commentCells]);
+  }, [columns, hiddenColumns, editingBlocked, draftIndex, commentCells, pkCols, rowPkId]);
+
 
   // Auto-size columns to fit content on first data render
   const onFirstDataRendered = useCallback((event: FirstDataRenderedEvent) => {
     event.api.autoSizeAllColumns();
   }, []);
 
-  // Handle cell edit
+  // Handle cell edit: build op.pk from ALL PK columns (composite support)
   const onCellValueChanged = useCallback(
     (event: CellValueChangedEvent) => {
-      const pkCol = columns.find((c) => c.primary_key);
-      if (!pkCol) return;
+      if (pkCols.length === 0) return;
 
-      const pkValue = event.data[pkCol.name];
+      const pk = Object.fromEntries(pkCols.map((c) => [c.name, event.data[c.name]]));
       const changedCol = event.colDef.field;
       if (!changedCol) return;
-
-      // Auto-cancel logic from TableGrid side:
-      // If the new value exactly matches the original value from the grid's initial load,
-      // we can explicitly remove the specific column update from the draft store, or prevent adding it.
-      // This is more robust than just merging in draft.ts.
-      // event.oldValue is just the previous *edited* value, so we'd need to compare against the *original* server response
-      // For now, we rely on the draft store's merge logic, but we can pass `event.oldValue` in the future if we track pristine data.
 
       addOp({
         type: "update",
         table: tableName,
         values: { [changedCol]: event.newValue },
-        pk: { [pkCol.name]: pkValue },
+        pk,
       });
       setBaseState("DraftEditing");
     },
-    [columns, tableName, addOp, setBaseState]
+    [pkCols, tableName, addOp, setBaseState]
   );
+
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const showPagination = totalPages > 1;
