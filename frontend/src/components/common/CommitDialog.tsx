@@ -30,12 +30,25 @@ export function CommitDialog({
   const handleCommit = async () => {
     if (ops.length === 0) return;
 
-    // Generate smart auto-commit message
+    // Generate structured auto-commit message per COLLAB_PLAN.md spec:
+    // Single table: [{branch}] {table}テーブル: +{i} ~{u} -{d}
+    // Multi table:  [{branch}] {N}テーブルの変更 (+{i} ~{u} -{d})
     let commitMsg = message.trim();
     if (!commitMsg) {
-      const tables = Array.from(new Set(ops.map(op => op.table)));
-      const tableText = tables.length === 1 ? `${tables[0]}テーブル` : `${tables.length}つのテーブル`;
-      commitMsg = `[自動保存] ${tableText}の変更 (${ops.length}件)`;
+      const tableNames = Array.from(new Set(ops.map(op => op.table)));
+      // Count insert/update/delete across all ops
+      let ins = 0, upd = 0, del = 0;
+      for (const op of ops) {
+        if (op.type === "insert") ins++;
+        else if (op.type === "update") upd++;
+        else if (op.type === "delete") del++;
+      }
+      const counts = `+${ins} ~${upd} -${del}`;
+      if (tableNames.length === 1) {
+        commitMsg = `[${branchName}] ${tableNames[0]}テーブル: ${counts}`;
+      } else {
+        commitMsg = `[${branchName}] ${tableNames.length}テーブルの変更 (${counts})`;
+      }
     }
 
     setSubmitting(true);
@@ -160,27 +173,27 @@ export function CommitDialog({
 
         <div style={{ marginBottom: 12 }}>
           <label style={{ display: "block", marginBottom: 4, fontSize: 12, fontWeight: 600 }}>
-            Commit Message (optional)
+            コミットメッセージ（任意）
           </label>
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             rows={2}
             style={{ width: "100%", fontSize: 13 }}
-            placeholder="Leave empty for auto-generated message"
+            placeholder="例: TR-9999 新規回線追加（空欄で自動生成）"
             autoFocus
           />
         </div>
         <div className="modal-actions">
           <button onClick={onClose} disabled={submitting}>
-            Cancel
+            キャンセル
           </button>
           <button
             className="primary"
             onClick={handleCommit}
             disabled={submitting || ops.length === 0}
           >
-            {submitting ? "Committing..." : `Commit (${ops.length})`}
+            {submitting ? "コミット中..." : `コミット (${ops.length}件)`}
           </button>
         </div>
       </div>
