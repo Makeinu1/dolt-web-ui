@@ -43,7 +43,9 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 	// Derive request_id: wi/ → req/
 	requestID := "req/" + strings.TrimPrefix(req.BranchName, "wi/")
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	// BUG-15 fix: SubmitRequest performs DOLT_MERGE and DOLT_TAG which are write operations.
+	// We must use ConnWrite (writable session: USE db + DOLT_CHECKOUT) instead of Conn (revision DB: USE db/branch).
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}

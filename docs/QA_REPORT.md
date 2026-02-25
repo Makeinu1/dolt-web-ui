@@ -11,9 +11,9 @@
 | 項目 | 内容 |
 |---|---|
 | 対象 | バックエンド 29 ファイル / フロントエンド 25 ファイル（全件） |
-| 手法 | 静的解析 (`go vet`, `tsc --noEmit`) + 行単位精読 (3ラウンド) |
+| 手法 | 静的解析 (`go vet`, `tsc --noEmit`) + 行単位精読 (4ラウンド) |
 | ツール | go vet / go build / npx tsc --noEmit |
-| 結果 | バグ 14 件発見・修正済み / 安全プロパティ P1〜P8 全証明済み |
+| 結果 | バグ 15 件発見・修正済み / 安全プロパティ P1〜P8 全証明済み |
 
 ---
 
@@ -60,8 +60,14 @@
 | # | 重要度 | ファイル | 内容 | 状態 |
 |---|---|---|---|---|
 | BUG-12 | Medium | `preview.go` L281 | `json.Marshal(pkMap)` のキー順不定 → 複合PK重複検出が不安定 | ✅ 修正済 本コミット |
-| BUG-13 | Medium | `comment.go` L93/L132 | `AddComment`/`DeleteComment` が `Conn`(読取用) を使用。DOLT_COMMIT には `ConnWrite` が必要 | ✅ 修正済 本コミット |
-| BUG-14 | Medium | `BatchGenerateModal.tsx` L27 | `find` で最初の PK 列のみ取得 → 複合PKテーブルで `template_pk` が不完全 | ✅ 修正済 本コミット |
+| BUG-13 | Medium | `comment.go` L93/L132 | `AddComment`/`DeleteComment` が `Conn`(読取用) を使用。DOLT_COMMIT には `ConnWrite` が必要 | ✅ 修正済 `cbf139c` |
+| BUG-14 | Medium | `BatchGenerateModal.tsx` L27 | `find` で最初の PK 列のみ取得 → 複合PKテーブルで `template_pk` が不完全 | ✅ 修正済 `cbf139c` |
+
+### Round 4 (DBコネクションセッション深部監査)
+
+| # | 重要度 | ファイル | 内容 | 状態 |
+|---|---|---|---|---|
+| BUG-15 | **High** | `request.go` L46 | `SubmitRequest` が `DOLT_MERGE`/`DOLT_TAG` 等の書き込み操作を行うのに読取用 `Conn` (revision DB) を使用していた（トランザクション不完全リスク） | ✅ 修正済 本コミット |
 
 ---
 

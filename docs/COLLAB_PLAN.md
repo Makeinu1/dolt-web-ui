@@ -9,7 +9,7 @@
 ## 現在のプロジェクト状態
 
 **最終更新**: 2026-02-26
-**最終コミット**: BUG-12/13/14修正コミット (本ブランチ最新) — 詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照
+**最終コミット**: BUG-15修正コミット (本ブランチ最新) — 詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
@@ -53,9 +53,10 @@ git push origin master
 | **BUG-3/4修正** | PK_COLLISION定数追加 + mainGuard audit保護統一 | `787a9db` |
 | **BUG-5/7/9修正** | conflict.go/sync.go SQL injection防止 (validateRef追加) | `787a9db` |
 | **BUG-10/11修正** | TS PreviewCloneRequest vary_column/new_values追加 + constraint_violations optional化 | `dd7e69f` |
-| **BUG-12修正** | preview.go PreviewBulkUpdate — pkMap JSON正規化(複合PK重複検出安定化) | 最新コミット |
-| **BUG-13修正** | comment.go AddComment/DeleteComment を ConnWrite (書き込みセッション) に変更 | 最新コミット |
-| **BUG-14修正** | BatchGenerateModal — pkCols.filter で全PK列取得・template_pk全列送信 | 最新コミット |
+| **BUG-12修正** | preview.go PreviewBulkUpdate — pkMap JSON正規化(複合PK重複検出安定化) | `cbf139c` |
+| **BUG-13修正** | comment.go AddComment/DeleteComment を ConnWrite (書き込みセッション) に変更 | `cbf139c` |
+| **BUG-14修正** | BatchGenerateModal — pkCols.filter で全PK列取得・template_pk全列送信 | `cbf139c` |
+| **BUG-15修正** | request.go SubmitRequest — DOLT_MERGE/TAG実行を Conn から ConnWrite に変更し安全な書き込みセッション確保 | 最新コミット |
 
 ---
 
@@ -93,7 +94,7 @@ git push origin master
 | P7 | 100万行対応 | ✅ | サーバーサイドページネーション + ストリーミング |
 | P8 | ブランチロック | ✅ | req/タグ存在時に commit/revert/sync を HTTP 423 で拒否 — 改修2 |
 | — | 複合PK安全性 | ✅ | BUG-1/2/12/14修正済み。P1〜P8は複合PK変更で毀損されないことを3ラウンド静的証明済み（2026-02-26）|
-| — | QA状況 | ✅ | 全14バグ修正済み。詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照 |
+| — | QA状況 | ✅ | 全4ラウンド完了。全15バグ修正済み。`go vet`/`tsc` ゼロエラー。詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照 |
 
 ---
 
