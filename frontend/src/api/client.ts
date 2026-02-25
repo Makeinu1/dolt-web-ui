@@ -353,7 +353,7 @@ export const exportDiffZip = async (
   const res = await fetch(`${API_BASE}/diff/export-zip${qs}`);
   if (!res.ok) {
     const error = await res.json().catch(() => ({ code: "INTERNAL", message: res.statusText }));
-    throw error;
+    throw new ApiError(res.status, error);
   }
   const cd = res.headers.get("Content-Disposition") ?? "";
   const match = cd.match(/filename="([^"]+)"/);

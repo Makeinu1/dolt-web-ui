@@ -221,8 +221,8 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 // ApproveRequest performs a regular (non-squash) merge of work branch into main.
 // Removes freeze gate to enable parallel merges, relying on Dolt's cell-level 3-way merge.
 func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) (*model.ApproveResponse, error) {
-	// Step 0: Get request tag info
-	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
+	// Step 0: Get request tag info (BUG-18 fix: use ConnWrite for consistency with other write ops)
+	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}

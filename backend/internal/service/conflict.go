@@ -135,6 +135,11 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 	}
 	defer conn.Close()
 
+	// Step -1: Branch lock check (BUG-16 fix)
+	if apiErr := checkBranchLocked(ctx, conn, req.BranchName); apiErr != nil {
+		return nil, apiErr
+	}
+
 	// Step 0: expected_head check
 	var currentHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {

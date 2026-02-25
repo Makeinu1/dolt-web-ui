@@ -148,7 +148,7 @@ export function ConflictView({ expectedHead, onResolved }: ConflictViewProps) {
                 )}
               </td>
               <td style={{ textAlign: "center", padding: "6px 8px" }}>
-                {c.constraint_violations > 0 ? (
+                {(c.constraint_violations ?? 0) > 0 ? (
                   <span className="badge badge-danger">
                     {c.constraint_violations}
                   </span>

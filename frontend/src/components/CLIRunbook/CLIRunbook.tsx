@@ -67,7 +67,7 @@ CALL DOLT_MERGE('--abort');`;
       // Try to get conflicts — if empty, issue is resolved
       const conflicts = await api.getConflicts(targetId, dbName, branchName);
       const hasSchemaConflicts = conflicts.some((c) => c.schema_conflicts > 0);
-      const hasConstraintViolations = conflicts.some((c) => c.constraint_violations > 0);
+      const hasConstraintViolations = conflicts.some((c) => (c.constraint_violations ?? 0) > 0);
 
       if (hasSchemaConflicts) {
         setBaseState("SchemaConflictDetected");
