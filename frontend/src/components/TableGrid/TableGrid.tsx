@@ -285,14 +285,15 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
 
   // Cell click handler — notifies parent of selected cell for comment panel
   const onCellClicked = useCallback((event: CellClickedEvent) => {
-    if (!onCellSelected || !pkCol || !event.data) {
+    if (!onCellSelected || pkCols.length === 0 || !event.data) {
       onCellSelected?.(null);
       return;
     }
     const colName = event.column.getColDef().field ?? "";
-    const pkVal = String((event.data as Record<string, unknown>)[pkCol.name]);
+    // pk is JSON of all PK columns for composite PK support
+    const pkVal = rowPkId(event.data as Record<string, unknown>);
     onCellSelected({ table: tableName, pk: pkVal, column: colName });
-  }, [onCellSelected, pkCol, tableName]);
+  }, [onCellSelected, pkCols, rowPkId, tableName]);
 
   // Apply server-side PK filter when filterByPk prop changes
   useEffect(() => {
