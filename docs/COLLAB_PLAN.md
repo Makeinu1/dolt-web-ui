@@ -9,29 +9,18 @@
 ## 現在のプロジェクト状態
 
 **最終更新**: 2026-02-26
-**最終コミット**: BUG-15修正コミット (本ブランチ最新) — 詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照
+**最終コミット**: `dcb4230` — BUG-16/17/18修正 + TS型修正 + リリースビルド同梱
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
 
 ## 実装キュー（優先順位順）
 
-### 次のタスク: バイナリビルド＋フルリリース手順
+### 次のタスク: なし（全修正完了）
 
-改修3・4の変更はフロントエンドを含む。本番反映には以下が必要:
+BUG-16/17/18 の修正＋リリースビルドは `dcb4230` でプッシュ済み。
 
-```bash
-cd frontend && npm run build
-rm -rf ../backend/cmd/server/static && cp -r dist ../backend/cmd/server/static
-find ../backend/cmd/server/static -name $'Icon\r' -delete
-cd ../backend && go build -o ../dist/dolt-web-ui ./cmd/server
-GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server
-git add -f dist/dolt-web-ui dist/dolt-web-ui-linux-amd64
-git commit -m "chore: リリースビルド — 改修3+4 フロントエンド同梱"
-git push origin master
-```
-
-> **注意**: フロントエンドの変更(ActivityLog等)は npm run build で static/ に反映しないとバイナリに含まれない。
+次に追加したい機能や改修がある場合は、このセクションに記載してください。
 
 ---
 
@@ -56,7 +45,11 @@ git push origin master
 | **BUG-12修正** | preview.go PreviewBulkUpdate — pkMap JSON正規化(複合PK重複検出安定化) | `cbf139c` |
 | **BUG-13修正** | comment.go AddComment/DeleteComment を ConnWrite (書き込みセッション) に変更 | `cbf139c` |
 | **BUG-14修正** | BatchGenerateModal — pkCols.filter で全PK列取得・template_pk全列送信 | `cbf139c` |
-| **BUG-15修正** | request.go SubmitRequest — DOLT_MERGE/TAG実行を Conn から ConnWrite に変更し安全な書き込みセッション確保 | 最新コミット |
+| **BUG-15修正** | request.go SubmitRequest — DOLT_MERGE/TAG実行を Conn から ConnWrite に変更し安全な書き込みセッション確保 | `1754c03` |
+| **BUG-16修正** | conflict.go ResolveConflicts — checkBranchLocked 追加（P8違反修正） | `dcb4230` |
+| **BUG-17修正** | api/client.ts exportDiffZip — throw error → throw new ApiError(res.status, error) | `dcb4230` |
+| **BUG-18修正** | request.go ApproveRequest — ConnDB → ConnWrite パターン統一 | `dcb4230` |
+| **TS型修正** | CLIRunbook.tsx / ConflictView.tsx — constraint_violations optional対応（?? 0） | `dcb4230` |
 
 ---
 
@@ -94,7 +87,7 @@ git push origin master
 | P7 | 100万行対応 | ✅ | サーバーサイドページネーション + ストリーミング |
 | P8 | ブランチロック | ✅ | req/タグ存在時に commit/revert/sync を HTTP 423 で拒否 — 改修2 |
 | — | 複合PK安全性 | ✅ | BUG-1/2/12/14修正済み。P1〜P8は複合PK変更で毀損されないことを3ラウンド静的証明済み（2026-02-26）|
-| — | QA状況 | ✅ | 全4ラウンド完了。全15バグ修正済み。`go vet`/`tsc` ゼロエラー。詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照 |
+| — | QA状況 | ✅ | 全5ラウンド完了。全18バグ修正済み。`go vet`/`tsc` ゼロエラー。詳細は [docs/QA_REPORT.md](QA_REPORT.md) 参照 |
 
 ---
 

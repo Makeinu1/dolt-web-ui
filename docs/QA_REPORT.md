@@ -1,8 +1,8 @@
 # QA レポート — Dolt Web UI
 
-> **共同開発者向け**: このドキュメントはコードベース全体を対象に実施した静的 QA の結果です。  
-> バグ発見・修正・安全プロパティ証明のプロセスを記録しています。  
-> 最終更新: 2026-02-26 | 最終コミット: 修正後のコミットを参照
+> **共同開発者向け**: このドキュメントはコードベース全体を対象に実施した静的 QA の結果です。
+> バグ発見・修正・安全プロパティ証明のプロセスを記録しています。
+> 最終更新: 2026-02-26 | 最終コミット: `dcb4230`
 
 ---
 
@@ -13,7 +13,7 @@
 | 対象 | バックエンド 29 ファイル / フロントエンド 25 ファイル（全件） |
 | 手法 | 静的解析 (`go vet`, `tsc --noEmit`) + 行単位精読 (4ラウンド) |
 | ツール | go vet / go build / npx tsc --noEmit |
-| 結果 | バグ 15 件発見・修正済み / 安全プロパティ P1〜P8 全証明済み |
+| 結果 | バグ 18 件発見・修正済み / 安全プロパティ P1〜P8 全証明済み |
 
 ---
 
@@ -28,7 +28,7 @@
 | P5 | **作者追跡** | ✅ | Dolt commit metadata に DB 接続 user が記録。`ActivityLog` で横断検索可能 |
 | P6 | **選択的マージ** | ✅ | `workBranchRe = ^wi/[A-Za-z0-9._-]+/[0-9]{2}$` で CreateBranch 時にパターン強制 |
 | P7 | **100万行対応** | ✅ | `GetTableRows` は LIMIT/OFFSET + streaming JSON encoding。`DiffTable` も LIMIT/OFFSET |
-| P8 | **ブランチロック** | ✅ | `checkBranchLocked` が `Commit`/`Sync`/`Revert` 全経路で `req/` タグ存在確認 → HTTP 423 |
+| P8 | **ブランチロック** | ✅ | `checkBranchLocked` が `Commit`/`Sync`/`Revert`/`ResolveConflicts` 全経路で `req/` タグ存在確認 → HTTP 423（BUG-16修正後） |
 
 ---
 
@@ -67,7 +67,16 @@
 
 | # | 重要度 | ファイル | 内容 | 状態 |
 |---|---|---|---|---|
-| BUG-15 | **High** | `request.go` L46 | `SubmitRequest` が `DOLT_MERGE`/`DOLT_TAG` 等の書き込み操作を行うのに読取用 `Conn` (revision DB) を使用していた（トランザクション不完全リスク） | ✅ 修正済 本コミット |
+| BUG-15 | **High** | `request.go` L46 | `SubmitRequest` が `DOLT_MERGE`/`DOLT_TAG` 等の書き込み操作を行うのに読取用 `Conn` (revision DB) を使用していた（トランザクション不完全リスク） | ✅ 修正済 `1754c03` |
+
+### Round 5 (独立 QA エージェント — P8 深部審査)
+
+| # | 重要度 | ファイル | 内容 | 状態 |
+|---|---|---|---|---|
+| BUG-16 | **High** | `conflict.go` L132 | `ResolveConflicts()` に `checkBranchLocked()` が欠落 — Submit中でもコンフリクト解決+コミットが可能（P8違反） | ✅ 修正済 `dcb4230` |
+| BUG-17 | Low | `api/client.ts` L356 | `exportDiffZip()` が `throw error`（生object）— 他の全API関数は `throw new ApiError(...)` を使用。ZIP失敗時のsilent failure | ✅ 修正済 `dcb4230` |
+| BUG-18 | Low | `request.go` L225 | `ApproveRequest()` が `ConnDB()` を使用（ConnWrite ポリシーと不整合。機能的影響なし） | ✅ 修正済 `dcb4230` |
+| TS型修正 | Low | `CLIRunbook.tsx` / `ConflictView.tsx` | `constraint_violations` optional 化（BUG-11由来）に対して利用側が未対応（TSビルドエラー） | ✅ 修正済 `dcb4230` |
 
 ---
 
@@ -83,9 +92,10 @@
 ## 静的解析最終結果
 
 ```
-go vet ./...    ✅ ゼロエラー
-go build ./...  ✅ ゼロエラー
-tsc --noEmit    ✅ ゼロエラー
+go vet ./...    ✅ ゼロエラー (dcb4230 時点)
+go build ./...  ✅ ゼロエラー (dcb4230 時点)
+tsc --noEmit    ✅ ゼロエラー (dcb4230 時点)
+npm run build   ✅ 成功 (dcb4230 時点)
 ```
 
 ---
