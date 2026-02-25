@@ -219,7 +219,9 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 // HistoryCommits returns the commit log for a branch.
 // filter: "all" (default), "merges_only" (main: merge commits only),
 // "exclude_auto_merge" (work branch: exclude auto-sync merges).
-func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter string) ([]model.HistoryCommit, error) {
+// keyword: substring match on message (empty = no filter).
+// fromDate/toDate: ISO date "YYYY-MM-DD" inclusive range (empty = no filter).
+func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter, keyword, fromDate, toDate string) ([]model.HistoryCommit, error) {
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -228,43 +230,66 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	offset := (page - 1) * pageSize
 
-	var query string
+	// Build base FROM clause based on filter
+	var baseFrom string
+	var args []interface{}
+
 	switch filter {
 	case "merges_only":
 		// For main branch: show only merge commits (2+ parents)
-		query = `SELECT l.commit_hash, l.committer, l.message, l.date
-			FROM dolt_log AS l
+		baseFrom = `dolt_log AS l
 			INNER JOIN (
 				SELECT commit_hash FROM dolt_commit_ancestors
 				GROUP BY commit_hash HAVING COUNT(*) > 1
-			) AS m ON l.commit_hash = m.commit_hash
-			ORDER BY l.date DESC LIMIT ? OFFSET ?`
+			) AS m ON l.commit_hash = m.commit_hash`
 	case "exclude_auto_merge":
 		// For work branches: exclude auto-generated merge commits
-		query = `SELECT commit_hash, committer, message, date
-			FROM dolt_log
-			WHERE message NOT LIKE 'Merge branch%'
-			  AND message != 'Merge main with conflict resolution'
-			ORDER BY date DESC LIMIT ? OFFSET ?`
+		baseFrom = `dolt_log AS l`
 	case "exclude_comments":
-		// Hide [comment] commits from history view
-		query = `SELECT commit_hash, committer, message, date
-			FROM dolt_log
-			WHERE message NOT LIKE '[comment]%'
-			ORDER BY date DESC LIMIT ? OFFSET ?`
+		baseFrom = `dolt_log AS l`
 	case "exclude_auto_merge_and_comments":
-		// Combine: exclude both auto-merge and [comment] commits
-		query = `SELECT commit_hash, committer, message, date
-			FROM dolt_log
-			WHERE message NOT LIKE 'Merge branch%'
-			  AND message != 'Merge main with conflict resolution'
-			  AND message NOT LIKE '[comment]%'
-			ORDER BY date DESC LIMIT ? OFFSET ?`
+		baseFrom = `dolt_log AS l`
 	default:
-		query = "SELECT commit_hash, committer, message, date FROM dolt_log ORDER BY date DESC LIMIT ? OFFSET ?"
+		baseFrom = `dolt_log AS l`
 	}
 
-	rows, err := conn.QueryContext(ctx, query, pageSize, offset)
+	// Build WHERE conditions
+	var conditions []string
+
+	switch filter {
+	case "exclude_auto_merge":
+		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'")
+	case "exclude_comments":
+		conditions = append(conditions, "l.message NOT LIKE '[comment]%'")
+	case "exclude_auto_merge_and_comments":
+		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'", "l.message NOT LIKE '[comment]%'")
+	}
+
+	// Optional keyword filter
+	if keyword != "" {
+		conditions = append(conditions, "l.message LIKE ?")
+		args = append(args, "%"+keyword+"%")
+	}
+
+	// Optional date range filters
+	if fromDate != "" {
+		conditions = append(conditions, "l.date >= ?")
+		args = append(args, fromDate)
+	}
+	if toDate != "" {
+		conditions = append(conditions, "l.date <= ?")
+		args = append(args, toDate+" 23:59:59")
+	}
+
+	// Assemble query
+	query := fmt.Sprintf("SELECT l.commit_hash, l.committer, l.message, l.date FROM %s", baseFrom)
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY l.date DESC LIMIT ? OFFSET ?"
+	args = append(args, pageSize, offset)
+
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}

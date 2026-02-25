@@ -3,7 +3,9 @@ import { CommitDialog } from "../common/CommitDialog";
 import { HistoryTab } from "../HistoryTab/HistoryTab";
 import { CommentSearchModal } from "../CommentSearchModal/CommentSearchModal";
 import { CellCommentPanel } from "../CellCommentPanel/CellCommentPanel";
+import { ActivityLog } from "../ActivityLog/ActivityLog";
 import type { SelectedCellInfo } from "../TableGrid/TableGrid";
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +24,7 @@ export interface ModalManagerProps {
     showDeleteConfirm: boolean;
     showCommentPanel: boolean;
     showCommentSearch: boolean;
+    showActivityLog: boolean;
 
     // Closers
     onCloseCommit: () => void;
@@ -31,6 +34,7 @@ export interface ModalManagerProps {
     onCloseDeleteConfirm: () => void;
     onCloseCommentPanel: () => void;
     onCloseCommentSearch: () => void;
+    onCloseActivityLog: () => void;
 
     // Callbacks
     onCommitSuccess: (newHash: string) => void;
@@ -64,6 +68,7 @@ export function ModalManager({
     showDeleteConfirm,
     showCommentPanel,
     showCommentSearch,
+    showActivityLog,
     onCloseCommit,
     onCloseSubmit,
     onCloseApprover,
@@ -71,6 +76,7 @@ export function ModalManager({
     onCloseDeleteConfirm,
     onCloseCommentPanel,
     onCloseCommentSearch,
+    onCloseActivityLog,
     onCommitSuccess,
     onSubmitted,
     onDeleteConfirm,
@@ -179,6 +185,11 @@ export function ModalManager({
                     onClose={onCloseCommentSearch}
                     onNavigate={onCommentNavigate}
                 />
+            )}
+
+            {/* Activity Log Modal */}
+            {showActivityLog && (
+                <ActivityLog onClose={onCloseActivityLog} />
             )}
         </>
     );

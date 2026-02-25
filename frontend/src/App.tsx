@@ -56,13 +56,16 @@ function App() {
   const [showCommentPanel, setShowCommentPanel] = useState(false);
   const [commentRefreshKey, setCommentRefreshKey] = useState(0);
   const [showCommentSearch, setShowCommentSearch] = useState(false);
+  const [showActivityLog, setShowActivityLog] = useState(false);
   const [filterByPk, setFilterByPk] = useState<string | null>(null);
+
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showCommentSearch;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showCommentSearch || showActivityLog;
+
   useEffect(() => {
     if (anyModalOpen) {
       document.body.classList.add("modal-open");
@@ -369,6 +372,12 @@ function App() {
       onClick: () => { setShowCommentSearch(true); setShowOverflow(false); },
     });
 
+    // Activity Log
+    items.push({
+      label: "📜 変更ログ検索...",
+      onClick: () => { setShowActivityLog(true); setShowOverflow(false); },
+    });
+
     // Delete Branch (non-main only)
     if (!isMain && branchName) {
       items.push({
@@ -551,6 +560,7 @@ function App() {
         showDeleteConfirm={showDeleteConfirm}
         showCommentPanel={showCommentPanel}
         showCommentSearch={showCommentSearch}
+        showActivityLog={showActivityLog}
         onCloseCommit={() => setShowCommit(false)}
         onCloseSubmit={() => setShowSubmit(false)}
         onCloseApprover={() => setShowApprover(false)}
@@ -558,6 +568,7 @@ function App() {
         onCloseDeleteConfirm={() => setShowDeleteConfirm(false)}
         onCloseCommentPanel={() => setShowCommentPanel(false)}
         onCloseCommentSearch={() => setShowCommentSearch(false)}
+        onCloseActivityLog={() => setShowActivityLog(false)}
         onCommitSuccess={onCommitSuccess}
         onSubmitted={() => setRequestCount(requestCount + 1)}
         onDeleteConfirm={handleDeleteBranch}

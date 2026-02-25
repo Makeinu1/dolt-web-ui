@@ -176,7 +176,10 @@ export const getHistoryCommits = (
   branchName: string,
   page = 1,
   pageSize = 20,
-  filter = ""
+  filter = "",
+  keyword = "",
+  fromDate = "",
+  toDate = ""
 ) =>
   request<import("../types/api").HistoryCommit[]>(
     `/history/commits${queryString({
@@ -185,7 +188,10 @@ export const getHistoryCommits = (
       branch_name: branchName,
       page: String(page),
       page_size: String(pageSize),
-      filter,
+      ...(filter ? { filter } : {}),
+      ...(keyword ? { keyword } : {}),
+      ...(fromDate ? { from_date: fromDate } : {}),
+      ...(toDate ? { to_date: toDate } : {}),
     })}`
   );
 

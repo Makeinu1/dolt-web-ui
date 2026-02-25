@@ -128,9 +128,12 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	filter := r.URL.Query().Get("filter") // "all" | "merges_only" | "exclude_auto_merge"
+	filter := r.URL.Query().Get("filter")      // "all" | "merges_only" | "exclude_auto_merge"
+	keyword := r.URL.Query().Get("keyword")    // substring match on message
+	fromDate := r.URL.Query().Get("from_date") // YYYY-MM-DD
+	toDate := r.URL.Query().Get("to_date")     // YYYY-MM-DD
 
-	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, filter)
+	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, filter, keyword, fromDate, toDate)
 	if err != nil {
 		handleServiceError(w, err)
 		return
