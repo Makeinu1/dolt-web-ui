@@ -259,14 +259,20 @@ type FilterCondition struct {
 
 // PreviewCloneRequest represents a clone preview request.
 type PreviewCloneRequest struct {
-	TargetID     string                 `json:"target_id"`
-	DBName       string                 `json:"db_name"`
-	BranchName   string                 `json:"branch_name"`
-	Table        string                 `json:"table"`
-	TemplatePK   map[string]interface{} `json:"template_pk"`
-	NewPKs       []interface{}          `json:"new_pks"`
-	ChangeColumn string                 `json:"change_column,omitempty"`
-	ChangeValue  interface{}            `json:"change_value,omitempty"`
+	TargetID   string                 `json:"target_id"`
+	DBName     string                 `json:"db_name"`
+	BranchName string                 `json:"branch_name"`
+	Table      string                 `json:"table"`
+	TemplatePK map[string]interface{} `json:"template_pk"`
+	// VaryColumn: the PK column whose value varies across cloned rows.
+	// For single-PK tables this can be omitted (auto-detected).
+	VaryColumn string `json:"vary_column,omitempty"`
+	// NewValues: the new values for VaryColumn in each cloned row.
+	NewValues []interface{} `json:"new_values,omitempty"`
+	// NewPKs is a deprecated alias for NewValues (single-PK backward compat).
+	NewPKs       []interface{} `json:"new_pks,omitempty"`
+	ChangeColumn string        `json:"change_column,omitempty"`
+	ChangeValue  interface{}   `json:"change_value,omitempty"`
 }
 
 // PreviewBatchGenerateRequest represents a batch generate preview request.
@@ -276,7 +282,9 @@ type PreviewBatchGenerateRequest struct {
 	BranchName   string                 `json:"branch_name"`
 	Table        string                 `json:"table"`
 	TemplatePK   map[string]interface{} `json:"template_pk"`
-	NewPKs       []interface{}          `json:"new_pks"`
+	VaryColumn   string                 `json:"vary_column,omitempty"`
+	NewValues    []interface{}          `json:"new_values,omitempty"`
+	NewPKs       []interface{}          `json:"new_pks,omitempty"`
 	ChangeColumn string                 `json:"change_column,omitempty"`
 	ChangeValues []interface{}          `json:"change_values,omitempty"`
 }
