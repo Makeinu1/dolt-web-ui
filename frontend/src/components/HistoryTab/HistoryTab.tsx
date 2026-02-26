@@ -444,8 +444,6 @@ function CommitLog({ targetId, dbName, branchName }: {
   const [commitDiff, setCommitDiff] = useState<DiffSummaryEntry[]>([]);
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [showComments, setShowComments] = useState(false);
-  const [revertingHash, setRevertingHash] = useState<string | null>(null);
-  const [revertError, setRevertError] = useState<string | null>(null);
   const pageSize = 20;
 
   useEffect(() => {
@@ -492,35 +490,7 @@ function CommitLog({ targetId, dbName, branchName }: {
     }
   };
 
-  const handleRevert = async (hash: string) => {
-    if (!window.confirm("このコミットを復元(Revert)しますか？\n（現在のワークブランチに新しいリバートコミットが追加されます）")) return;
 
-    setRevertingHash(hash);
-    setRevertError(null);
-    try {
-      // Fetch current HEAD to pass as expected_head
-      const headRes = await api.getHead(targetId, dbName, branchName);
-
-      await api.revert({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        expected_head: headRes.hash,
-        revert_hash: hash,
-      });
-
-      // Reload commits to show the new revert commit
-      setPage(1);
-      const res = await api.getHistoryCommits(targetId, dbName, branchName, 1, pageSize, "exclude_auto_merge");
-      setCommits(res || []);
-      alert("正常に復元されました。");
-    } catch (err) {
-      const e = err as { error?: { message?: string } };
-      setRevertError(e?.error?.message || "復元に失敗しました");
-    } finally {
-      setRevertingHash(null);
-    }
-  };
 
   return (
     <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: 8, marginTop: 12 }}>
@@ -577,23 +547,6 @@ function CommitLog({ targetId, dbName, branchName }: {
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                       {c.author}
                     </span>
-                    {branchName !== "main" && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleRevert(c.hash); }}
-                        disabled={revertingHash !== null}
-                        style={{
-                          fontSize: 10,
-                          padding: "2px 8px",
-                          background: "#fff",
-                          border: "1px solid #d0d0d8",
-                          borderRadius: 4,
-                          color: "#555",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {revertingHash === c.hash ? "復元中..." : "復元(Revert)"}
-                      </button>
-                    )}
                   </div>
                   {/* Per-commit DiffSummary */}
                   {expandedCommit === c.hash && (
@@ -629,11 +582,7 @@ function CommitLog({ targetId, dbName, branchName }: {
             </div>
           )}
 
-          {revertError && (
-            <div style={{ padding: "8px 16px", background: "#fee2e2", color: "#991b1b", fontSize: 12, marginTop: 8 }}>
-              {revertError}
-            </div>
-          )}
+
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, justifyContent: "center" }}>
             <button disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)} style={{ fontSize: 12, padding: "3px 10px" }}>

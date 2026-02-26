@@ -119,20 +119,6 @@ type CommitResponse struct {
 	Hash string `json:"hash"`
 }
 
-// RevertRequest represents a request to revert a commit.
-type RevertRequest struct {
-	TargetID     string `json:"target_id"`
-	DBName       string `json:"db_name"`
-	BranchName   string `json:"branch_name"`
-	ExpectedHead string `json:"expected_head"`
-	RevertHash   string `json:"revert_hash"`
-}
-
-// RevertResponse represents the result of a revert.
-type RevertResponse struct {
-	Hash string `json:"hash"`
-}
-
 // SyncRequest represents a sync (merge main → work) operation.
 type SyncRequest struct {
 	TargetID     string `json:"target_id"`

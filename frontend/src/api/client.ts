@@ -134,12 +134,6 @@ export const sync = (body: import("../types/api").SyncRequest) =>
     body: JSON.stringify(body),
   });
 
-export const revert = (body: import("../types/api").RevertRequest) =>
-  request<import("../types/api").RevertResponse>("/revert", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
 // Diff & History
 export const getDiffTable = (
   targetId: string,

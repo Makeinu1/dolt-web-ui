@@ -89,17 +89,7 @@ export interface SyncResponse {
   hash: string;
 }
 
-export interface RevertRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  expected_head: string;
-  revert_hash: string;
-}
 
-export interface RevertResponse {
-  hash: string;
-}
 
 export interface DiffRow {
   diff_type: "added" | "modified" | "removed";
