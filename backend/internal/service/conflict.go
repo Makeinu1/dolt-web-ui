@@ -162,13 +162,13 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 	// Step 2: Schema conflict pre-check
 	// BUG-7 fix: validate branchName before SQL interpolation
 	if err := validateRef("branch", req.BranchName); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid branch name"}
 	}
 	previewQuery := fmt.Sprintf("SELECT * FROM DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY('%s', 'main')", req.BranchName)
 	previewRows, err := conn.QueryContext(ctx, previewQuery)
 	if err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to preview conflicts: %w", err)
 	}
 	// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns 3 columns:
@@ -178,12 +178,12 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 		var dataConflicts, schemaConflicts int
 		if err := previewRows.Scan(&tableName, &dataConflicts, &schemaConflicts); err != nil {
 			previewRows.Close()
-			conn.ExecContext(ctx, "ROLLBACK")
+			conn.ExecContext(context.Background(), "ROLLBACK")
 			return nil, fmt.Errorf("failed to scan preview: %w", err)
 		}
 		if schemaConflicts > 0 {
 			previewRows.Close()
-			conn.ExecContext(ctx, "ROLLBACK")
+			conn.ExecContext(context.Background(), "ROLLBACK")
 			return nil, &model.APIError{
 				Status:  409,
 				Code:    model.CodeSchemaConflictsPresent,
@@ -200,7 +200,7 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 	var mergeMessage string
 	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main', '--no-ff')").Scan(&mergeHash, &fastForward, &mergeConflicts, &mergeMessage)
 	if err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to merge: %w", err)
 	}
 
@@ -208,7 +208,7 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 		// No conflicts, merge succeeded
 		var newHead string
 		if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {
-			conn.ExecContext(ctx, "ROLLBACK")
+			conn.ExecContext(context.Background(), "ROLLBACK")
 			return nil, fmt.Errorf("failed to get new HEAD: %w", err)
 		}
 		return &model.CommitResponse{Hash: newHead}, nil
@@ -221,18 +221,18 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 	}
 	resolveQuery := fmt.Sprintf("CALL DOLT_CONFLICTS_RESOLVE('%s', '%s')", resolveArg, req.Table)
 	if _, err := conn.ExecContext(ctx, resolveQuery); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to resolve conflicts: %w", err)
 	}
 
 	// Step 5: Check for lingering conflicts
 	var remaining int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_conflicts").Scan(&remaining); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to check remaining conflicts: %w", err)
 	}
 	if remaining > 0 {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, &model.APIError{
 			Status: 409,
 			Code:   model.CodeMergeConflictsPresent,
@@ -242,12 +242,12 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 
 	// Step 6: Constraint violation check
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_VERIFY_CONSTRAINTS()"); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to verify constraints: %w", err)
 	}
 	var violationCount int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_constraint_violations").Scan(&violationCount); err == nil && violationCount > 0 {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, &model.APIError{
 			Status:  409,
 			Code:    model.CodeConstraintViolationsPresent,
@@ -258,7 +258,7 @@ func (s *Service) ResolveConflicts(ctx context.Context, req model.ResolveConflic
 
 	// Step 7: DOLT_COMMIT
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('-am', 'Merge main with conflict resolution')"); err != nil {
-		conn.ExecContext(ctx, "ROLLBACK")
+		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 

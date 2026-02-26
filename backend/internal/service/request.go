@@ -69,7 +69,7 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 	if _, err := conn.ExecContext(ctx, "SET autocommit=1"); err != nil {
 		return nil, fmt.Errorf("failed to set autocommit: %w", err)
 	}
-	defer conn.ExecContext(ctx, "SET autocommit=0")
+	defer conn.ExecContext(context.Background(), "SET autocommit=0")
 
 	var syncHash string
 	var syncFF, syncConflicts int
@@ -266,7 +266,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		return nil, fmt.Errorf("failed to set autocommit: %w", err)
 	}
 	// Reset autocommit to prevent pool pollution (sync.go pattern)
-	defer conn.ExecContext(ctx, "SET autocommit=0")
+	defer conn.ExecContext(context.Background(), "SET autocommit=0")
 
 	// DOLT_MERGE with parameterized query (prevents SQL injection).
 	// With autocommit=1, Dolt auto-rolls back conflicting merges and returns error 1105
@@ -315,19 +315,24 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
 	}
 
+	// Step 3b: Post-merge cleanup uses context.Background() to survive HTTP disconnect.
+	// If the client disconnects after merge succeeds, cleanup must still complete.
+	bgCtx := context.Background()
+
 	// Audit tag: merged/<WorkItem>/<Round>
 	mergedTag := "merged/" + strings.TrimPrefix(req.RequestID, "req/")
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag); err != nil {
+	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag); err != nil {
 		log.Printf("ERROR: audit tag creation failed for %s: %v", mergedTag, err)
 	}
 
-	// Delete request tag
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
+	// Delete request tag (critical: if this fails, branch stays locked)
+	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
 		log.Printf("ERROR: req tag deletion failed for %s: %v", req.RequestID, err)
+		return nil, fmt.Errorf("failed to delete request tag %s (merge succeeded but cleanup failed): %w", req.RequestID, err)
 	}
 
 	// Delete old work branch
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", workBranch); err != nil {
+	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", workBranch); err != nil {
 		log.Printf("ERROR: branch deletion failed for %s: %v", workBranch, err)
 	}
 
@@ -345,7 +350,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	nextBranch := fmt.Sprintf("wi/%s/%02d", item, round+1)
 
 	// Create next branch from current main HEAD
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
+	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
 		log.Printf("ERROR: next branch creation failed for %s: %v", nextBranch, err)
 		// Non-fatal: return success with empty next_branch
 		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil

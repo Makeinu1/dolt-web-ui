@@ -54,7 +54,7 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 		return nil, fmt.Errorf("failed to set autocommit: %w", err)
 	}
 	// Reset autocommit when connection returns to pool to prevent pool pollution.
-	defer conn.ExecContext(ctx, "SET autocommit=0")
+	defer conn.ExecContext(context.Background(), "SET autocommit=0")
 
 	var mergeHash string
 	var fastForward, mergeConflicts int
