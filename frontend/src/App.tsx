@@ -53,13 +53,17 @@ function App() {
   const [showCommentPanel, setShowCommentPanel] = useState(false);
   const [showMergeLog, setShowMergeLog] = useState(false);
   const [overwrittenTables, setOverwrittenTables] = useState<OverwrittenTable[]>([]);
+  const [showAuditMerge, setShowAuditMerge] = useState(false);
+  const [auditMerging, setAuditMerging] = useState(false);
 
 
   const isMain = branchName === "main";
+  const isAudit = branchName === "audit";
+  const isProtected = isMain || isAudit;
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showAuditMerge;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -186,7 +190,7 @@ function App() {
       } else {
         setBaseState("Idle");
       }
-      setError(message || "同期に失敗しました");
+      setError("同期に失敗しました" + (message ? ": " + message : ""));
     }
   };
 
@@ -199,8 +203,29 @@ function App() {
     }
   };
 
+  const handleAuditMerge = async () => {
+    setAuditMerging(true);
+    try {
+      const result = await api.auditMerge({
+        target_id: targetId,
+        db_name: dbName,
+      });
+      setExpectedHead(result.hash);
+      setShowAuditMerge(false);
+      setRefreshKey((k) => k + 1);
+      // Switch to main after successful merge
+      setBranch("main");
+      triggerBranchRefresh();
+    } catch (err: unknown) {
+      const msg = err instanceof ApiError ? err.message : "";
+      setError("audit→main同期に失敗しました" + (msg ? ": " + msg : ""));
+    } finally {
+      setAuditMerging(false);
+    }
+  };
+
   const handleDeleteBranch = async () => {
-    if (!branchName || branchName === "main") return;
+    if (!branchName || isProtected) return;
     setDeleting(true);
     try {
       await api.deleteBranch({
@@ -212,8 +237,8 @@ function App() {
       triggerBranchRefresh();
       setShowDeleteConfirm(false);
     } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "ブランチの削除に失敗しました");
+      const msg = err instanceof ApiError ? err.message : "";
+      setError("ブランチの削除に失敗しました" + (msg ? ": " + msg : ""));
     } finally {
       setDeleting(false);
     }
@@ -255,7 +280,7 @@ function App() {
 
   // State-driven action button
   const actionButton = () => {
-    if (isMain) return null;
+    if (isProtected) return null;
     if (baseState === "StaleHeadDetected") {
       return (
         <button className="action-btn action-refresh" onClick={handleRefresh}>
@@ -286,7 +311,7 @@ function App() {
   const overflowItems = () => {
     const items: { label: string; onClick: () => void; disabled?: boolean; disabledReason?: string; danger?: boolean }[] = [];
 
-    if (!isMain) {
+    if (!isProtected) {
       // Sync
       const syncDisabled = hasDraft() || baseState === "Syncing" || baseState === "Committing" ||
         baseState === "SchemaConflictDetected" || baseState === "ConstraintViolationDetected";
@@ -329,8 +354,16 @@ function App() {
       onClick: () => { setShowMergeLog(true); setShowOverflow(false); },
     });
 
-    // Delete Branch (non-main only)
-    if (!isMain && branchName) {
+    // audit→main sync
+    if (isAudit) {
+      items.push({
+        label: "🔄 audit→main同期",
+        onClick: () => { setShowAuditMerge(true); setShowOverflow(false); },
+      });
+    }
+
+    // Delete Branch (work branches only)
+    if (!isProtected && branchName) {
       items.push({
         label: "🗑 ブランチを削除",
         onClick: () => { setShowDeleteConfirm(true); setShowOverflow(false); },
@@ -514,6 +547,27 @@ function App() {
         deleting={deleting}
         selectedCell={selectedCell}
       />
+
+      {/* Audit merge confirmation dialog */}
+      {showAuditMerge && (
+        <div className="modal-overlay" onClick={() => !auditMerging && setShowAuditMerge(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>audit→main同期</h2>
+            <p style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
+              auditブランチの全データをmainにマージします。<br />
+              <span style={{ fontSize: 12, color: "#666" }}>※メモは保護されます</span>
+            </p>
+            <div className="modal-actions">
+              <button onClick={() => setShowAuditMerge(false)} disabled={auditMerging}>
+                キャンセル
+              </button>
+              <button className="primary" onClick={handleAuditMerge} disabled={auditMerging}>
+                {auditMerging ? "同期中..." : "同期する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CLI intervention screen for fatal states */}
       <CLIRunbook />

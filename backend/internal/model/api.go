@@ -280,6 +280,19 @@ type DiffSummaryResponse struct {
 	Entries []DiffSummaryEntry `json:"entries"`
 }
 
+// --- Audit Merge ---
+
+// AuditMergeRequest represents a request to merge audit → main.
+type AuditMergeRequest struct {
+	TargetID string `json:"target_id"`
+	DBName   string `json:"db_name"`
+}
+
+// AuditMergeResponse represents the result of an audit merge.
+type AuditMergeResponse struct {
+	Hash string `json:"hash"`
+}
+
 // --- Cell Memos ---
 
 // MemoResponse represents a single cell memo (1 per cell).

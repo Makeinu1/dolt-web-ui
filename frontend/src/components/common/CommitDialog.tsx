@@ -3,6 +3,7 @@ import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 
 interface CommitDialogProps {
   expectedHead: string;
@@ -61,13 +62,13 @@ export function CommitDialog({
       onCommitSuccess(result.hash);
       onClose();
     } catch (err: unknown) {
-      const e = err as { error?: { code?: string; message?: string } };
-      if (e?.error?.code === "STALE_HEAD") {
+      if (err instanceof ApiError && err.code === "STALE_HEAD") {
         setBaseState("StaleHeadDetected");
-        setError("データが更新されています。画面を更新してやり直してください。");
+        setError("データが更新されています" + (err.message ? ": " + err.message : ""));
       } else {
         setBaseState("DraftEditing");
-        setError(e?.error?.message || "保存に失敗しました");
+        const msg = err instanceof ApiError ? err.message : "";
+        setError("保存に失敗しました" + (msg ? ": " + msg : ""));
       }
     } finally {
       setSubmitting(false);

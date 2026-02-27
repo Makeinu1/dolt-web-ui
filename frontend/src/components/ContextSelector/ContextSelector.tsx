@@ -133,11 +133,14 @@ export function ContextSelector() {
             style={{ minWidth: 120 }}
           >
             <option value="">-- ブランチ --</option>
-            {branches.map((b) => (
-              <option key={b.name} value={b.name}>
-                {b.name === "main" ? `🔒 ${b.name}` : `🌿 ${b.name}`}
-              </option>
-            ))}
+            {branches.map((b) => {
+              const icon = b.name === "main" ? "🔒" : b.name === "audit" ? "📋" : "🌿";
+              return (
+                <option key={b.name} value={b.name}>
+                  {`${icon} ${b.name}`}
+                </option>
+              );
+            })}
           </select>
 
           <button

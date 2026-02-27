@@ -333,6 +333,10 @@ Database: Test
 - 承認ワークフロー（Submit → Approve/Reject、`req/*` タグベース）
 - 承認リクエスト自動検出（アプリ起動・コンテキスト切替時に自動チェック）
 - セッション安全性（defer/ROLLBACK が HTTP 切断時も `context.Background()` で確実実行）
+- エラー表示改善（「日本語説明: 英語エラー詳細」併記フォーマット）
+- `Dolt_Description` 列の左端固定（AG Grid `pinned: 'left'`、存在する場合のみ）
+- audit→main 同期（`POST /audit-merge`、メモテーブル `_memo_*` を自動保護・復元）
+- ブランチ種別表示（🔒 main / 📋 audit / 🌿 wi/*）
 
 ### データ閲覧・比較
 - バージョン比較 HistoryTab（ブランチ HEAD 間比較のみ、コミット選択なし）
@@ -340,7 +344,7 @@ Database: Test
   - サーバーサイドページネーション（50件/ページ）
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
-- 行クローン（`vary_column` + `new_values` 方式、複合PK対応）
+- 行クローン（PK保持コピー方式 — 元行のPKをそのまま保持、`vary_column` + `new_values` レガシーモードも後方互換で維持）
 
 ### セルメモ（Phase 2: メモテーブル移行済み）
 - `_memo_{table}` 隠しテーブルでメモ管理（ユーザーのテーブル一覧に非表示）
@@ -359,6 +363,7 @@ Database: Test
 - macOS / Linux amd64 クロスコンパイル
 - Playwright ブラウザテスト（20テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
+- curl ベース統合テスト（`/tmp/dolt-e2e-4changes.sh` — 19テスト、変更1〜4カバー）
 
 ### 撤廃済み機能（簡素化計画 Phase 0〜3 で削除）
 - Revert（コミット取消）— 保存履歴を見せない方針と矛盾

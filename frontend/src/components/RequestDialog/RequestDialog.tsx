@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { RequestSummary, DiffSummaryEntry } from "../../types/api";
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
@@ -133,8 +134,8 @@ export function SubmitDialog({
       onSubmitted();
       onClose();
     } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "申請に失敗しました");
+      const msg = err instanceof ApiError ? err.message : "";
+      setError("申請に失敗しました" + (msg ? ": " + msg : ""));
     } finally {
       setSubmitting(false);
     }
@@ -225,8 +226,8 @@ function ApproveModal({
       onApproved();
       onClose();
     } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "承認に失敗しました");
+      const msg = err instanceof ApiError ? err.message : "";
+      setError("承認に失敗しました" + (msg ? ": " + msg : ""));
     } finally {
       setLoading(false);
     }
@@ -317,8 +318,8 @@ function RejectModal({
       onRejected();
       onClose();
     } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "却下に失敗しました");
+      const msg = err instanceof ApiError ? err.message : "";
+      setError("却下に失敗しました" + (msg ? ": " + msg : ""));
     } finally {
       setLoading(false);
     }

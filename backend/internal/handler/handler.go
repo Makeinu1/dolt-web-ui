@@ -56,6 +56,9 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Post("/request/approve", h.ApproveRequest)
 		r.Post("/request/reject", h.RejectRequest)
 
+		// Audit
+		r.Post("/audit-merge", h.AuditMerge)
+
 		// Cell Memos
 		r.Get("/memo", h.GetMemo)
 		r.Get("/memo/map", h.GetMemoMap)

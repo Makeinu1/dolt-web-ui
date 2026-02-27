@@ -12,7 +12,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       code: "INTERNAL",
       message: res.statusText,
     }));
-    throw new ApiError(res.status, body);
+    // Unwrap error envelope: API returns {"error": {"code","message","details"}}
+    const err = body.error ?? body;
+    throw new ApiError(res.status, err);
   }
 
   return res.json();
@@ -221,6 +223,13 @@ export const approveRequest = (body: import("../types/api").ApproveRequest) =>
 
 export const rejectRequest = (body: import("../types/api").RejectRequest) =>
   request<{ status: string }>("/request/reject", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+// Audit merge
+export const auditMerge = (body: { target_id: string; db_name: string }) =>
+  request<{ hash: string }>("/audit-merge", {
     method: "POST",
     body: JSON.stringify(body),
   });

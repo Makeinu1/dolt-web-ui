@@ -31,7 +31,7 @@ export function CellCommentPanel({
   const [error, setError] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
-  const isMain = branchName === "main";
+  const isProtected = branchName === "main" || branchName === "audit";
   const memoTable = `_memo_${table}`;
 
   // Find any pending draft op for this memo cell
@@ -146,7 +146,7 @@ export function CellCommentPanel({
           {error && <div className="cell-comment-error">{error}</div>}
 
           {/* Memo edit area (work branch only) */}
-          {!isMain ? (
+          {!isProtected ? (
             <div className="cell-comment-add" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
               <textarea
                 ref={textRef}

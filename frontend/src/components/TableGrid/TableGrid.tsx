@@ -18,6 +18,7 @@ import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -129,7 +130,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
     } catch { /* ignore */ }
   }, [hiddenColumns, colVisibilityKey]);
 
-  const isMain = branchName === "main";
+  const isProtected = branchName === "main" || branchName === "audit";
   const baseState = useUIStore((s) => s.baseState);
   const removeOp = useDraftStore((s) => s.removeOp);
   const [undoableOpIndex, setUndoableOpIndex] = useState<number | null>(null);
@@ -149,8 +150,6 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
     },
     [pkCols]
   );
-  // Deprecated alias for single-PK compatibility (removed after Phase 1 verification)
-  const pkCol = pkCols[0] ?? null;
 
   // Stable row ID for AG Grid selection — sorted PK JSON
   const getRowId = useMemo(
@@ -170,7 +169,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
 
   // Editing is only allowed in Idle or DraftEditing states on non-main branches
   const editingBlocked =
-    isMain ||
+    isProtected ||
     baseState === "Committing" ||
     baseState === "Syncing" ||
     baseState === "SchemaConflictDetected" ||
@@ -330,18 +329,9 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   }, [onCellSelected, pkCols, rowPkId, tableName]);
 
   const handleCloneRows = useCallback(async (rows: Record<string, unknown>[]) => {
-    if (!pkCol) return;
-    const currentDraftOps = useDraftStore.getState().ops;
-    const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
-    const draftPKs = currentDraftOps
-      .filter((op) => op.table === tableName && op.type === "insert" && op.values[pkCol.name] != null)
-      .map((op) => Number(op.values[pkCol.name]))
-      .filter((n) => !isNaN(n));
-    let maxPK = Math.max(0, ...existingPKs, ...draftPKs);
+    if (pkCols.length === 0) return;
 
     for (const row of rows) {
-      maxPK += 1;
-      const newPK = maxPK;
       try {
         const result = await api.previewClone({
           target_id: targetId,
@@ -349,8 +339,6 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
           branch_name: branchName,
           table: tableName,
           template_pk: Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])),
-          vary_column: pkCol.name,
-          new_values: [newPK],
         });
         if (result.errors?.length > 0) {
           useUIStore.getState().setError(result.errors[0].message);
@@ -366,12 +354,12 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
           }
         }
       } catch (err: unknown) {
-        const e = err as { error?: { message?: string } };
-        useUIStore.getState().setError(e?.error?.message || "コピーに失敗しました");
+        const msg = err instanceof ApiError ? err.message : "";
+        useUIStore.getState().setError("コピーに失敗しました" + (msg ? ": " + msg : ""));
         break;
       }
     }
-  }, [pkCol, pkCols, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
+  }, [pkCols, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
 
   const handleDeleteRows = useCallback((rows: Record<string, unknown>[]) => {
     if (pkCols.length === 0) return;
@@ -410,7 +398,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
 
       const rowNode = params.node.data as Record<string, unknown>;
 
-      if (isMain || editingBlocked) {
+      if (isProtected || editingBlocked) {
         return ["copy" as unknown as MenuItemDef];
       }
 
@@ -421,9 +409,9 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
       const n = targetRows.length;
 
       const cloneItem: MenuItemDef = {
-        name: n > 1 ? `選択 ${n} 行をコピー` : "行をコピー（PK自動採番）",
+        name: n > 1 ? `選択 ${n} 行をコピー` : "行をコピー",
         action: () => handleCloneRows(targetRows),
-        disabled: !pkCol,
+        disabled: pkCols.length === 0,
       };
 
       const deleteItem: MenuItemDef = {
@@ -440,7 +428,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
         "copy" as unknown as MenuItemDef,
       ];
     },
-    [isMain, editingBlocked, pkCol, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows]
+    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON
@@ -485,12 +473,17 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
 
   // Column definitions for AG Grid with draft visualization
   const colDefs: ColDef[] = useMemo(() => {
-    const visibleCols = columns.filter((col) => !hiddenColumns.has(col.name));
+    const visibleCols = [...columns.filter((col) => !hiddenColumns.has(col.name))].sort((a, b) => {
+      if (a.name === "Dolt_Description") return -1;
+      if (b.name === "Dolt_Description") return 1;
+      return 0;
+    });
 
     return visibleCols.map((col, index) => ({
       field: col.name,
       headerName: col.name,
       editable: !editingBlocked,  // PK columns are also editable (PK_COLLISION caught server-side)
+      ...(col.name === "Dolt_Description" ? { pinned: "left" as const } : {}),
       ...(index === 0 ? { checkboxSelection: true, headerCheckboxSelection: true } : {}),
       sortable: true,
       filter: true,
@@ -585,12 +578,12 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
         {/* Row action buttons (visible when 1+ rows are selected and not blocked) */}
         {selectedRows.length > 0 && !editingBlocked && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
-            {!isMain && (
+            {!isProtected && (
               <button
                 onClick={() => handleCloneRows(selectedRows)}
-                disabled={!pkCol}
+                disabled={pkCols.length === 0}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: "pointer" }}
-                title="行をコピー（PK自動採番）"
+                title="行をコピー"
               >
                 コピー{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
               </button>
