@@ -8,14 +8,14 @@ test.describe('ContextSelector Tests', () => {
     });
 
     test('should load and display context settings modal', async ({ page }) => {
-        // Top header should say Setup Context initially or load defaults 
-        const setupBtn = page.locator('div[title="Settings (Target / Database)"]');
+        // Top header should say Setup Context initially or load defaults
+        const setupBtn = page.getByTitle('設定 (ターゲット / データベース)');
 
         // Click to open modal
         await setupBtn.click();
         const modal = page.locator('.modal');
         await expect(modal).toBeVisible();
-        await expect(modal.locator('h2')).toHaveText('⚙ Context Settings');
+        await expect(modal.locator('h2')).toHaveText('⚙ 接続設定');
 
         // Select Target and DB
         const targetSelect = modal.locator('select').first();
@@ -25,7 +25,7 @@ test.describe('ContextSelector Tests', () => {
         await dbSelect.selectOption('test_db');
 
         // Close Modal
-        await modal.locator('button', { hasText: 'Done' }).click();
+        await modal.locator('button', { hasText: '閉じる' }).click();
         await expect(modal).not.toBeVisible();
 
         // Verify it changed
@@ -60,7 +60,7 @@ test.describe('ContextSelector Tests', () => {
             }
         });
 
-        const createBtn = contextBar.locator('button', { hasText: 'Create' }).first();
+        const createBtn = contextBar.locator('button', { hasText: '作成' }).first();
         await createBtn.click();
 
         // Verify creation process closed input

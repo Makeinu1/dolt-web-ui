@@ -11,7 +11,7 @@ import {
   type CellClassParams,
   type FilterChangedEvent,
   type SortChangedEvent,
-  type RowClickedEvent,
+  type SelectionChangedEvent,
   type CellClickedEvent,
 } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
@@ -118,7 +118,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
       return new Set<string>();
     }
   });
-  const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Record<string, unknown>[]>([]);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
   const gridRef = useRef<AgGridReact>(null);
 
@@ -152,6 +152,21 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   // Deprecated alias for single-PK compatibility (removed after Phase 1 verification)
   const pkCol = pkCols[0] ?? null;
 
+  // Stable row ID for AG Grid selection — sorted PK JSON
+  const getRowId = useMemo(
+    () => (params: { data: Record<string, unknown> }) => {
+      if (pkCols.length === 0) return String(Math.random());
+      return JSON.stringify(
+        Object.fromEntries(
+          [...pkCols]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((c) => [c.name, params.data[c.name]])
+        )
+      );
+    },
+    [pkCols]
+  );
+
 
   // Editing is only allowed in Idle or DraftEditing states on non-main branches
   const editingBlocked =
@@ -162,13 +177,14 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
     baseState === "ConstraintViolationDetected" ||
     baseState === "StaleHeadDetected";
 
-  // Draft operations lookup for Undo functionality
+  // Draft operations lookup for Undo functionality (only when exactly 1 row selected)
+  const effectiveSelectedRow = selectedRows.length === 1 ? selectedRows[0] : null;
   useEffect(() => {
-    if (pkCols.length === 0 || !selectedRow) {
+    if (pkCols.length === 0 || !effectiveSelectedRow) {
       setUndoableOpIndex(null);
       return;
     }
-    const rowId = rowPkId(selectedRow as Record<string, unknown>);
+    const rowId = rowPkId(effectiveSelectedRow as Record<string, unknown>);
 
     // Find latest operation on this row
     let foundIdx: number | null = null;
@@ -181,7 +197,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
       }
     }
     setUndoableOpIndex(foundIdx);
-  }, [draftOps, selectedRow, pkCols, rowPkId, tableName]);
+  }, [draftOps, effectiveSelectedRow, pkCols, rowPkId, tableName]);
 
 
   // Handle Undo (remove the latest draft op for this row)
@@ -235,7 +251,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
       .then((schema) => {
         setColumns(schema.columns);
         setHiddenColumns(new Set());
-        setSelectedRow(null);
+        setSelectedRows([]);
       })
       .catch(console.error);
   }, [targetId, dbName, branchName, tableName]);
@@ -294,9 +310,9 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
     setTotalCount((c) => c + 1);
   }, []);
 
-  // Row click handler
-  const onRowClicked = useCallback((event: RowClickedEvent) => {
-    setSelectedRow(event.data as Record<string, unknown> | null);
+  // Selection changed handler
+  const onSelectionChanged = useCallback((event: SelectionChangedEvent) => {
+    setSelectedRows(event.api.getSelectedRows() as Record<string, unknown>[]);
   }, []);
 
   // --- Shared action functions (used by both right-click menu and toolbar buttons) ---
@@ -313,7 +329,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
     onCellSelected({ table: tableName, pk: pkVal, column: colName });
   }, [onCellSelected, pkCols, rowPkId, tableName]);
 
-  const handleCloneRow = useCallback(async (row: Record<string, unknown>) => {
+  const handleCloneRows = useCallback(async (rows: Record<string, unknown>[]) => {
     if (!pkCol) return;
     const currentDraftOps = useDraftStore.getState().ops;
     const existingPKs = rowData.map((r) => Number(r[pkCol.name])).filter((n) => !isNaN(n));
@@ -321,45 +337,53 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
       .filter((op) => op.table === tableName && op.type === "insert" && op.values[pkCol.name] != null)
       .map((op) => Number(op.values[pkCol.name]))
       .filter((n) => !isNaN(n));
-    const maxPK = Math.max(0, ...existingPKs, ...draftPKs);
-    const newPK = maxPK + 1;
+    let maxPK = Math.max(0, ...existingPKs, ...draftPKs);
 
-    try {
-      const result = await api.previewClone({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        table: tableName,
-        template_pk: { [pkCol.name]: row[pkCol.name] },
-        new_pks: [newPK],
-      });
-      if (result.errors?.length > 0) {
-        useUIStore.getState().setError(result.errors[0].message);
-      } else {
-        for (const op of result.ops) {
-          addOp(op);
+    for (const row of rows) {
+      maxPK += 1;
+      const newPK = maxPK;
+      try {
+        const result = await api.previewClone({
+          target_id: targetId,
+          db_name: dbName,
+          branch_name: branchName,
+          table: tableName,
+          template_pk: Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])),
+          vary_column: pkCol.name,
+          new_values: [newPK],
+        });
+        if (result.errors?.length > 0) {
+          useUIStore.getState().setError(result.errors[0].message);
+          break;
+        } else {
+          for (const op of result.ops) {
+            addOp(op);
+          }
+          setBaseState("DraftEditing");
+          const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
+          if (insertOp) {
+            onRowInserted(insertOp.values as Record<string, unknown>);
+          }
         }
-        setBaseState("DraftEditing");
-        const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
-        if (insertOp) {
-          onRowInserted(insertOp.values as Record<string, unknown>);
-        }
+      } catch (err: unknown) {
+        const e = err as { error?: { message?: string } };
+        useUIStore.getState().setError(e?.error?.message || "コピーに失敗しました");
+        break;
       }
-    } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      useUIStore.getState().setError(e?.error?.message || "コピーに失敗しました");
     }
-  }, [pkCol, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
+  }, [pkCol, pkCols, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
 
-  const handleDeleteRow = useCallback((row: Record<string, unknown>) => {
+  const handleDeleteRows = useCallback((rows: Record<string, unknown>[]) => {
     if (pkCols.length === 0) return;
-    const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
-    addOp({
-      type: "delete",
-      table: tableName,
-      values: {},
-      pk,
-    });
+    for (const row of rows) {
+      const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
+      addOp({
+        type: "delete",
+        table: tableName,
+        values: {},
+        pk,
+      });
+    }
     setBaseState("DraftEditing");
   }, [pkCols, tableName, addOp, setBaseState]);
 
@@ -390,15 +414,22 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
         return ["copy" as unknown as MenuItemDef];
       }
 
+      // If the right-clicked row is in the current selection and multiple rows are selected,
+      // operate on all selected rows; otherwise operate on just the right-clicked row.
+      const isInSelection = selectedRows.some((r) => rowPkId(r) === rowPkId(rowNode));
+      const targetRows = isInSelection && selectedRows.length > 1 ? selectedRows : [rowNode];
+      const n = targetRows.length;
+
       const cloneItem: MenuItemDef = {
-        name: "行をコピー（PK自動採番）",
-        action: () => handleCloneRow(rowNode),
+        name: n > 1 ? `選択 ${n} 行をコピー` : "行をコピー（PK自動採番）",
+        action: () => handleCloneRows(targetRows),
+        disabled: !pkCol,
       };
 
       const deleteItem: MenuItemDef = {
-        name: "行を削除",
-        action: () => handleDeleteRow(rowNode),
-        disabled: !pkCol,
+        name: n > 1 ? `選択 ${n} 行を削除` : "行を削除",
+        action: () => handleDeleteRows(targetRows),
+        disabled: pkCols.length === 0,
         cssClasses: ["ag-menu-option-danger"],
       };
 
@@ -409,7 +440,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
         "copy" as unknown as MenuItemDef,
       ];
     },
-    [isMain, editingBlocked, pkCol, handleCloneRow, handleDeleteRow]
+    [isMain, editingBlocked, pkCol, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON
@@ -456,11 +487,11 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   const colDefs: ColDef[] = useMemo(() => {
     const visibleCols = columns.filter((col) => !hiddenColumns.has(col.name));
 
-    return visibleCols.map((col) => ({
+    return visibleCols.map((col, index) => ({
       field: col.name,
       headerName: col.name,
       editable: !editingBlocked,  // PK columns are also editable (PK_COLLISION caught server-side)
-
+      ...(index === 0 ? { checkboxSelection: true, headerCheckboxSelection: true } : {}),
       sortable: true,
       filter: true,
       resizable: true,
@@ -551,36 +582,35 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
           {totalCount.toLocaleString()} rows {loading && "• Loading..."}
         </span>
 
-        {/* Row action buttons (visible when a row is selected) */}
-        {selectedRow && (
+        {/* Row action buttons (visible when 1+ rows are selected and not blocked) */}
+        {selectedRows.length > 0 && !editingBlocked && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
-            {!editingBlocked && (
-              <>
-                <button
-                  onClick={() => handleCloneRow(selectedRow)}
-                  style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: "pointer" }}
-                  title="行をコピー（PK自動採番）"
-                >
-                  コピー
-                </button>
-                <button
-                  onClick={() => handleDeleteRow(selectedRow)}
-                  disabled={!pkCol}
-                  style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer" }}
-                  title="行を削除"
-                >
-                  削除
-                </button>
-                {undoableOpIndex !== null && (
-                  <button
-                    onClick={handleUndoRow}
-                    style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#4b5563", border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
-                    title="この行の最新の編集を取り消す"
-                  >
-                    ⟲ 元に戻す
-                  </button>
-                )}
-              </>
+            {!isMain && (
+              <button
+                onClick={() => handleCloneRows(selectedRows)}
+                disabled={!pkCol}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: "pointer" }}
+                title="行をコピー（PK自動採番）"
+              >
+                コピー{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+              </button>
+            )}
+            <button
+              onClick={() => handleDeleteRows(selectedRows)}
+              disabled={pkCols.length === 0}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer" }}
+              title="行を削除"
+            >
+              削除{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+            </button>
+            {selectedRows.length === 1 && undoableOpIndex !== null && (
+              <button
+                onClick={handleUndoRow}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#4b5563", border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
+                title="この行の最新の編集を取り消す"
+              >
+                ⟲ 元に戻す
+              </button>
             )}
           </div>
         )}
@@ -602,11 +632,14 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
             minWidth: 80,
           }}
           autoSizeStrategy={{ type: "fitCellContents" }}
+          rowSelection="multiple"
+          suppressRowClickSelection={true}
+          getRowId={getRowId}
+          onSelectionChanged={onSelectionChanged}
           onFirstDataRendered={onFirstDataRendered}
           onCellValueChanged={onCellValueChanged}
           suppressClickEdit={editingBlocked}
           getContextMenuItems={getContextMenuItems}
-          onRowClicked={onRowClicked}
           onCellClicked={onCellClicked}
           onFilterChanged={onFilterChanged}
           onSortChanged={onSortChanged}

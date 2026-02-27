@@ -45,10 +45,10 @@ test.describe('Sync and Error State Tests', () => {
 
         await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
 
-        // Create a draft by deleting a row
+        // Create a draft by deleting a row (select via checkbox — Phase 4)
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-cell').first().click();
+        await aliceRow.locator('.ag-selection-checkbox').click();
         await page.locator('button', { hasText: '削除' }).click();
 
         // Confirm draft exists
@@ -80,8 +80,8 @@ test.describe('Sync and Error State Tests', () => {
         await page.locator('button', { hasText: '↻ Main と同期' }).click();
         await expect(page.locator('.state-badge')).toHaveText('要更新', { timeout: 5000 });
 
-        // Click Refresh & Force Sync to clear the state
-        const refreshBtn = page.locator('button', { hasText: 'Refresh & Force Sync' });
+        // Click ↻ 更新して同期 to clear the state
+        const refreshBtn = page.locator('button', { hasText: '更新して同期' });
         await expect(refreshBtn).toBeVisible();
         await refreshBtn.click();
 
@@ -112,10 +112,10 @@ test.describe('Sync and Error State Tests', () => {
     test('should prevent sync when draft is active', async ({ page }) => {
         await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
 
-        // Create a draft
+        // Create a draft (select via checkbox — Phase 4)
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-cell').first().click();
+        await aliceRow.locator('.ag-selection-checkbox').click();
         await page.locator('button', { hasText: '削除' }).click();
 
         // Open overflow menu — sync should be disabled

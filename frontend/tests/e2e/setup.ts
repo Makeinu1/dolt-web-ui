@@ -94,12 +94,9 @@ export async function setupBaseMocks(page: Page) {
         await route.fulfill({ json: MOCK_REQUESTS });
     });
 
-    // Cell Comments
-    await page.route('**/api/v1/comments/map*', async route => {
+    // Memo map (Phase 2: _memo_ table migration)
+    await page.route('**/api/v1/memo/map*', async route => {
         await route.fulfill({ json: { cells: [] } });
-    });
-    await page.route('**/api/v1/comments/for-pks*', async route => {
-        await route.fulfill({ json: [] });
     });
 
     // Diff
@@ -119,7 +116,7 @@ export async function selectContextInUI(page: Page, targetId: string, dbName: st
     const contextBar = page.locator('.context-bar');
     await contextBar.waitFor({ state: 'visible', timeout: 5000 });
 
-    const setupBtn = page.getByTitle('Settings (Target / Database)');
+    const setupBtn = page.getByTitle('設定 (ターゲット / データベース)');
     await setupBtn.waitFor({ state: 'visible', timeout: 5000 });
     await setupBtn.click({ force: true });
 
@@ -132,7 +129,7 @@ export async function selectContextInUI(page: Page, targetId: string, dbName: st
     const dbSelect = modal.locator('select').nth(1);
     await dbSelect.selectOption(dbName);
 
-    await modal.locator('button', { hasText: 'Done' }).click();
+    await modal.locator('button', { hasText: '閉じる' }).click();
     await modal.waitFor({ state: 'hidden' });
 
     // Branch の選択

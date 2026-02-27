@@ -57,7 +57,7 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
         // Select first row (Suzuka: circuit_id=1, region=JP)
         const suzuka = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Suzuka' });
         await suzuka.waitFor({ state: 'visible', timeout: 5000 });
-        await suzuka.locator('.ag-cell').first().click();
+        await suzuka.locator('.ag-selection-checkbox').click();
 
         await page.locator('button', { hasText: '削除' }).click();
 
@@ -68,13 +68,13 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
         await commitBtn.click();
         const modal = page.locator('.modal');
         await expect(modal).toBeVisible();
-        await expect(modal.locator('h2')).toHaveText('変更をコミット');
+        await expect(modal.locator('h2')).toHaveText('変更を保存');
 
         // CommitDialog should display both PK values (GAP-3: composite PK in dialog)
         // pk_text = Object.values(op.pk).join(',') → '1,JP' or 'JP,1'
         await expect(modal).toContainText('PK=');
         // Must show at least one PK value
-        const pkSpan = modal.locator('span', { hasText: 'PK=' });
+        const pkSpan = modal.locator('span', { hasText: 'PK=' }).first();
         await expect(pkSpan).toBeVisible();
 
         // Close without committing
@@ -115,7 +115,7 @@ test.describe('Composite PK — PK_COLLISION error (GAP-2)', () => {
         // Create a delete draft to enable commit button
         const suzuka = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Suzuka' });
         await suzuka.waitFor({ state: 'visible', timeout: 5000 });
-        await suzuka.locator('.ag-cell').first().click();
+        await suzuka.locator('.ag-selection-checkbox').click();
         await page.locator('button', { hasText: '削除' }).click();
 
         const commitBtn = page.locator('.action-commit');
@@ -132,20 +132,13 @@ test.describe('Composite PK — PK_COLLISION error (GAP-2)', () => {
         await commitBtn.click();
         const modal = page.locator('.modal');
         await expect(modal).toBeVisible();
+        await expect(modal.locator('h2')).toHaveText('変更を保存');
 
-        // Fill message
-        const messageInput = modal.locator('textarea');
-        await messageInput.fill('test collision');
+        // Click 保存 — should fail with PK_COLLISION (no textarea in current CommitDialog)
+        await modal.locator('button', { hasText: '保存' }).click();
 
-        // Click Commit — should fail
-        await modal.locator('button', { hasText: 'Commit' }).click();
-
-        // The modal should remain open (commit failed) and show error text
-        await expect(modal).toBeVisible();
-        // Error state: commit button still visible (dialog not closed)
-        await expect(commitBtn).not.toBeVisible({ timeout: 1000 }).catch(() => {
-            // If commit button is gone, the modal must show an error
-        });
+        // The action-commit button should still be visible (draft not cleared after error)
+        await expect(commitBtn).toBeVisible({ timeout: 5000 });
     });
 });
 
@@ -167,7 +160,7 @@ test.describe('Single PK — backward compat after composite PK changes', () => 
     test('should delete single-PK row and show PK=1 in CommitDialog', async ({ page }) => {
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-cell').first().click();
+        await aliceRow.locator('.ag-selection-checkbox').click();
         await page.locator('button', { hasText: '削除' }).click();
 
         const commitBtn = page.locator('.action-commit');

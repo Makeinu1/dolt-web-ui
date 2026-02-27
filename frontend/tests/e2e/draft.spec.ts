@@ -12,10 +12,10 @@ test.describe('Draft Undo and Discard Logic', () => {
         const gridContainer = page.locator('.ag-root-wrapper');
         await expect(gridContainer).toBeVisible();
 
-        // Delete a row
+        // Delete a row (select via checkbox — Phase 4: suppressRowClickSelection)
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-cell').first().click();
+        await aliceRow.locator('.ag-selection-checkbox').click();
         await page.locator('button', { hasText: '削除' }).click();
 
         // Verify Commit button appears
@@ -39,21 +39,19 @@ test.describe('Draft Undo and Discard Logic', () => {
         const gridContainer = page.locator('.ag-root-wrapper');
         await expect(gridContainer).toBeVisible();
 
-        // Edit a row (we mock cell edit by double clicking)
+        // Select row via checkbox and delete (Phase 4: suppressRowClickSelection)
         const bobRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' });
         await bobRow.waitFor({ state: 'visible', timeout: 5000 });
-        const nameCell = bobRow.locator('.ag-cell[col-id="name"]');
-        await nameCell.click();
+        await bobRow.locator('.ag-selection-checkbox').click();
 
-        // Let's delete it instead as that's easier to verify via toolbar
+        // Delete it via toolbar
         await page.locator('button', { hasText: '削除' }).click();
 
         // Verify Commit button appears
         const commitBtn = page.locator('.action-commit');
         await expect(commitBtn).toHaveText('Commit (1)');
 
-        // Now select the row again and click "元に戻す(Undo)"
-        await bobRow.locator('.ag-cell').first().click();
+        // Row remains selected after delete op — undo button should be visible
         const undoBtn = page.locator('button', { hasText: '元に戻す' });
         await expect(undoBtn).toBeVisible();
         await undoBtn.click();

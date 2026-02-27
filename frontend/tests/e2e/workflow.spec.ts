@@ -15,7 +15,7 @@ test.describe('Workflow Tests', () => {
         await expect(gridContainer).toBeVisible();
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-cell').first().click();
+        await aliceRow.locator('.ag-selection-checkbox').click();
 
         await page.locator('button', { hasText: '削除' }).click();
 
@@ -28,7 +28,7 @@ test.describe('Workflow Tests', () => {
         // Dialog should open
         const modal = page.locator('.modal');
         await expect(modal).toBeVisible();
-        await expect(modal.locator('h2')).toHaveText('変更をコミット');
+        await expect(modal.locator('h2')).toHaveText('変更を保存');
 
         // See table group "users"
         await expect(modal).toContainText('users');
@@ -40,10 +40,8 @@ test.describe('Workflow Tests', () => {
             await route.fulfill({ status: 200, json: { commit_hash: 'new-hash-001' } });
         });
 
-        // Fill message and commit
-        const messageInput = modal.locator('textarea');
-        await messageInput.fill('Remove Alice');
-        await modal.locator('button', { hasText: 'Commit' }).click();
+        // Click save button (no textarea in current CommitDialog)
+        await modal.locator('button', { hasText: '保存' }).click();
 
         // Verify dialog closed and draft cleared
         await expect(modal).not.toBeVisible();
@@ -65,7 +63,7 @@ test.describe('Workflow Tests', () => {
         // Submit dialog opens
         const modal = page.locator('.modal');
         await expect(modal).toBeVisible();
-        await expect(modal.locator('h2')).toHaveText('Submit for Approval');
+        await expect(modal.locator('h2')).toHaveText('承認を申請');
 
         // Diff summary should be fetched and shown
         const summaryRow = modal.locator('td', { hasText: '▶ users' }).locator('..');
@@ -84,7 +82,7 @@ test.describe('Workflow Tests', () => {
         // Fill input and submit
         const summaryInput = modal.locator('textarea');
         await summaryInput.fill('Please review');
-        await modal.locator('button.primary', { hasText: 'Submit Request' }).click();
+        await modal.locator('button.primary', { hasText: '申請する' }).click();
 
         // Dialog closes
         await expect(modal).not.toBeVisible();
@@ -111,24 +109,24 @@ test.describe('Workflow Tests', () => {
         await expect(inboxModal).toContainText('テストリクエスト');
 
         // Accept it
-        const approveBtn = inboxModal.locator('button.success', { hasText: 'Approve' });
+        const approveBtn = inboxModal.locator('button.success', { hasText: '承認' });
         await approveBtn.click();
 
         // Approve confirmation authModal
         const authModal = page.locator('.modal').last();
         await expect(authModal).toBeVisible();
-        await expect(authModal.locator('h2')).toHaveText('Approve Request');
+        await expect(authModal.locator('h2')).toHaveText('承認');
 
         // Mock approve response
         await page.route('**/api/v1/request/approve*', async route => {
             await route.fulfill({ status: 200, json: { hash: 'hash-a' } });
         });
 
-        // Click Approve & Merge
-        await authModal.locator('button.primary', { hasText: 'Approve & Merge' }).click();
+        // Click 承認してマージ
+        await authModal.locator('button.primary', { hasText: '承認してマージ' }).click();
 
         // Wait for empty state
-        await expect(inboxModal).toContainText('No pending requests.');
+        await expect(inboxModal).toContainText('承認待ちのリクエストはありません');
         await inboxModal.locator('button', { hasText: '✕' }).click();
     });
 });
