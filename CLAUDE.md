@@ -320,6 +320,9 @@ Database: Test
 
 ### コア機能
 - AG Grid によるスプレッドシート編集（セル編集、フィルタ、ソート、ページネーション）
+- **複数行選択（Phase 4）** — チェックボックスで単一/複数行を選択（`suppressRowClickSelection`）
+  - ツールバーの「コピー (N)」「削除 (N)」で選択行を一括操作
+  - 右クリックメニューも選択行数に応じて「選択 N 行をコピー」「選択 N 行を削除」に動的変化
 - **複合PK対応** — 複数列を主キーとするテーブルの完全CRUD（INSERT/UPDATE/DELETE）
   - PK列の直接編集が可能（サーバー側で `PK_COLLISION` を検出）
   - `rowPkId` でアルファベット順正規化された JSON キーを使用（メモセルキーとの一致保証）
@@ -354,7 +357,7 @@ Database: Test
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
-- Playwright ブラウザテスト（23テスト、APIモックベース、`frontend/tests/e2e/`）
+- Playwright ブラウザテスト（20テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
 
 ### 撤廃済み機能（簡素化計画 Phase 0〜3 で削除）
