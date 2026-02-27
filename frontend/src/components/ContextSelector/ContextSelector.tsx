@@ -22,7 +22,7 @@ export function ContextSelector() {
   useEffect(() => {
     api.getTargets().then(setTargets).catch((err) => {
       const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "Failed to load targets");
+      setError(e?.error?.message || "ターゲットの読み込みに失敗しました");
     });
   }, []);
 
@@ -33,7 +33,7 @@ export function ContextSelector() {
     }
     api.getDatabases(targetId).then(setDatabases).catch((err) => {
       const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "Failed to load databases");
+      setError(e?.error?.message || "データベースの読み込みに失敗しました");
     });
   }, [targetId]);
 
@@ -52,7 +52,7 @@ export function ContextSelector() {
       }
     } catch (err) {
       const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "Failed to load branches");
+      setError(e?.error?.message || "ブランチの読み込みに失敗しました");
     }
   };
 
@@ -97,7 +97,7 @@ export function ContextSelector() {
       setShowCreate(false);
     } catch (err: unknown) {
       const e = err as { error?: { message?: string } };
-      setCreateError(e?.error?.message || "Failed to create branch");
+      setCreateError(e?.error?.message || "ブランチの作成に失敗しました");
     } finally {
       setCreating(false);
     }
@@ -118,9 +118,9 @@ export function ContextSelector() {
           gap: 4,
           marginRight: 8,
         }}
-        title="Settings (Target / Database)"
+        title="設定 (ターゲット / データベース)"
       >
-        {targetId && dbName ? `${dbName}@${targetId}` : "⚙ Setup Context"}
+        {targetId && dbName ? `${dbName}@${targetId}` : "⚙ 接続設定"}
         <span style={{ fontSize: 10, color: "#888" }}>▼</span>
       </div>
 
@@ -132,7 +132,7 @@ export function ContextSelector() {
             onChange={(e) => setBranch(e.target.value)}
             style={{ minWidth: 120 }}
           >
-            <option value="">-- Branch --</option>
+            <option value="">-- ブランチ --</option>
             {branches.map((b) => (
               <option key={b.name} value={b.name}>
                 {b.name === "main" ? `🔒 ${b.name}` : `🌿 ${b.name}`}
@@ -143,7 +143,7 @@ export function ContextSelector() {
           <button
             onClick={() => setShowCreate(!showCreate)}
             style={{ fontSize: 12, padding: "3px 8px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}
-            title="Create new work branch"
+            title="作業ブランチを作成"
           >
             +
           </button>
@@ -172,7 +172,7 @@ export function ContextSelector() {
             disabled={creating || !workItemValid}
             style={{ fontSize: 11, padding: "2px 8px", background: "#10b981", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginLeft: 4 }}
           >
-            {creating ? "..." : "Create"}
+            {creating ? "..." : "作成"}
           </button>
           <button
             onClick={() => {
@@ -182,7 +182,7 @@ export function ContextSelector() {
             }}
             style={{ fontSize: 11, padding: "2px 8px", background: "transparent", color: "#cbd5e1", border: "none", cursor: "pointer" }}
           >
-            Cancel
+            キャンセル
           </button>
           {createError && (
             <span style={{ color: "#fca5a5", fontSize: 10 }}>{createError}</span>
@@ -194,18 +194,18 @@ export function ContextSelector() {
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 400 }}>
-            <h2>⚙ Context Settings</h2>
+            <h2>⚙ 接続設定</h2>
 
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 600, color: "#555" }}>
-                Target Server
+                ターゲットサーバー
               </label>
               <select
                 value={targetId}
                 onChange={(e) => setTarget(e.target.value)}
                 style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
               >
-                <option value="">-- Select Target --</option>
+                <option value="">-- ターゲットを選択 --</option>
                 {targets.map((t) => (
                   <option key={t.id} value={t.id}>{t.id}</option>
                 ))}
@@ -214,7 +214,7 @@ export function ContextSelector() {
 
             <div style={{ marginBottom: 24 }}>
               <label style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 600, color: "#555" }}>
-                Database
+                データベース
               </label>
               <select
                 value={dbName}
@@ -222,7 +222,7 @@ export function ContextSelector() {
                 disabled={!targetId}
                 style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
               >
-                <option value="">-- Select Database --</option>
+                <option value="">-- データベースを選択 --</option>
                 {databases.map((d) => (
                   <option key={d.name} value={d.name}>{d.name}</option>
                 ))}
@@ -231,7 +231,7 @@ export function ContextSelector() {
 
             <div className="modal-actions">
               <button className="primary" onClick={() => setShowSettings(false)} style={{ minWidth: 100 }}>
-                Done
+                閉じる
               </button>
             </div>
           </div>

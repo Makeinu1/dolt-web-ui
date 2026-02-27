@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../../api/client";
-import type { CellComment } from "../../types/api";
+import { useDraftStore } from "../../store/draft";
 
 interface CellCommentPanelProps {
   targetId: string;
   dbName: string;
   branchName: string;
   table: string;
-  pk: string;
+  pk: string;       // rowPkId JSON string (e.g. '{"id":1}')
   column: string;
   onClose: () => void;
-  /** Called after a comment is added or deleted so the parent can refresh the comment map. */
-  onChanged: () => void;
 }
 
 export function CellCommentPanel({
@@ -22,76 +20,104 @@ export function CellCommentPanel({
   pk,
   column,
   onClose,
-  onChanged,
 }: CellCommentPanelProps) {
-  const [comments, setComments] = useState<CellComment[]>([]);
+  const ops = useDraftStore((s) => s.ops);
+  const addOp = useDraftStore((s) => s.addOp);
+  const removeOp = useDraftStore((s) => s.removeOp);
+
+  const [dbMemoText, setDbMemoText] = useState("");
   const [loading, setLoading] = useState(true);
-  const [newText, setNewText] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [memoText, setMemoText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const isMain = branchName === "main";
+  const memoTable = `_memo_${table}`;
 
-  const load = () => {
-    setLoading(true);
-    api
-      .listComments(targetId, dbName, branchName, table, pk, column)
-      .then(setComments)
-      .catch(() => setComments([]))
-      .finally(() => setLoading(false));
-  };
+  // Find any pending draft op for this memo cell
+  const existingOpIdx = ops.findIndex((o) => {
+    if (o.table !== memoTable) return false;
+    if (o.type === "insert") {
+      return o.values?.pk_value === pk && o.values?.column_name === column;
+    }
+    return o.pk?.pk_value === pk && o.pk?.column_name === column;
+  });
+  const existingOp = existingOpIdx !== -1 ? ops[existingOpIdx] : null;
+
+  // Whether the memo "effectively" exists (draft or DB)
+  const effectiveHasMemo =
+    existingOp !== null
+      ? existingOp.type !== "delete"
+      : dbMemoText !== "";
 
   useEffect(() => {
-    load();
-    textRef.current?.focus();
+    setLoading(true);
+    api
+      .getMemo(targetId, dbName, branchName, table, pk, column)
+      .then((res) => {
+        setDbMemoText(res.memo_text);
+        // Pre-fill textarea: use draft value if pending, else DB value
+        if (existingOp && existingOp.type !== "delete") {
+          setMemoText(String(existingOp.values?.memo_text ?? res.memo_text));
+        } else if (existingOp?.type === "delete") {
+          setMemoText("");
+        } else {
+          setMemoText(res.memo_text);
+        }
+      })
+      .catch(() => {
+        setDbMemoText("");
+        setMemoText(existingOp && existingOp.type !== "delete"
+          ? String(existingOp.values?.memo_text ?? "")
+          : "");
+      })
+      .finally(() => {
+        setLoading(false);
+        textRef.current?.focus();
+      });
   }, [targetId, dbName, branchName, table, pk, column]);
 
-  const handleAdd = async () => {
-    if (!newText.trim()) return;
-    setAdding(true);
+  const handleSave = () => {
     setError(null);
-    try {
-      await api.addComment({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        table_name: table,
-        pk_value: pk,
-        column_name: column,
-        comment_text: newText.trim(),
-      });
-      setNewText("");
-      load();
-      onChanged();
-    } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "コメントの追加に失敗しました");
-    } finally {
-      setAdding(false);
-    }
-  };
 
-  const handleDelete = async (commentId: string) => {
-    setError(null);
-    try {
-      await api.deleteComment({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        comment_id: commentId,
-      });
-      load();
-      onChanged();
-    } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "コメントの削除に失敗しました");
+    // Remove any existing draft op for this memo cell
+    if (existingOpIdx !== -1) removeOp(existingOpIdx);
+
+    const text = memoText.trim();
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+    const memoPk = { pk_value: pk, column_name: column };
+
+    if (!text) {
+      // Clear memo
+      if (effectiveHasMemo) {
+        addOp({ type: "delete", table: memoTable, pk: memoPk, values: {} });
+      }
+    } else {
+      // Set memo
+      if (effectiveHasMemo) {
+        addOp({
+          type: "update",
+          table: memoTable,
+          pk: memoPk,
+          values: { memo_text: text, updated_at: now },
+        });
+      } else {
+        addOp({
+          type: "insert",
+          table: memoTable,
+          values: { pk_value: pk, column_name: column, memo_text: text, updated_at: now },
+        });
+      }
     }
+    onClose();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      handleAdd();
+      handleSave();
+    }
+    if (e.key === "Escape") {
+      onClose();
     }
   };
 
@@ -100,61 +126,67 @@ export function CellCommentPanel({
       {/* Header */}
       <div className="cell-comment-panel-header">
         <span className="cell-comment-panel-title">
-          💬 {table} / {column}
+          📝 {table} / {column}
           <span style={{ fontWeight: 400, color: "#888", fontSize: 11 }}>&nbsp;(pk={pk})</span>
         </span>
         <button className="cell-comment-close" onClick={onClose}>×</button>
       </div>
 
-      {/* Comment list */}
-      <div className="cell-comment-list">
-        {loading ? (
-          <div className="cell-comment-empty">読み込み中...</div>
-        ) : comments.length === 0 ? (
-          <div className="cell-comment-empty">コメントなし</div>
-        ) : (
-          comments.map((c) => (
-            <div key={c.comment_id} className="cell-comment-item">
-              <div className="cell-comment-meta">{c.created_at.replace("T", " ")}</div>
-              <div className="cell-comment-text">{c.comment_text}</div>
-              {!isMain && (
+      {loading ? (
+        <div className="cell-comment-empty">読み込み中...</div>
+      ) : (
+        <>
+          {existingOp && (
+            <div style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", padding: "4px 10px", borderBottom: "1px solid #bae6fd" }}>
+              ✏ 未保存の変更あり
+            </div>
+          )}
+
+          {/* Error */}
+          {error && <div className="cell-comment-error">{error}</div>}
+
+          {/* Memo edit area (work branch only) */}
+          {!isMain ? (
+            <div className="cell-comment-add" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+              <textarea
+                ref={textRef}
+                className="cell-comment-textarea"
+                placeholder="メモを入力... (空欄で削除、Ctrl+Enter で保存)"
+                value={memoText}
+                onChange={(e) => setMemoText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                maxLength={5000}
+                rows={5}
+                style={{ flex: 1, resize: "vertical" }}
+              />
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <button
-                  className="cell-comment-delete"
-                  onClick={() => handleDelete(c.comment_id)}
-                  title="削除"
+                  onClick={onClose}
+                  style={{ fontSize: 12, padding: "4px 12px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}
                 >
-                  🗑
+                  キャンセル
                 </button>
+                <button
+                  className="cell-comment-add-btn"
+                  onClick={handleSave}
+                >
+                  下書きに追加
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Read-only view on main */
+            <div className="cell-comment-list">
+              {dbMemoText ? (
+                <div className="cell-comment-item">
+                  <div className="cell-comment-text">{dbMemoText}</div>
+                </div>
+              ) : (
+                <div className="cell-comment-empty">メモなし</div>
               )}
             </div>
-          ))
-        )}
-      </div>
-
-      {/* Error */}
-      {error && <div className="cell-comment-error">{error}</div>}
-
-      {/* Add new comment (work branch only) */}
-      {!isMain && (
-        <div className="cell-comment-add">
-          <textarea
-            ref={textRef}
-            className="cell-comment-textarea"
-            placeholder="新しいコメント... (Ctrl+Enter で追加)"
-            value={newText}
-            onChange={(e) => setNewText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            maxLength={5000}
-            rows={3}
-          />
-          <button
-            className="cell-comment-add-btn"
-            onClick={handleAdd}
-            disabled={adding || !newText.trim()}
-          >
-            {adding ? "追加中..." : "追加"}
-          </button>
-        </div>
+          )}
+        </>
       )}
     </div>
   );

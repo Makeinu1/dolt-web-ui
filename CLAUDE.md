@@ -127,7 +127,7 @@ curl http://localhost:8080/health  # 起動確認
 - 接続プール: `Conn()`（リード、ステートレス revision specifier `USE \`db/branch\``）/ `ConnWrite()`（ライト、`USE db` + `DOLT_CHECKOUT`）。`MaxIdleConns=10`
 - All write endpoints validate `expected_head` (optimistic locking)
 - Protected branches: `main` + `audit` は読み取り専用（`IsProtectedBranch()` + ProtectedBranchGuard middleware）
-- Branch lock: Submit中（`req/*` タグ存在時）は Commit/Sync/Revert をブロック（HTTP 423 `BRANCH_LOCKED`）
+- Branch lock: Submit中（`req/*` タグ存在時）は Commit/Sync をブロック（HTTP 423 `BRANCH_LOCKED`）
 
 ### Dolt/SQL 注意事項
 
@@ -320,34 +320,35 @@ Database: Test
 
 ### コア機能
 - AG Grid によるスプレッドシート編集（セル編集、フィルタ、ソート、ページネーション）
-- **複合PK対応** — 複数列を主キーとするテーブルの完全CRUD（INSERT/UPDATE/DELETE/行履歴）
+- **複合PK対応** — 複数列を主キーとするテーブルの完全CRUD（INSERT/UPDATE/DELETE）
   - PK列の直接編集が可能（サーバー側で `PK_COLLISION` を検出）
-  - `rowPkId` でアルファベット順正規化された JSON キーを使用（コメントセルキーとの一致保証）
+  - `rowPkId` でアルファベット順正規化された JSON キーを使用（メモセルキーとの一致保証）
 - ドラフト管理（sessionStorage、Insert/Update/Delete の色分け表示）
 - ブランチ作成・削除（`wi/{WorkItem}/{Round}` パターン）
-- コミット（楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
-- Main との同期（DOLT_MERGE、コンフリクト検出・解決 UI）
+- **保存**（旧「コミット」、楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
+- Main との同期（DOLT_MERGE、データコンフリクトは main 優先で自動解決 + 上書き通知）
 - 承認ワークフロー（Submit → Approve/Reject、`req/*` タグベース）
 - 承認リクエスト自動検出（アプリ起動・コンテキスト切替時に自動チェック）
+- セッション安全性（defer/ROLLBACK が HTTP 切断時も `context.Background()` で確実実行）
 
 ### データ閲覧・比較
-- バージョン比較（DiffSummary → DiffGrid フルスクリーン AG Grid）
+- バージョン比較 HistoryTab（ブランチ HEAD 間比較のみ、コミット選択なし）
+  - DiffSummary → DiffGrid フルスクリーン AG Grid
   - サーバーサイドページネーション（50件/ページ）
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
-- コミット履歴フィルタリング（main: マージのみ / 作業ブランチ: 自動マージ除外）
-- コミット復元（Revert）— HistoryTab から任意コミットを `DOLT_REVERT` で打ち消し
-- セル単位の変更履歴（RecordHistoryPopup、直近20件）
-- 変更ログ検索（ActivityLog: キーワード・期間フィルタでマージログ横断検索）
+- マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
 - 行クローン（`vary_column` + `new_values` 方式、複合PK対応）
-- 一括クローン（BatchGenerateModal、複合PK対応）
-- 一括更新（PreviewBulkUpdate: TSV N列PK対応）
+
+### セルメモ（Phase 2: メモテーブル移行済み）
+- `_memo_{table}` 隠しテーブルでメモ管理（ユーザーのテーブル一覧に非表示）
+- メモの保存・削除はドラフト ops 経由（自動コミットしない — データ変更と同フロー）
+- `GET /api/v1/memo/map`, `GET /api/v1/memo` エンドポイントで取得
 
 ### 編集補助
 - 行 Undo（「⟲ 元に戻す」ボタン、直近の操作を取り消し）
 - 変更をクリア（ドラフト全消去ボタン）
 - ドラフト更新マージ（同一行の連続 update を自動統合）
-- ドラフト SQL エクスポート（StaleHead 時に `📥 ドラフトをSQLで退避` でファイルダウンロード）
-- 構造化コミットメッセージ（空欄時: `[{branch}] {table}テーブル: +{i} ~{u} -{d}`）
+- 自動生成保存メッセージ（`[{branch}] {table}テーブル: +{i} ~{u} -{d}`）
 
 ### 運用
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
@@ -355,6 +356,16 @@ Database: Test
 - macOS / Linux amd64 クロスコンパイル
 - Playwright ブラウザテスト（23テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
+
+### 撤廃済み機能（簡素化計画 Phase 0〜3 で削除）
+- Revert（コミット取消）— 保存履歴を見せない方針と矛盾
+- BatchGenerateModal / PreviewBulkUpdate — 行クローンで代替
+- RecordHistoryPopup（行単位変更履歴）— 履歴非表示方針と矛盾
+- ActivityLog（変更ログ検索）— MergeLog に置換
+- exportDraftSQL（ドラフト SQL エクスポート）— 複雑性削減
+- ConflictView ours/theirs 選択 UI — main 優先自動解決に変更
+- コメント系 API 6 本（`/comments/*`）— メモ系 API 2 本に置換
+- コンフリクト系 API 3 本（`/conflicts/*`）— 自動解決のため不要
 
 ---
 

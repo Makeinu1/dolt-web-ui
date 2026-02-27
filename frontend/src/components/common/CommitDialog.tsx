@@ -24,32 +24,25 @@ export function CommitDialog({
   const { targetId, dbName, branchName } = useContextStore();
   const { ops, clearDraft, removeOp } = useDraftStore();
   const { setBaseState, setError } = useUIStore();
-  const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const handleCommit = async () => {
     if (ops.length === 0) return;
 
-    // Generate structured auto-commit message per COLLAB_PLAN.md spec:
+    // Generate structured auto-commit message:
     // Single table: [{branch}] {table}テーブル: +{i} ~{u} -{d}
     // Multi table:  [{branch}] {N}テーブルの変更 (+{i} ~{u} -{d})
-    let commitMsg = message.trim();
-    if (!commitMsg) {
-      const tableNames = Array.from(new Set(ops.map(op => op.table)));
-      // Count insert/update/delete across all ops
-      let ins = 0, upd = 0, del = 0;
-      for (const op of ops) {
-        if (op.type === "insert") ins++;
-        else if (op.type === "update") upd++;
-        else if (op.type === "delete") del++;
-      }
-      const counts = `+${ins} ~${upd} -${del}`;
-      if (tableNames.length === 1) {
-        commitMsg = `[${branchName}] ${tableNames[0]}テーブル: ${counts}`;
-      } else {
-        commitMsg = `[${branchName}] ${tableNames.length}テーブルの変更 (${counts})`;
-      }
+    const tableNames = Array.from(new Set(ops.map(op => op.table)));
+    let ins = 0, upd = 0, del = 0;
+    for (const op of ops) {
+      if (op.type === "insert") ins++;
+      else if (op.type === "update") upd++;
+      else if (op.type === "delete") del++;
     }
+    const counts = `+${ins} ~${upd} -${del}`;
+    const commitMsg = tableNames.length === 1
+      ? `[${branchName}] ${tableNames[0]}テーブル: ${counts}`
+      : `[${branchName}] ${tableNames.length}テーブルの変更 (${counts})`;
 
     setSubmitting(true);
     setBaseState("Committing");
@@ -71,10 +64,10 @@ export function CommitDialog({
       const e = err as { error?: { code?: string; message?: string } };
       if (e?.error?.code === "STALE_HEAD") {
         setBaseState("StaleHeadDetected");
-        setError("HEAD changed. Refresh and try again.");
+        setError("データが更新されています。画面を更新してやり直してください。");
       } else {
         setBaseState("DraftEditing");
-        setError(e?.error?.message || "Commit failed");
+        setError(e?.error?.message || "保存に失敗しました");
       }
     } finally {
       setSubmitting(false);
@@ -100,7 +93,7 @@ export function CommitDialog({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ minWidth: 520 }} onClick={(e) => e.stopPropagation()}>
-        <h2>変更をコミット</h2>
+        <h2>変更を保存</h2>
         <p style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
           <strong>{branchName}</strong> ブランチへの {ops.length} 件の操作
         </p>
@@ -171,19 +164,6 @@ export function CommitDialog({
           ))}
         </div>
 
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 12, fontWeight: 600 }}>
-            コミットメッセージ（任意）
-          </label>
-          <textarea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            rows={2}
-            style={{ width: "100%", fontSize: 13 }}
-            placeholder="例: TR-9999 新規回線追加（空欄で自動生成）"
-            autoFocus
-          />
-        </div>
         <div className="modal-actions">
           <button onClick={onClose} disabled={submitting}>
             キャンセル
@@ -193,7 +173,7 @@ export function CommitDialog({
             onClick={handleCommit}
             disabled={submitting || ops.length === 0}
           >
-            {submitting ? "コミット中..." : `コミット (${ops.length}件)`}
+            {submitting ? "保存中..." : `保存 (${ops.length}件)`}
           </button>
         </div>
       </div>

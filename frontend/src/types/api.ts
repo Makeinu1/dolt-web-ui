@@ -85,11 +85,15 @@ export interface SyncRequest {
   expected_head: string;
 }
 
-export interface SyncResponse {
-  hash: string;
+export interface OverwrittenTable {
+  table: string;
+  conflicts: number;
 }
 
-
+export interface SyncResponse {
+  hash: string;
+  overwritten_tables?: OverwrittenTable[];
+}
 
 export interface DiffRow {
   diff_type: "added" | "modified" | "removed";
@@ -102,29 +106,6 @@ export interface HistoryCommit {
   author: string;
   message: string;
   timestamp: string;
-}
-
-export interface ConflictsSummaryEntry {
-  table: string;
-  data_conflicts: number;
-  schema_conflicts: number;
-  /** Currently not returned by Go backend; included for future Dolt versions. */
-  constraint_violations?: number;
-}
-
-export interface ConflictRow {
-  base: Record<string, unknown>;
-  ours: Record<string, unknown>;
-  theirs: Record<string, unknown>;
-}
-
-export interface ResolveConflictsRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  expected_head: string;
-  table: string;
-  strategy: "ours" | "theirs";
 }
 
 export interface SubmitRequestRequest {
@@ -184,29 +165,9 @@ export interface PreviewCloneRequest {
   change_value?: unknown;
 }
 
-export interface PreviewBatchGenerateRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  table: string;
-  template_pk: Record<string, unknown>;
-  /** PK column whose value varies across cloned rows (required for composite PK). */
-  vary_column?: string;
-  /** New values for vary_column in each cloned row. */
-  new_values?: unknown[];
-  /** @deprecated Use new_values instead (single-PK backward compat). */
-  new_pks?: unknown[];
-  change_column?: string;
-  change_values?: unknown[];
-}
 
-export interface PreviewBulkUpdateRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  table: string;
-  tsv_data: string;
-}
+
+
 
 export interface PreviewError {
   row_index: number;
@@ -243,30 +204,11 @@ export interface DiffSummaryResponse {
   entries: DiffSummaryEntry[];
 }
 
-// --- Cell Comments ---
+// --- Cell Memos ---
 
-export interface CellComment {
-  comment_id: string;
-  table_name: string;
+export interface MemoResponse {
   pk_value: string;
   column_name: string;
-  comment_text: string;
-  created_at: string;
-}
-
-export interface AddCommentRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  table_name: string;
-  pk_value: string;
-  column_name: string;
-  comment_text: string;
-}
-
-export interface DeleteCommentRequest {
-  target_id: string;
-  db_name: string;
-  branch_name: string;
-  comment_id: string;
+  memo_text: string;
+  updated_at?: string;
 }

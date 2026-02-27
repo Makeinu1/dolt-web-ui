@@ -2,60 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, CellClassParams } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
-import { DiffCommentsPanel } from "../DiffCommentsPanel/DiffCommentsPanel";
 import * as api from "../../api/client";
-import type { Branch, HistoryCommit, DiffSummaryEntry, DiffRow } from "../../types/api";
-
-// --- Ref Selector (Branch + Version) ---
-function RefSelector({
-  label,
-  branches,
-  selectedBranch,
-  selectedVersion,
-  commits,
-  loadingCommits,
-  onBranchChange,
-  onVersionChange,
-}: {
-  label: string;
-  branches: Branch[];
-  selectedBranch: string;
-  selectedVersion: string;
-  commits: HistoryCommit[];
-  loadingCommits: boolean;
-  onBranchChange: (branch: string) => void;
-  onVersionChange: (version: string) => void;
-}) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: "#555", minWidth: 36 }}>{label}:</span>
-      <select
-        value={selectedBranch}
-        onChange={(e) => onBranchChange(e.target.value)}
-        style={{ fontSize: 12, padding: "3px 6px", minWidth: 140 }}
-      >
-        <option value="">-- ブランチ --</option>
-        {branches.map((b) => (
-          <option key={b.name} value={b.name}>{b.name}</option>
-        ))}
-      </select>
-      <span style={{ fontSize: 11, color: "#888" }}>@</span>
-      <select
-        value={selectedVersion}
-        onChange={(e) => onVersionChange(e.target.value)}
-        disabled={!selectedBranch || loadingCommits}
-        style={{ fontSize: 12, padding: "3px 6px", minWidth: 160 }}
-      >
-        <option value="HEAD">HEAD（最新）</option>
-        {commits.map((c) => (
-          <option key={c.hash} value={c.hash}>
-            {c.message?.substring(0, 40) || "メッセージなし"}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
+import type { Branch, DiffSummaryEntry, DiffRow } from "../../types/api";
 
 // --- DiffSummary Table ---
 function DiffSummaryTable({
@@ -198,7 +146,6 @@ function DiffGrid({
         _rowIndex: idx,
         _diff_type: row.diff_type,
       };
-      // Store from values for change detection
       for (const col of allCols) {
         flat[col] = values?.[col] != null ? values[col] : "";
         flat[`_from_${col}`] = row.from?.[col] != null ? row.from[col] : "";
@@ -208,7 +155,6 @@ function DiffGrid({
     });
   }, [rows, allCols]);
 
-  // AG Grid column definitions
   const columnDefs: ColDef[] = useMemo(() => {
     const typeCol: ColDef = {
       headerName: "変更",
@@ -251,7 +197,6 @@ function DiffGrid({
           fontFamily: "monospace",
           fontSize: "12px",
         };
-
         if (dt === "removed") {
           base.textDecoration = "line-through";
           base.color = "#888";
@@ -291,8 +236,6 @@ function DiffGrid({
   }, []);
 
   const totalPages = Math.ceil(totalCount / DIFF_PAGE_SIZE);
-
-  // Count by type from summaryEntry
   const addedCount = summaryEntry?.added ?? 0;
   const modifiedCount = summaryEntry?.modified ?? 0;
   const removedCount = summaryEntry?.removed ?? 0;
@@ -317,15 +260,10 @@ function DiffGrid({
         flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>
-            {tableName} の変更
-          </span>
-          <span style={{ fontSize: 11, color: "#a0a0c0" }}>
-            {fromRef} → {toRef}
-          </span>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{tableName} の変更</span>
+          <span style={{ fontSize: 11, color: "#a0a0c0" }}>{fromRef} → {toRef}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Diff type filter */}
           <select
             value={diffTypeFilter}
             onChange={(e) => setDiffTypeFilter(e.target.value)}
@@ -345,14 +283,10 @@ function DiffGrid({
         </div>
       </div>
 
-      {/* Error */}
       {error && (
-        <div style={{ padding: "8px 16px", background: "#fee2e2", color: "#991b1b", fontSize: 12 }}>
-          {error}
-        </div>
+        <div style={{ padding: "8px 16px", background: "#fee2e2", color: "#991b1b", fontSize: 12 }}>{error}</div>
       )}
 
-      {/* AG Grid */}
       <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>
         <AgGridReact
           rowData={gridRows}
@@ -363,26 +297,10 @@ function DiffGrid({
           loading={loading}
           enableCellTextSelection
           ensureDomOrder
-          defaultColDef={{
-            sortable: true,
-            resizable: true,
-          }}
+          defaultColDef={{ sortable: true, resizable: true }}
         />
       </div>
 
-      {/* DiffCommentsPanel — comments for changed rows */}
-      <div style={{ maxHeight: 200, overflowY: "auto", borderTop: "1px solid #e0e0e0", flexShrink: 0, background: "#fffbf5" }}>
-        <DiffCommentsPanel
-          table={tableName}
-          targetId={targetId}
-          dbName={dbName}
-          branchName={branchName}
-          fromRef={fromRef}
-          toRef={toRef}
-        />
-      </div>
-
-      {/* Footer: stats + pagination */}
       <div style={{
         display: "flex",
         alignItems: "center",
@@ -429,193 +347,16 @@ function DiffGrid({
   );
 }
 
-// --- Commit Log with per-commit DiffSummary ---
-function CommitLog({ targetId, dbName, branchName }: {
-  targetId: string;
-  dbName: string;
-  branchName: string;
-}) {
-  const [commits, setCommits] = useState<HistoryCommit[]>([]);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [expandedCommit, setExpandedCommit] = useState<string | null>(null);
-  const [commitDiff, setCommitDiff] = useState<DiffSummaryEntry[]>([]);
-  const [loadingDiff, setLoadingDiff] = useState(false);
-  const [showComments, setShowComments] = useState(false);
-  const pageSize = 20;
-
-  useEffect(() => {
-    setPage(1);
-    setExpandedCommit(null);
-  }, [targetId, dbName, branchName]);
-
-  useEffect(() => {
-    if (!expanded) return;
-    setLoading(true);
-    setError(null);
-    const baseFilter = branchName === "main" ? "merges_only" : "exclude_auto_merge";
-    const filter = !showComments
-      ? (branchName === "main" ? "merges_only" : "exclude_auto_merge_and_comments")
-      : baseFilter;
-    api.getHistoryCommits(targetId, dbName, branchName, page, pageSize, filter)
-      .then((data) => setCommits(data || []))
-      .catch((err) => {
-        const e = err as { error?: { message?: string } };
-        setError(e?.error?.message || "コミット履歴の読み込みに失敗しました");
-      })
-      .finally(() => setLoading(false));
-  }, [targetId, dbName, branchName, page, expanded, showComments]);
-
-  // Load DiffSummary for a specific commit (compare commit vs its parent)
-  const handleExpandCommit = async (hash: string) => {
-    if (expandedCommit === hash) {
-      setExpandedCommit(null);
-      return;
-    }
-    setExpandedCommit(hash);
-    setLoadingDiff(true);
-    setCommitDiff([]);
-
-    try {
-      // Compare parent (hash~1) with this commit (hash)
-      const res = await api.getDiffSummary(targetId, dbName, branchName, `${hash}~1`, hash, "two_dot");
-      setCommitDiff(res.entries || []);
-    } catch {
-      // If parent doesn't exist (first commit), show empty
-      setCommitDiff([]);
-    } finally {
-      setLoadingDiff(false);
-    }
-  };
-
-
-
-  return (
-    <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: 8, marginTop: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button
-          onClick={() => setExpanded(!expanded)}
-          style={{ fontSize: 12, fontWeight: 600, color: "#555", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-        >
-          {expanded ? "▼" : "▶"} コミット履歴 — {branchName}
-        </button>
-        {expanded && (
-          <label style={{ fontSize: 11, color: "#666", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={showComments}
-              onChange={(e) => { setShowComments(e.target.checked); setPage(1); }}
-            />
-            コメントコミットを表示
-          </label>
-        )}
-      </div>
-      {expanded && (
-        <div style={{ marginTop: 8 }}>
-          {loading && <div style={{ fontSize: 12, color: "#888" }}>読み込み中...</div>}
-          {error && <div style={{ fontSize: 12, color: "#991b1b" }}>{error}</div>}
-          {!loading && !error && commits.length === 0 && (
-            <div style={{ fontSize: 12, color: "#888" }}>コミットが見つかりません。</div>
-          )}
-          {commits.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {commits.map((c) => (
-                <div key={c.hash}>
-                  <div
-                    onClick={() => handleExpandCommit(c.hash)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "6px 8px",
-                      borderBottom: "1px solid #f0f0f5",
-                      cursor: "pointer",
-                      background: expandedCommit === c.hash ? "#f0f4ff" : undefined,
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ fontSize: 10, width: 12, color: "#888" }}>
-                      {expandedCommit === c.hash ? "▼" : "▶"}
-                    </span>
-                    <span style={{ color: "#888", minWidth: 100, fontSize: 11 }}>
-                      {c.timestamp ? c.timestamp.substring(0, 16).replace("T", " ") : "—"}
-                    </span>
-                    <span style={{ color: "#333", fontWeight: 500, flex: 1 }}>{c.message || "メッセージなし"}</span>
-                    <span style={{ color: "#6366f1", fontSize: 11, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                      {c.author}
-                    </span>
-                  </div>
-                  {/* Per-commit DiffSummary */}
-                  {expandedCommit === c.hash && (
-                    <div style={{ padding: "6px 8px 6px 28px", background: "#fafbff", borderBottom: "1px solid #e8e8f0" }}>
-                      {loadingDiff ? (
-                        <span style={{ fontSize: 11, color: "#888" }}>変更テーブルを読み込み中...</span>
-                      ) : commitDiff.length === 0 ? (
-                        <span style={{ fontSize: 11, color: "#888" }}>このコミットにはテーブル変更がありません。</span>
-                      ) : (
-                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                          <tbody>
-                            {commitDiff.map((e) => (
-                              <tr key={e.table} style={{ borderBottom: "1px solid #f0f0f5" }}>
-                                <td style={{ padding: "2px 8px", fontFamily: "monospace", fontWeight: 500 }}>{e.table}</td>
-                                <td style={{ textAlign: "right", padding: "2px 6px", color: "#065f46" }}>
-                                  {e.added > 0 ? `+${e.added}` : ""}
-                                </td>
-                                <td style={{ textAlign: "right", padding: "2px 6px", color: "#92400e" }}>
-                                  {e.modified > 0 ? `~${e.modified}` : ""}
-                                </td>
-                                <td style={{ textAlign: "right", padding: "2px 6px", color: "#991b1b" }}>
-                                  {e.removed > 0 ? `-${e.removed}` : ""}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-
-
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, justifyContent: "center" }}>
-            <button disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)} style={{ fontSize: 12, padding: "3px 10px" }}>
-              ◀ 前へ
-            </button>
-            <span style={{ fontSize: 12, color: "#666" }}>{page} ページ</span>
-            <button disabled={commits.length < pageSize || loading} onClick={() => setPage((p) => p + 1)} style={{ fontSize: 12, padding: "3px 10px" }}>
-              次へ ▶
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // --- History Tab (top-level) ---
+// Simplified: HEAD-to-HEAD comparison only (no commit version selector, no CommitLog).
 export function HistoryTab() {
   const { targetId, dbName, branchName } = useContextStore();
 
   const [branches, setBranches] = useState<Branch[]>([]);
 
-  // From ref
+  // From / To branch (HEAD only)
   const [fromBranch, setFromBranch] = useState("main");
-  const [fromVersion, setFromVersion] = useState("HEAD");
-  const [fromCommits, setFromCommits] = useState<HistoryCommit[]>([]);
-  const [loadingFromCommits, setLoadingFromCommits] = useState(false);
-
-  // To ref
   const [toBranch, setToBranch] = useState(branchName || "");
-  const [toVersion, setToVersion] = useState("HEAD");
-  const [toCommits, setToCommits] = useState<HistoryCommit[]>([]);
-  const [loadingToCommits, setLoadingToCommits] = useState(false);
 
   // Comparison results
   const [entries, setEntries] = useState<DiffSummaryEntry[]>([]);
@@ -633,48 +374,20 @@ export function HistoryTab() {
     api.getBranches(targetId, dbName).then(setBranches).catch(() => { });
   }, [targetId, dbName]);
 
-  // Update toBranch when branchName changes
+  // Update toBranch when current branch changes
   useEffect(() => {
     if (branchName) setToBranch(branchName);
   }, [branchName]);
 
-  // Load commits for From branch
-  useEffect(() => {
-    if (!fromBranch || !targetId || !dbName) { setFromCommits([]); return; }
-    setLoadingFromCommits(true);
-    api.getHistoryCommits(targetId, dbName, fromBranch, 1, 30)
-      .then((data) => setFromCommits(data || []))
-      .catch(() => setFromCommits([]))
-      .finally(() => setLoadingFromCommits(false));
-  }, [targetId, dbName, fromBranch]);
-
-  // Load commits for To branch
-  useEffect(() => {
-    if (!toBranch || !targetId || !dbName) { setToCommits([]); return; }
-    setLoadingToCommits(true);
-    api.getHistoryCommits(targetId, dbName, toBranch, 1, 30)
-      .then((data) => setToCommits(data || []))
-      .catch(() => setToCommits([]))
-      .finally(() => setLoadingToCommits(false));
-  }, [targetId, dbName, toBranch]);
-
-  // Resolve ref string (branch name or commit hash)
-  const resolveRef = (branch: string, version: string) =>
-    version === "HEAD" ? branch : version;
-
-  const handleCompare = async () => {
-    const fromRef = resolveRef(fromBranch, fromVersion);
-    const toRef = resolveRef(toBranch, toVersion);
-    if (!fromRef || !toRef) return;
-
+  const handleCompare = useCallback(async () => {
+    if (!fromBranch || !toBranch) return;
     setLoadingSummary(true);
     setSummaryError(null);
     setEntries([]);
     setDiffGridTable(null);
     setCompared(false);
-
     try {
-      const res = await api.getDiffSummary(targetId, dbName, branchName || "main", fromRef, toRef, "two_dot");
+      const res = await api.getDiffSummary(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
       setEntries(res.entries || []);
       setCompared(true);
     } catch (err) {
@@ -683,20 +396,12 @@ export function HistoryTab() {
     } finally {
       setLoadingSummary(false);
     }
-  };
+  }, [targetId, dbName, branchName, fromBranch, toBranch]);
 
-  // Open fullscreen DiffGrid for a table
-  const handleSelectTable = (table: string) => {
-    setDiffGridTable(table);
-  };
-
-  // Download all diff tables as ZIP
   const handleExportZip = async () => {
-    const fromRef = resolveRef(fromBranch, fromVersion);
-    const toRef = resolveRef(toBranch, toVersion);
     setExportingZip(true);
     try {
-      const { blob, filename } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromRef, toRef, "two_dot");
+      const { blob, filename } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -704,101 +409,94 @@ export function HistoryTab() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      // silently ignore — user can retry
+      // silently ignore
     } finally {
       setExportingZip(false);
     }
   };
 
-  const fromRefStr = resolveRef(fromBranch, fromVersion);
-  const toRefStr = resolveRef(toBranch, toVersion);
-
   return (
     <>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "auto" }}>
-        {/* Ref selectors */}
+        {/* Branch selectors (HEAD-to-HEAD only) */}
         <div style={{ padding: "12px 16px", background: "#f8fafc", borderBottom: "1px solid #d0d0d8" }}>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>
-            2つのバージョンを選択して差分を比較します。ブランチの HEAD または特定のコミットを指定できます。
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>
+            2つのブランチのHEADを比較します。
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <RefSelector
-              label="From"
-              branches={branches}
-              selectedBranch={fromBranch}
-              selectedVersion={fromVersion}
-              commits={fromCommits}
-              loadingCommits={loadingFromCommits}
-              onBranchChange={(b) => { setFromBranch(b); setFromVersion("HEAD"); setCompared(false); }}
-              onVersionChange={(v) => { setFromVersion(v); setCompared(false); }}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <RefSelector
-                label="To"
-                branches={branches}
-                selectedBranch={toBranch}
-                selectedVersion={toVersion}
-                commits={toCommits}
-                loadingCommits={loadingToCommits}
-                onBranchChange={(b) => { setToBranch(b); setToVersion("HEAD"); setCompared(false); }}
-                onVersionChange={(v) => { setToVersion(v); setCompared(false); }}
-              />
-              <button
-                onClick={handleCompare}
-                disabled={!fromBranch || !toBranch || loadingSummary}
-                style={{
-                  fontSize: 12,
-                  padding: "4px 16px",
-                  background: "#4361ee",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  marginLeft: 8,
-                }}
-              >
-                {loadingSummary ? "比較中..." : "比較する"}
-              </button>
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#555", minWidth: 36 }}>From:</span>
+            <select
+              value={fromBranch}
+              onChange={(e) => { setFromBranch(e.target.value); setCompared(false); }}
+              style={{ fontSize: 12, padding: "3px 6px", minWidth: 140 }}
+            >
+              <option value="">-- ブランチ --</option>
+              {branches.map((b) => (
+                <option key={b.name} value={b.name}>{b.name}</option>
+              ))}
+            </select>
+
+            <span style={{ fontSize: 12, color: "#888" }}>→</span>
+
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#555", minWidth: 20 }}>To:</span>
+            <select
+              value={toBranch}
+              onChange={(e) => { setToBranch(e.target.value); setCompared(false); }}
+              style={{ fontSize: 12, padding: "3px 6px", minWidth: 140 }}
+            >
+              <option value="">-- ブランチ --</option>
+              {branches.map((b) => (
+                <option key={b.name} value={b.name}>{b.name}</option>
+              ))}
+            </select>
+
+            <button
+              onClick={handleCompare}
+              disabled={!fromBranch || !toBranch || loadingSummary}
+              style={{
+                fontSize: 12,
+                padding: "4px 16px",
+                background: "#4361ee",
+                color: "#fff",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+                marginLeft: 8,
+              }}
+            >
+              {loadingSummary ? "比較中..." : "比較する"}
+            </button>
           </div>
         </div>
 
-        {/* Summary error */}
         {summaryError && (
           <div style={{ fontSize: 12, color: "#991b1b", padding: "0 16px" }}>{summaryError}</div>
         )}
 
-        {/* DiffSummary table */}
         {compared && (
           <div style={{ padding: "0 16px" }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 6 }}>
-              差分: {fromRefStr} → {toRefStr}
+              差分: {fromBranch} → {toBranch}
             </div>
             <DiffSummaryTable
               entries={entries}
-              onSelectTable={handleSelectTable}
+              onSelectTable={setDiffGridTable}
               selectedTable={diffGridTable}
               onExportZip={entries.length > 0 ? handleExportZip : undefined}
               exportingZip={exportingZip}
             />
           </div>
         )}
-
-        {/* Commit Log (collapsible, with per-commit details) */}
-        <div style={{ padding: "0 16px", marginTop: "auto" }}>
-          <CommitLog targetId={targetId} dbName={dbName} branchName={branchName || "main"} />
-        </div>
       </div>
 
-      {/* Fullscreen DiffGrid overlay */}
       {diffGridTable && (
         <DiffGrid
           targetId={targetId}
           dbName={dbName}
           branchName={branchName || "main"}
           tableName={diffGridTable}
-          fromRef={fromRefStr}
-          toRef={toRefStr}
+          fromRef={fromBranch}
+          toRef={toBranch}
           summaryEntry={entries.find((e) => e.table === diffGridTable)}
           onClose={() => setDiffGridTable(null)}
         />

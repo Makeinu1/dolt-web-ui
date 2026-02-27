@@ -141,29 +141,3 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, commits)
 }
 
-func (h *Handler) HistoryRow(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
-	table := r.URL.Query().Get("table")
-	pk := r.URL.Query().Get("pk")
-	if targetID == "" || dbName == "" || branchName == "" || table == "" || pk == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, branch_name, table, and pk are required")
-		return
-	}
-
-	limit := 20
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
-			limit = v
-		}
-	}
-
-	history, err := h.svc.HistoryRow(r.Context(), targetID, dbName, branchName, table, pk, limit)
-	if err != nil {
-		handleServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, history)
-}

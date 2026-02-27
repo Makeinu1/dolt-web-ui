@@ -17,8 +17,6 @@ import {
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
-import { RecordHistoryPopup } from "../common/RecordHistoryPopup";
-import { BatchGenerateModal } from "../BatchGenerateModal/BatchGenerateModal";
 import * as api from "../../api/client";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 
@@ -93,15 +91,11 @@ export interface SelectedCellInfo {
 interface TableGridProps {
   tableName: string;
   refreshKey?: number;
-  /** Increment to force comment map refresh (e.g. after adding/deleting a comment). */
-  commentRefreshKey?: number;
   /** Called when the user clicks a cell. Null when focus leaves. */
   onCellSelected?: (info: SelectedCellInfo | null) => void;
-  /** When set, server-side filter is applied to show only rows matching this PK value. */
-  filterByPk?: string | null;
 }
 
-export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSelected, filterByPk }: TableGridProps) {
+export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
@@ -124,11 +118,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
       return new Set<string>();
     }
   });
-  const [historyTarget, setHistoryTarget] = useState<{ pkJson: string; pkLabel: string } | null>(null);
-  const [batchGenerateConfig, setBatchGenerateConfig] = useState<{
-    templateRow: Record<string, unknown>;
-    changeColumn?: string;
-  } | null>(null);
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
   const gridRef = useRef<AgGridReact>(null);
@@ -169,7 +158,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     isMain ||
     baseState === "Committing" ||
     baseState === "Syncing" ||
-    baseState === "MergeConflictsPresent" ||
     baseState === "SchemaConflictDetected" ||
     baseState === "ConstraintViolationDetected" ||
     baseState === "StaleHeadDetected";
@@ -270,13 +258,35 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     loadRows();
   }, [loadRows]);
 
-  // Load comment map (which cells have comments)
+  // Load memo map (which cells have memos), merging with draft ops for immediate feedback.
   useEffect(() => {
     if (!tableName || !targetId || !dbName || !branchName) return;
-    api.getCommentMap(targetId, dbName, branchName, tableName)
-      .then((res) => setCommentCells(new Set(res.cells)))
+    const memoTable = `_memo_${tableName}`;
+    api.getMemoMap(targetId, dbName, branchName, tableName)
+      .then((res) => {
+        const cells = new Set(res.cells);
+        // Merge pending draft ops for this memo table
+        for (const op of draftOps) {
+          if (op.table !== memoTable) continue;
+          let pkVal: string, colName: string;
+          if (op.type === "insert") {
+            pkVal = String(op.values?.pk_value ?? "");
+            colName = String(op.values?.column_name ?? "");
+          } else {
+            pkVal = String(op.pk?.pk_value ?? "");
+            colName = String(op.pk?.column_name ?? "");
+          }
+          const key = `${pkVal}:${colName}`;
+          if (op.type === "delete") {
+            cells.delete(key);
+          } else {
+            cells.add(key);
+          }
+        }
+        setCommentCells(cells);
+      })
       .catch(() => setCommentCells(new Set()));
-  }, [targetId, dbName, branchName, tableName, commentRefreshKey]);
+  }, [targetId, dbName, branchName, tableName, draftOps]);
 
   // Optimistic row insert (used after clone)
   const onRowInserted = useCallback((row: Record<string, unknown>) => {
@@ -302,24 +312,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     const pkVal = rowPkId(event.data as Record<string, unknown>);
     onCellSelected({ table: tableName, pk: pkVal, column: colName });
   }, [onCellSelected, pkCols, rowPkId, tableName]);
-
-  // Apply server-side PK filter when filterByPk prop changes
-  useEffect(() => {
-    if (!pkCol) return;
-    if (filterByPk) {
-      setServerFilter(JSON.stringify([{ column: pkCol.name, op: "eq", value: filterByPk }]));
-      setPage(1);
-    }
-  }, [filterByPk, pkCol]);
-
-  const handleShowHistory = useCallback((row: Record<string, unknown>) => {
-    if (pkCols.length === 0) return;
-    setHistoryTarget({
-      pkJson: rowPkId(row),
-      pkLabel: pkCols.map((c) => String(row[c.name])).join(", "),
-    });
-  }, [pkCols, rowPkId]);
-
 
   const handleCloneRow = useCallback(async (row: Record<string, unknown>) => {
     if (!pkCol) return;
@@ -359,10 +351,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
     }
   }, [pkCol, rowData, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
 
-  const handleBatchClone = useCallback((row: Record<string, unknown>, changeColumn?: string) => {
-    setBatchGenerateConfig({ templateRow: row, changeColumn });
-  }, []);
-
   const handleDeleteRow = useCallback((row: Record<string, unknown>) => {
     if (pkCols.length === 0) return;
     const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
@@ -398,24 +386,13 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
 
       const rowNode = params.node.data as Record<string, unknown>;
 
-      const historyItem: MenuItemDef = {
-        name: "履歴を表示",
-        action: () => handleShowHistory(rowNode),
-        disabled: !pkCol,
-      };
-
       if (isMain || editingBlocked) {
-        return [historyItem, "separator" as unknown as MenuItemDef, "copy" as unknown as MenuItemDef];
+        return ["copy" as unknown as MenuItemDef];
       }
 
       const cloneItem: MenuItemDef = {
         name: "行をコピー（PK自動採番）",
         action: () => handleCloneRow(rowNode),
-      };
-
-      const batchCloneItem: MenuItemDef = {
-        name: "一括コピー...",
-        action: () => handleBatchClone(rowNode, params.column?.getColDef().field),
       };
 
       const deleteItem: MenuItemDef = {
@@ -426,16 +403,13 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
       };
 
       return [
-        historyItem,
-        "separator" as unknown as MenuItemDef,
         cloneItem,
-        batchCloneItem,
         deleteItem,
         "separator" as unknown as MenuItemDef,
         "copy" as unknown as MenuItemDef,
       ];
     },
-    [isMain, editingBlocked, pkCol, handleShowHistory, handleCloneRow, handleBatchClone, handleDeleteRow]
+    [isMain, editingBlocked, pkCol, handleCloneRow, handleDeleteRow]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON
@@ -580,14 +554,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
         {/* Row action buttons (visible when a row is selected) */}
         {selectedRow && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
-            <button
-              onClick={() => handleShowHistory(selectedRow)}
-              disabled={!pkCol}
-              style={{ fontSize: 11, padding: "2px 8px", background: "#e0e7ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 4, cursor: "pointer" }}
-              title="履歴を表示"
-            >
-              履歴
-            </button>
             {!editingBlocked && (
               <>
                 <button
@@ -596,13 +562,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
                   title="行をコピー（PK自動採番）"
                 >
                   コピー
-                </button>
-                <button
-                  onClick={() => handleBatchClone(selectedRow)}
-                  style={{ fontSize: 11, padding: "2px 8px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
-                  title="一括コピー"
-                >
-                  一括
                 </button>
                 <button
                   onClick={() => handleDeleteRow(selectedRow)}
@@ -669,24 +628,6 @@ export function TableGrid({ tableName, refreshKey, commentRefreshKey, onCellSele
         </div>
       )}
 
-      {historyTarget && (
-        <RecordHistoryPopup
-          table={tableName}
-          pkJson={historyTarget.pkJson}
-          pkLabel={historyTarget.pkLabel}
-          onClose={() => setHistoryTarget(null)}
-        />
-      )}
-
-      {batchGenerateConfig && (
-        <BatchGenerateModal
-          templateRow={batchGenerateConfig.templateRow}
-          templateTable={tableName}
-          templateColumns={columns}
-          changeColumn={batchGenerateConfig.changeColumn}
-          onClose={() => setBatchGenerateConfig(null)}
-        />
-      )}
     </div>
   );
 }

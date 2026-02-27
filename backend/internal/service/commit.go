@@ -5,11 +5,30 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
+
+// normalizePkJSON returns a new map whose keys are sorted alphabetically,
+// producing a canonical JSON string matching the frontend rowPkId.
+func normalizePkJSON(pk map[string]interface{}) map[string]interface{} {
+	if len(pk) <= 1 {
+		return pk
+	}
+	keys := make([]string, 0, len(pk))
+	for k := range pk {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make(map[string]interface{}, len(pk))
+	for _, k := range keys {
+		out[k] = pk[k]
+	}
+	return out
+}
 
 // checkBranchLocked returns a BRANCH_LOCKED APIError if the branch has a pending
 // approval request (req/ tag). Called before commit/revert/sync on work branches.
@@ -70,7 +89,16 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		}
 	}
 
-	// Step 1: START TRANSACTION
+	// Step 1a: Pre-ensure memo tables (DDL cannot run inside a transaction)
+	for _, op := range req.Ops {
+		if strings.HasPrefix(op.Table, "_memo_") {
+			if err := ensureMemoTable(ctx, conn, op.Table); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Step 1b: START TRANSACTION
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
@@ -233,12 +261,12 @@ func applyDelete(ctx context.Context, conn *sql.Conn, op model.CommitOp) error {
 	if affected == 0 {
 		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("row not found in %s", op.Table)}
 	}
-	// Cascade-delete comments for the deleted row.
-	// Handles both new format (JSON: {"id":1}) and legacy format (plain string: "1").
+	// Cascade-delete memos for the deleted row.
 	if pkJSON, jsonErr := json.Marshal(normalizePkJSON(op.PK)); jsonErr == nil {
+		memoTbl := memoTableName(op.Table)
 		conn.ExecContext(ctx, //nolint:errcheck
-			"DELETE FROM `_cell_comments` WHERE `table_name` = ? AND (`pk_value` = ? OR `pk_value` = ?)",
-			op.Table, string(pkJSON), legacyPkValue(op.PK))
+			fmt.Sprintf("DELETE FROM `%s` WHERE pk_value = ?", memoTbl),
+			string(pkJSON))
 	}
 
 	return nil

@@ -127,9 +127,16 @@ type SyncRequest struct {
 	ExpectedHead string `json:"expected_head"`
 }
 
+// OverwrittenTable describes a table in which main overwrote local changes during auto-resolution.
+type OverwrittenTable struct {
+	Table     string `json:"table"`
+	Conflicts int    `json:"conflicts"`
+}
+
 // SyncResponse represents the result of a sync.
 type SyncResponse struct {
-	Hash string `json:"hash"`
+	Hash             string             `json:"hash"`
+	OverwrittenTables []OverwrittenTable `json:"overwritten_tables,omitempty"`
 }
 
 // DiffRow represents a single diff row.
@@ -158,29 +165,6 @@ type HistoryCommit struct {
 	Author    string `json:"author"`
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
-}
-
-// ConflictSummary represents a table with conflicts.
-type ConflictSummary struct {
-	Table         string `json:"table"`
-	ConflictCount int    `json:"conflict_count"`
-}
-
-// ConflictRow represents a single conflict.
-type ConflictRow struct {
-	Base   map[string]interface{} `json:"base"`
-	Ours   map[string]interface{} `json:"ours"`
-	Theirs map[string]interface{} `json:"theirs"`
-}
-
-// ResolveConflictsRequest represents a request to resolve conflicts.
-type ResolveConflictsRequest struct {
-	TargetID     string `json:"target_id"`
-	DBName       string `json:"db_name"`
-	BranchName   string `json:"branch_name"`
-	ExpectedHead string `json:"expected_head"`
-	Table        string `json:"table"`
-	Strategy     string `json:"strategy"` // "ours" or "theirs"
 }
 
 // SubmitRequestRequest represents a request submission for approval.
@@ -262,29 +246,6 @@ type PreviewCloneRequest struct {
 	ChangeValue  interface{}   `json:"change_value,omitempty"`
 }
 
-// PreviewBatchGenerateRequest represents a batch generate preview request.
-type PreviewBatchGenerateRequest struct {
-	TargetID     string                 `json:"target_id"`
-	DBName       string                 `json:"db_name"`
-	BranchName   string                 `json:"branch_name"`
-	Table        string                 `json:"table"`
-	TemplatePK   map[string]interface{} `json:"template_pk"`
-	VaryColumn   string                 `json:"vary_column,omitempty"`
-	NewValues    []interface{}          `json:"new_values,omitempty"`
-	NewPKs       []interface{}          `json:"new_pks,omitempty"`
-	ChangeColumn string                 `json:"change_column,omitempty"`
-	ChangeValues []interface{}          `json:"change_values,omitempty"`
-}
-
-// PreviewBulkUpdateRequest represents a bulk update preview request.
-type PreviewBulkUpdateRequest struct {
-	TargetID   string `json:"target_id"`
-	DBName     string `json:"db_name"`
-	BranchName string `json:"branch_name"`
-	Table      string `json:"table"`
-	TSVData    string `json:"tsv_data"`
-}
-
 // PreviewError represents an error for a specific row in preview.
 type PreviewError struct {
 	RowIndex int         `json:"row_index"`
@@ -319,41 +280,13 @@ type DiffSummaryResponse struct {
 	Entries []DiffSummaryEntry `json:"entries"`
 }
 
-// ConflictsSummaryEntry represents a table's conflict summary from preview.
-// Dolt v1.x: DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY returns (table, num_data_conflicts, num_schema_conflicts).
-type ConflictsSummaryEntry struct {
-	Table           string `json:"table"`
-	DataConflicts   int    `json:"data_conflicts"`
-	SchemaConflicts int    `json:"schema_conflicts"`
-}
+// --- Cell Memos ---
 
-// --- Cell Comments ---
-
-// CellComment represents a single comment attached to a cell.
-type CellComment struct {
-	CommentID   string `json:"comment_id"`
-	TableName   string `json:"table_name"`
-	PkValue     string `json:"pk_value"`
-	ColumnName  string `json:"column_name"`
-	CommentText string `json:"comment_text"`
-	CreatedAt   string `json:"created_at"`
-}
-
-// AddCommentRequest represents a request to add a comment to a cell.
-type AddCommentRequest struct {
-	TargetID    string `json:"target_id"`
-	DbName      string `json:"db_name"`
-	BranchName  string `json:"branch_name"`
-	TableName   string `json:"table_name"`
-	PkValue     string `json:"pk_value"`
-	ColumnName  string `json:"column_name"`
-	CommentText string `json:"comment_text"`
-}
-
-// DeleteCommentRequest represents a request to delete a comment.
-type DeleteCommentRequest struct {
-	TargetID   string `json:"target_id"`
-	DbName     string `json:"db_name"`
-	BranchName string `json:"branch_name"`
-	CommentID  string `json:"comment_id"`
+// MemoResponse represents a single cell memo (1 per cell).
+// memo_text is empty string when no memo exists for the cell.
+type MemoResponse struct {
+	PkValue    string `json:"pk_value"`
+	ColumnName string `json:"column_name"`
+	MemoText   string `json:"memo_text"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
 }

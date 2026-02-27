@@ -109,18 +109,6 @@ export const previewClone = (body: import("../types/api").PreviewCloneRequest) =
     body: JSON.stringify(body),
   });
 
-export const previewBatchGenerate = (body: import("../types/api").PreviewBatchGenerateRequest) =>
-  request<import("../types/api").PreviewResponse>("/preview/batch_generate", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
-export const previewBulkUpdate = (body: import("../types/api").PreviewBulkUpdateRequest) =>
-  request<import("../types/api").PreviewResponse>("/preview/bulk_update", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
 // Write operations
 export const commit = (body: import("../types/api").CommitRequest) =>
   request<import("../types/api").CommitResponse>("/commit", {
@@ -189,25 +177,6 @@ export const getHistoryCommits = (
     })}`
   );
 
-export const getHistoryRow = (
-  targetId: string,
-  dbName: string,
-  branchName: string,
-  table: string,
-  pk: string,
-  limit = 20
-) =>
-  request<Record<string, unknown>[]>(
-    `/history/row${queryString({
-      target_id: targetId,
-      db_name: dbName,
-      branch_name: branchName,
-      table,
-      pk,
-      limit: String(limit),
-    })}`
-  );
-
 export const getDiffSummary = (
   targetId: string,
   dbName: string,
@@ -226,28 +195,6 @@ export const getDiffSummary = (
       mode,
     })}`
   );
-
-// Conflicts
-export const getConflicts = (targetId: string, dbName: string, branchName: string) =>
-  request<import("../types/api").ConflictsSummaryEntry[]>(
-    `/conflicts${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName })}`
-  );
-
-export const getConflictsTable = (
-  targetId: string,
-  dbName: string,
-  branchName: string,
-  table: string
-) =>
-  request<import("../types/api").ConflictRow[]>(
-    `/conflicts/table${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table })}`
-  );
-
-export const resolveConflicts = (body: import("../types/api").ResolveConflictsRequest) =>
-  request<import("../types/api").CommitResponse>("/conflicts/resolve", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 
 // Requests
 export const submitRequest = (body: import("../types/api").SubmitRequestRequest) =>
@@ -278,8 +225,18 @@ export const rejectRequest = (body: import("../types/api").RejectRequest) =>
     body: JSON.stringify(body),
   });
 
-// Cell Comments
-export const listComments = (
+// Cell Memos
+export const getMemoMap = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  table: string
+) =>
+  request<{ cells: string[] }>(
+    `/memo/map${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table })}`
+  );
+
+export const getMemo = (
   targetId: string,
   dbName: string,
   branchName: string,
@@ -287,51 +244,8 @@ export const listComments = (
   pk: string,
   column: string
 ) =>
-  request<import("../types/api").CellComment[]>(
-    `/comments${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pk, column })}`
-  );
-
-export const getCommentMap = (
-  targetId: string,
-  dbName: string,
-  branchName: string,
-  table: string
-) =>
-  request<{ cells: string[] }>(
-    `/comments/map${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table })}`
-  );
-
-export const addComment = (body: import("../types/api").AddCommentRequest) =>
-  request<{ comment_id: string }>("/comments", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
-export const deleteComment = (body: import("../types/api").DeleteCommentRequest) =>
-  request<{ status: string }>("/comments/delete", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
-export const searchComments = (
-  targetId: string,
-  dbName: string,
-  branchName: string,
-  keyword: string
-) =>
-  request<import("../types/api").CellComment[]>(
-    `/comments/search${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, q: keyword })}`
-  );
-
-export const listCommentsForPks = (
-  targetId: string,
-  dbName: string,
-  branchName: string,
-  table: string,
-  pks: string[]
-) =>
-  request<import("../types/api").CellComment[]>(
-    `/comments/for-pks${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pks: pks.join(",") })}`
+  request<import("../types/api").MemoResponse>(
+    `/memo${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pk, column })}`
   );
 
 // Diff ZIP export — returns a Blob (application/zip)

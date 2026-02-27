@@ -1,184 +1,52 @@
-import { useEffect, useState } from "react";
-import { useContextStore } from "../../store/context";
-import { useUIStore } from "../../store/ui";
-import * as api from "../../api/client";
-import type { ConflictsSummaryEntry } from "../../types/api";
+import type { OverwrittenTable } from "../../types/api";
 
 interface ConflictViewProps {
-  expectedHead: string;
-  onResolved: (newHash: string) => void;
+  overwrittenTables: OverwrittenTable[];
+  onDismiss: () => void;
 }
 
-export function ConflictView({ expectedHead, onResolved }: ConflictViewProps) {
-  const { targetId, dbName, branchName } = useContextStore();
-  const { setBaseState, setError } = useUIStore();
-  const [conflicts, setConflicts] = useState<ConflictsSummaryEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [resolving, setResolving] = useState(false);
-
-  useEffect(() => {
-    loadConflicts();
-  }, [targetId, dbName, branchName]);
-
-  const loadConflicts = () => {
-    setLoading(true);
-    setLoadError(null);
-    api
-      .getConflicts(targetId, dbName, branchName)
-      .then(setConflicts)
-      .catch((err) => {
-        const e = err as { error?: { message?: string } };
-        setLoadError(e?.error?.message || "Failed to load conflicts");
-      })
-      .finally(() => setLoading(false));
-  };
-
-  const handleResolve = async (table: string, strategy: "ours" | "theirs") => {
-    setResolving(true);
-    setBaseState("Syncing");
-    try {
-      const result = await api.resolveConflicts({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        expected_head: expectedHead,
-        table,
-        strategy,
-      });
-      setBaseState("Idle");
-      onResolved(result.hash);
-    } catch (err: unknown) {
-      const e = err as { error?: { code?: string; message?: string } };
-      if (e?.error?.code === "SCHEMA_CONFLICTS_PRESENT") {
-        setBaseState("SchemaConflictDetected");
-        setError("Schema conflicts detected. Resolve via CLI.");
-      } else if (e?.error?.code === "CONSTRAINT_VIOLATIONS_PRESENT") {
-        setBaseState("ConstraintViolationDetected");
-        setError("Constraint violations detected. Resolve via CLI.");
-      } else {
-        setBaseState("MergeConflictsPresent");
-        setError(e?.error?.message || "Resolution failed");
-      }
-    } finally {
-      setResolving(false);
-    }
-  };
-
-  if (loading) {
-    return <div style={{ padding: 24, textAlign: "center" }}>Loading conflicts...</div>;
-  }
-
-  if (loadError) {
-    return (
-      <div style={{ padding: 24, textAlign: "center" }}>
-        <div className="error-banner" style={{ display: "inline-flex", borderRadius: 6, borderBottom: "none" }}>
-          {loadError}
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <button onClick={loadConflicts}>Retry</button>
-        </div>
-      </div>
-    );
-  }
-
-  if (conflicts.length === 0) {
-    return (
-      <div style={{ padding: 48, textAlign: "center", color: "#888" }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>&#x2714;</div>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>No conflicts detected</div>
-        <div style={{ fontSize: 12 }}>
-          Conflicts appear here after a Sync from Main if there are overlapping changes.
-          You can safely continue editing.
-        </div>
-      </div>
-    );
-  }
-
+/**
+ * OverwriteNotification
+ *
+ * Shown after a sync that auto-resolved data conflicts (main priority).
+ * Informs the user which tables were overwritten and prompts them to re-edit if needed.
+ */
+export function ConflictView({ overwrittenTables, onDismiss }: ConflictViewProps) {
   return (
     <div style={{ padding: 16 }}>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
-        Merge Conflicts
-      </h3>
-      <table
-        style={{
-          width: "100%",
-          borderCollapse: "collapse",
-          fontSize: 13,
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: "#b45309" }}>
+          ⚠ mainの変更が優先されました
+        </h3>
+        <button
+          onClick={onDismiss}
+          style={{ fontSize: 12, padding: "4px 12px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer" }}
+        >
+          閉じる
+        </button>
+      </div>
+
+      <p style={{ fontSize: 12, color: "#555", margin: "0 0 12px" }}>
+        同期中にコンフリクトが検出されました。mainの変更を優先して自動解決しました。
+        以下のテーブルで、あなたの変更がmainの内容で上書きされた可能性があります。
+        必要に応じて再編集してください。
+      </p>
+
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: "2px solid #d0d0d8" }}>
-            <th style={{ textAlign: "left", padding: "6px 8px" }}>Table</th>
-            <th style={{ textAlign: "center", padding: "6px 8px" }}>
-              Schema
-            </th>
-            <th style={{ textAlign: "center", padding: "6px 8px" }}>Data</th>
-            <th style={{ textAlign: "center", padding: "6px 8px" }}>
-              Constraints
-            </th>
-            <th style={{ textAlign: "right", padding: "6px 8px" }}>Actions</th>
+            <th style={{ textAlign: "left", padding: "6px 8px" }}>テーブル</th>
+            <th style={{ textAlign: "center", padding: "6px 8px" }}>コンフリクト数</th>
           </tr>
         </thead>
         <tbody>
-          {conflicts.map((c) => (
-            <tr
-              key={c.table}
-              style={{ borderBottom: "1px solid #e8e8f0" }}
-            >
-              <td style={{ padding: "6px 8px", fontWeight: 500 }}>
-                {c.table}
-              </td>
+          {overwrittenTables.map((t) => (
+            <tr key={t.table} style={{ borderBottom: "1px solid #e8e8f0" }}>
+              <td style={{ padding: "6px 8px", fontWeight: 500 }}>{t.table}</td>
               <td style={{ textAlign: "center", padding: "6px 8px" }}>
-                {c.schema_conflicts > 0 ? (
-                  <span className="badge badge-danger">
-                    {c.schema_conflicts}
-                  </span>
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td style={{ textAlign: "center", padding: "6px 8px" }}>
-                {c.data_conflicts > 0 ? (
-                  <span className="badge badge-warning">
-                    {c.data_conflicts}
-                  </span>
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td style={{ textAlign: "center", padding: "6px 8px" }}>
-                {(c.constraint_violations ?? 0) > 0 ? (
-                  <span className="badge badge-danger">
-                    {c.constraint_violations}
-                  </span>
-                ) : (
-                  "-"
-                )}
-              </td>
-              <td style={{ textAlign: "right", padding: "6px 8px" }}>
-                {c.data_conflicts > 0 && c.schema_conflicts === 0 ? (
-                  <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                    <button
-                      onClick={() => handleResolve(c.table, "ours")}
-                      disabled={resolving}
-                      style={{ fontSize: 11 }}
-                    >
-                      Keep Ours
-                    </button>
-                    <button
-                      onClick={() => handleResolve(c.table, "theirs")}
-                      disabled={resolving}
-                      style={{ fontSize: 11 }}
-                    >
-                      Keep Theirs
-                    </button>
-                  </div>
-                ) : (
-                  <span style={{ fontSize: 11, color: "#888" }}>
-                    CLI required
-                  </span>
-                )}
+                <span style={{ background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 4, fontSize: 12 }}>
+                  {t.conflicts}
+                </span>
               </td>
             </tr>
           ))}

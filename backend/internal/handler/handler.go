@@ -38,8 +38,6 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 
 		// Previews
 		r.Post("/preview/clone", h.PreviewClone)
-		r.Post("/preview/batch_generate", h.PreviewBatchGenerate)
-		r.Post("/preview/bulk_update", h.PreviewBulkUpdate)
 
 		// Write operations
 		r.Post("/commit", h.Commit)
@@ -50,12 +48,6 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Get("/diff/summary", h.DiffSummary)
 		r.Get("/diff/export-zip", h.ExportDiffZip)
 		r.Get("/history/commits", h.HistoryCommits)
-		r.Get("/history/row", h.HistoryRow)
-
-		// Conflicts
-		r.Get("/conflicts", h.ListConflicts)
-		r.Get("/conflicts/table", h.GetConflictsTable)
-		r.Post("/conflicts/resolve", h.ResolveConflicts)
 
 		// Request/Approval
 		r.Post("/request/submit", h.SubmitRequest)
@@ -64,13 +56,9 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Post("/request/approve", h.ApproveRequest)
 		r.Post("/request/reject", h.RejectRequest)
 
-		// Cell Comments
-		r.Get("/comments", h.ListComments)
-		r.Get("/comments/map", h.GetCommentMap)
-		r.Post("/comments", h.AddComment)
-		r.Post("/comments/delete", h.DeleteComment)
-		r.Get("/comments/search", h.SearchComments)
-		r.Get("/comments/for-pks", h.ListCommentsForPks)
+		// Cell Memos
+		r.Get("/memo", h.GetMemo)
+		r.Get("/memo/map", h.GetMemoMap)
 	})
 
 	// Health check

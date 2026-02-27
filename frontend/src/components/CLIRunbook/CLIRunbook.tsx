@@ -64,25 +64,14 @@ CALL DOLT_MERGE('--abort');`;
   const handleRefreshCheck = async () => {
     setChecking(true);
     try {
-      // Try to get conflicts — if empty, issue is resolved
-      const conflicts = await api.getConflicts(targetId, dbName, branchName);
-      const hasSchemaConflicts = conflicts.some((c) => c.schema_conflicts > 0);
-      const hasConstraintViolations = conflicts.some((c) => (c.constraint_violations ?? 0) > 0);
-
-      if (hasSchemaConflicts) {
-        setBaseState("SchemaConflictDetected");
-        setError("Schema conflicts still present. Resolve via CLI.");
-      } else if (hasConstraintViolations) {
-        setBaseState("ConstraintViolationDetected");
-        setError("Constraint violations still present. Resolve via CLI.");
-      } else {
-        setBaseState("Idle");
-        setError(null);
-      }
-    } catch {
-      // If getConflicts fails (e.g., no merge in progress), assume resolved
+      // CLIで解決済みか確認。ヘッド取得が成功すれば安定状態と見なす。
+      // 次回 Sync 時にスキーマ/制約違反が残っていれば再検出される。
+      await api.getHead(targetId, dbName, branchName);
       setBaseState("Idle");
       setError(null);
+    } catch {
+      // ヘッド取得失敗 → まだ未解決の可能性
+      setError("まだ解決されていない可能性があります。CLIで再度確認してください。");
     } finally {
       setChecking(false);
     }

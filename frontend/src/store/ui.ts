@@ -7,7 +7,6 @@ export type BaseState =
   | "Previewing"
   | "Committing"
   | "Syncing"
-  | "MergeConflictsPresent"
   | "SchemaConflictDetected"
   | "ConstraintViolationDetected"
   | "StaleHeadDetected";

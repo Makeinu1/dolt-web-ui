@@ -1,9 +1,8 @@
 import { ApproverInbox, SubmitDialog } from "../RequestDialog/RequestDialog";
 import { CommitDialog } from "../common/CommitDialog";
 import { HistoryTab } from "../HistoryTab/HistoryTab";
-import { CommentSearchModal } from "../CommentSearchModal/CommentSearchModal";
 import { CellCommentPanel } from "../CellCommentPanel/CellCommentPanel";
-import { ActivityLog } from "../ActivityLog/ActivityLog";
+import { MergeLog } from "../MergeLog/MergeLog";
 import type { SelectedCellInfo } from "../TableGrid/TableGrid";
 
 
@@ -23,8 +22,7 @@ export interface ModalManagerProps {
     showHistory: boolean;
     showDeleteConfirm: boolean;
     showCommentPanel: boolean;
-    showCommentSearch: boolean;
-    showActivityLog: boolean;
+    showMergeLog: boolean;
 
     // Closers
     onCloseCommit: () => void;
@@ -33,15 +31,12 @@ export interface ModalManagerProps {
     onCloseHistory: () => void;
     onCloseDeleteConfirm: () => void;
     onCloseCommentPanel: () => void;
-    onCloseCommentSearch: () => void;
-    onCloseActivityLog: () => void;
+    onCloseMergeLog: () => void;
 
     // Callbacks
     onCommitSuccess: (newHash: string) => void;
     onSubmitted: () => void;
     onDeleteConfirm: () => void;
-    onCommentChanged: () => void;
-    onCommentNavigate: (table: string, pkValue: string) => void;
 
     // State
     deleting: boolean;
@@ -67,21 +62,17 @@ export function ModalManager({
     showHistory,
     showDeleteConfirm,
     showCommentPanel,
-    showCommentSearch,
-    showActivityLog,
+    showMergeLog,
     onCloseCommit,
     onCloseSubmit,
     onCloseApprover,
     onCloseHistory,
     onCloseDeleteConfirm,
     onCloseCommentPanel,
-    onCloseCommentSearch,
-    onCloseActivityLog,
+    onCloseMergeLog,
     onCommitSuccess,
     onSubmitted,
     onDeleteConfirm,
-    onCommentChanged,
-    onCommentNavigate,
     deleting,
     selectedCell,
 }: ModalManagerProps) {
@@ -162,7 +153,7 @@ export function ModalManager({
                 </div>
             )}
 
-            {/* Cell Comment Panel (slide-in, not modal overlay) */}
+            {/* Cell Memo Panel (slide-in) */}
             {showCommentPanel && selectedCell && (
                 <CellCommentPanel
                     targetId={targetId}
@@ -172,24 +163,12 @@ export function ModalManager({
                     pk={selectedCell.pk}
                     column={selectedCell.column}
                     onClose={onCloseCommentPanel}
-                    onChanged={onCommentChanged}
                 />
             )}
 
-            {/* Comment Search Modal */}
-            {showCommentSearch && (
-                <CommentSearchModal
-                    targetId={targetId}
-                    dbName={dbName}
-                    branchName={branchName}
-                    onClose={onCloseCommentSearch}
-                    onNavigate={onCommentNavigate}
-                />
-            )}
-
-            {/* Activity Log Modal */}
-            {showActivityLog && (
-                <ActivityLog onClose={onCloseActivityLog} />
+            {/* Merge Log Modal */}
+            {showMergeLog && (
+                <MergeLog onClose={onCloseMergeLog} />
             )}
         </>
     );

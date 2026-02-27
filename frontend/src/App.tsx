@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useContextStore } from "./store/context";
 import { useDraftStore } from "./store/draft";
 import { useUIStore, type BaseState } from "./store/ui";
@@ -10,8 +10,7 @@ import { ModalManager } from "./components/ModalManager/ModalManager";
 import { useHeadSync } from "./hooks/useHeadSync";
 import * as api from "./api/client";
 import { ApiError } from "./api/errors";
-import { downloadDraftSQL } from "./utils/exportDraft";
-import type { Table } from "./types/api";
+import type { Table, OverwrittenTable } from "./types/api";
 import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import "./App.css";
 
@@ -24,11 +23,9 @@ function stateLabel(state: BaseState): { text: string; className: string } {
     case "Previewing":
       return { text: "プレビュー中", className: "state-draft" };
     case "Committing":
-      return { text: "コミット中...", className: "state-draft" };
+      return { text: "保存中...", className: "state-draft" };
     case "Syncing":
       return { text: "同期中...", className: "state-draft" };
-    case "MergeConflictsPresent":
-      return { text: "コンフリクト", className: "state-conflict" };
     case "SchemaConflictDetected":
       return { text: "スキーマコンフリクト", className: "state-conflict" };
     case "ConstraintViolationDetected":
@@ -54,17 +51,15 @@ function App() {
   const [deleting, setDeleting] = useState(false);
   const [selectedCell, setSelectedCell] = useState<SelectedCellInfo | null>(null);
   const [showCommentPanel, setShowCommentPanel] = useState(false);
-  const [commentRefreshKey, setCommentRefreshKey] = useState(0);
-  const [showCommentSearch, setShowCommentSearch] = useState(false);
-  const [showActivityLog, setShowActivityLog] = useState(false);
-  const [filterByPk, setFilterByPk] = useState<string | null>(null);
+  const [showMergeLog, setShowMergeLog] = useState(false);
+  const [overwrittenTables, setOverwrittenTables] = useState<OverwrittenTable[]>([]);
 
 
   const isMain = branchName === "main";
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showCommentSearch || showActivityLog;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -174,13 +169,15 @@ function App() {
       });
       setExpectedHead(result.hash);
       setBaseState("Idle");
+      // Data conflicts were auto-resolved (main priority) — notify user
+      if (result.overwritten_tables && result.overwritten_tables.length > 0) {
+        setOverwrittenTables(result.overwritten_tables);
+      }
     } catch (err: unknown) {
       // ApiError carries flat .code and .message fields
       const code = err instanceof ApiError ? err.code : (err as { code?: string })?.code;
       const message = err instanceof ApiError ? err.message : (err as { message?: string })?.message;
-      if (code === "MERGE_CONFLICTS_PRESENT") {
-        setBaseState("MergeConflictsPresent");
-      } else if (code === "SCHEMA_CONFLICTS_PRESENT") {
+      if (code === "SCHEMA_CONFLICTS_PRESENT") {
         setBaseState("SchemaConflictDetected");
       } else if (code === "CONSTRAINT_VIOLATIONS_PRESENT") {
         setBaseState("ConstraintViolationDetected");
@@ -200,14 +197,6 @@ function App() {
       setBaseState(hasDraft() ? "DraftEditing" : "Idle");
       setError(null);
     }
-  };
-
-  const exportDraftAsSQL = () => {
-    if (ops.length === 0) {
-      alert("エクスポートするドラフトがありません");
-      return;
-    }
-    downloadDraftSQL(ops, { targetId, dbName, branchName });
   };
 
   const handleDeleteBranch = async () => {
@@ -234,24 +223,6 @@ function App() {
     setExpectedHead(newHash);
     setRefreshKey((k) => k + 1);
   };
-
-  const onConflictResolved = (newHash: string) => {
-    setExpectedHead(newHash);
-    setBaseState("Idle");
-  };
-
-  // Called after comment add/delete: refresh HEAD (immediate commit changed it) and comment markers
-  const onCommentChanged = useCallback(() => {
-    refreshHead();
-    setCommentRefreshKey((k) => k + 1);
-  }, [refreshHead]);
-
-  // Navigate to a specific row from comment search
-  const handleCommentNavigate = useCallback((table: string, pkValue: string) => {
-    setSelectedTable(table);
-    setFilterByPk(pkValue);
-    setShowCommentSearch(false);
-  }, []);
 
   // Close overflow menu on outside click
   const overflowRef = useRef<HTMLDivElement>(null);
@@ -287,21 +258,9 @@ function App() {
     if (isMain) return null;
     if (baseState === "StaleHeadDetected") {
       return (
-        <div style={{ display: "flex", gap: 8, marginRight: 8 }}>
-          {hasDraft() && (
-            <button
-              className="toolbar-btn"
-              style={{ fontSize: 13, color: '#0369a1', background: '#e0f2fe', border: '1px solid #bae6fd', padding: '4px 12px', borderRadius: 4 }}
-              onClick={exportDraftAsSQL}
-              title="競合が発生したためドラフトをSQLとしてエクスポートして一時退避します"
-            >
-              📥 ドラフトをSQLで退避
-            </button>
-          )}
-          <button className="action-btn action-refresh" onClick={handleRefresh}>
-            ↻ Refresh & Force Sync
-          </button>
-        </div>
+        <button className="action-btn action-refresh" onClick={handleRefresh}>
+          ↻ 更新して同期
+        </button>
       );
     }
     if (hasDraft()) {
@@ -312,7 +271,6 @@ function App() {
           disabled={
             baseState === "Committing" ||
             baseState === "Syncing" ||
-            baseState === "MergeConflictsPresent" ||
             baseState === "SchemaConflictDetected" ||
             baseState === "ConstraintViolationDetected"
           }
@@ -331,8 +289,7 @@ function App() {
     if (!isMain) {
       // Sync
       const syncDisabled = hasDraft() || baseState === "Syncing" || baseState === "Committing" ||
-        baseState === "MergeConflictsPresent" || baseState === "SchemaConflictDetected" ||
-        baseState === "ConstraintViolationDetected";
+        baseState === "SchemaConflictDetected" || baseState === "ConstraintViolationDetected";
       items.push({
         label: "↻ Main と同期",
         onClick: () => { handleSync(); setShowOverflow(false); },
@@ -349,7 +306,7 @@ function App() {
         onClick: () => { setShowSubmit(true); setShowOverflow(false); },
         disabled: submitDisabled,
         disabledReason: submitDisabled
-          ? (hasDraft() ? "先にコミットしてください" : "Idle状態でないとSubmitできません")
+          ? (hasDraft() ? "先に保存してください" : "待機状態でないと申請できません")
           : undefined,
       });
 
@@ -366,16 +323,10 @@ function App() {
       onClick: () => { setShowHistory(true); setShowOverflow(false); },
     });
 
-    // Comment search
+    // Merge Log
     items.push({
-      label: "🔍 コメント検索...",
-      onClick: () => { setShowCommentSearch(true); setShowOverflow(false); },
-    });
-
-    // Activity Log
-    items.push({
-      label: "📜 変更ログ検索...",
-      onClick: () => { setShowActivityLog(true); setShowOverflow(false); },
+      label: "📋 マージログ",
+      onClick: () => { setShowMergeLog(true); setShowOverflow(false); },
     });
 
     // Delete Branch (non-main only)
@@ -402,7 +353,7 @@ function App() {
             <select
               className="header-table-select"
               value={selectedTable}
-              onChange={(e) => { setSelectedTable(e.target.value); setFilterByPk(null); }}
+              onChange={(e) => setSelectedTable(e.target.value)}
             >
               {tables.map((t) => {
                 const c = tableChanges.get(t.name);
@@ -511,36 +462,26 @@ function App() {
         </div>
       ) : (
         <div className="work-content">
-          {/* Conflict alert banner */}
-          {baseState === "MergeConflictsPresent" && (
-            <div className="conflict-banner">
-              <strong>⚠ マージコンフリクトが検出されました</strong>
-              <p>コンフリクトを解決してください。</p>
-            </div>
-          )}
-
           {/* Grid fills all remaining space */}
           <div className="grid-container">
             {selectedTable && (
               <TableGrid
                 tableName={selectedTable}
                 refreshKey={refreshKey}
-                commentRefreshKey={commentRefreshKey}
                 onCellSelected={(info) => {
                   setSelectedCell(info);
                   if (!info) setShowCommentPanel(false);
                 }}
-                filterByPk={filterByPk}
               />
             )}
           </div>
 
-          {/* ConflictView overlay */}
-          {baseState === "MergeConflictsPresent" && (
+          {/* Overwrite notification overlay (shown after auto-resolved sync conflicts) */}
+          {overwrittenTables.length > 0 && (
             <div className="conflict-overlay">
               <ConflictView
-                expectedHead={expectedHead}
-                onResolved={onConflictResolved}
+                overwrittenTables={overwrittenTables}
+                onDismiss={() => setOverwrittenTables([])}
               />
             </div>
           )}
@@ -559,21 +500,17 @@ function App() {
         showHistory={showHistory}
         showDeleteConfirm={showDeleteConfirm}
         showCommentPanel={showCommentPanel}
-        showCommentSearch={showCommentSearch}
-        showActivityLog={showActivityLog}
+        showMergeLog={showMergeLog}
         onCloseCommit={() => setShowCommit(false)}
         onCloseSubmit={() => setShowSubmit(false)}
         onCloseApprover={() => setShowApprover(false)}
         onCloseHistory={() => setShowHistory(false)}
         onCloseDeleteConfirm={() => setShowDeleteConfirm(false)}
         onCloseCommentPanel={() => setShowCommentPanel(false)}
-        onCloseCommentSearch={() => setShowCommentSearch(false)}
-        onCloseActivityLog={() => setShowActivityLog(false)}
+        onCloseMergeLog={() => setShowMergeLog(false)}
         onCommitSuccess={onCommitSuccess}
         onSubmitted={() => setRequestCount(requestCount + 1)}
         onDeleteConfirm={handleDeleteBranch}
-        onCommentChanged={onCommentChanged}
-        onCommentNavigate={handleCommentNavigate}
         deleting={deleting}
         selectedCell={selectedCell}
       />
