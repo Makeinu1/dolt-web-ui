@@ -108,6 +108,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   const [pageSize] = useState(50);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [gridError, setGridError] = useState<string | null>(null);
   const [serverFilter, setServerFilter] = useState("");
   const [serverSort, setServerSort] = useState("");
   const colVisibilityKey = `colVisibility/${targetId}/${dbName}/${tableName}`;
@@ -121,6 +122,8 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   });
   const [selectedRows, setSelectedRows] = useState<Record<string, unknown>[]>([]);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
+  const [cloning, setCloning] = useState(false);
+  const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
 
   // Persist column visibility to localStorage
@@ -245,6 +248,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   // Load schema
   useEffect(() => {
     if (!tableName) return;
+    setGridError(null);
     api
       .getTableSchema(targetId, dbName, branchName, tableName)
       .then((schema) => {
@@ -252,20 +256,27 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
         setHiddenColumns(new Set());
         setSelectedRows([]);
       })
-      .catch(console.error);
+      .catch((err) => {
+        const msg = err instanceof ApiError ? err.message : "スキーマの読み込みに失敗しました";
+        setGridError(msg);
+      });
   }, [targetId, dbName, branchName, tableName]);
 
   // Load rows (server-side filter + sort)
   const loadRows = useCallback(() => {
     if (!tableName) return;
     setLoading(true);
+    setGridError(null);
     api
       .getTableRows(targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort)
       .then((res: RowsResponse) => {
         setRowData(res.rows || []);
         setTotalCount(res.total_count);
       })
-      .catch(console.error)
+      .catch((err) => {
+        const msg = err instanceof ApiError ? err.message : "データの読み込みに失敗しました";
+        setGridError(msg);
+      })
       .finally(() => setLoading(false));
   }, [targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort, refreshKey]);
 
@@ -329,35 +340,42 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
   }, [onCellSelected, pkCols, rowPkId, tableName]);
 
   const handleCloneRows = useCallback(async (rows: Record<string, unknown>[]) => {
-    if (pkCols.length === 0) return;
+    if (pkCols.length === 0 || cloningRef.current) return;
+    cloningRef.current = true;
+    setCloning(true);
 
-    for (const row of rows) {
-      try {
-        const result = await api.previewClone({
-          target_id: targetId,
-          db_name: dbName,
-          branch_name: branchName,
-          table: tableName,
-          template_pk: Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])),
-        });
-        if (result.errors?.length > 0) {
-          useUIStore.getState().setError(result.errors[0].message);
+    try {
+      for (const row of rows) {
+        try {
+          const result = await api.previewClone({
+            target_id: targetId,
+            db_name: dbName,
+            branch_name: branchName,
+            table: tableName,
+            template_pk: Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])),
+          });
+          if (result.errors?.length > 0) {
+            useUIStore.getState().setError(result.errors[0].message);
+            break;
+          } else {
+            for (const op of result.ops) {
+              addOp(op);
+            }
+            setBaseState("DraftEditing");
+            const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
+            if (insertOp) {
+              onRowInserted(insertOp.values as Record<string, unknown>);
+            }
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof ApiError ? err.message : "";
+          useUIStore.getState().setError("コピーに失敗しました" + (msg ? ": " + msg : ""));
           break;
-        } else {
-          for (const op of result.ops) {
-            addOp(op);
-          }
-          setBaseState("DraftEditing");
-          const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
-          if (insertOp) {
-            onRowInserted(insertOp.values as Record<string, unknown>);
-          }
         }
-      } catch (err: unknown) {
-        const msg = err instanceof ApiError ? err.message : "";
-        useUIStore.getState().setError("コピーに失敗しました" + (msg ? ": " + msg : ""));
-        break;
       }
+    } finally {
+      cloningRef.current = false;
+      setCloning(false);
     }
   }, [pkCols, tableName, targetId, dbName, branchName, addOp, setBaseState, onRowInserted]);
 
@@ -569,6 +587,16 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* Grid error banner */}
+      {gridError && (
+        <div style={{ padding: "6px 10px", background: "#fee2e2", color: "#991b1b", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+          <span>⚠ {gridError}</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => { setGridError(null); loadRows(); }} style={{ fontSize: 11, padding: "2px 8px", cursor: "pointer" }}>再試行</button>
+            <button onClick={() => setGridError(null)} style={{ fontSize: 11, padding: "0 6px", background: "none", border: "none", cursor: "pointer", color: "#991b1b" }}>✕</button>
+          </div>
+        </div>
+      )}
       {/* Toolbar: row info + action buttons + column toggle */}
       <div style={{ display: "flex", alignItems: "center", padding: "2px 8px", background: "#fafafa", borderBottom: "1px solid #e8e8f0", flexShrink: 0, gap: 4 }}>
         <span style={{ fontSize: 11, color: "#888", marginRight: "auto" }}>
@@ -581,11 +609,11 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
             {!isProtected && (
               <button
                 onClick={() => handleCloneRows(selectedRows)}
-                disabled={pkCols.length === 0}
-                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: "pointer" }}
+                disabled={pkCols.length === 0 || cloning}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: cloning ? "not-allowed" : "pointer" }}
                 title="行をコピー"
               >
-                コピー{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+                {cloning ? "コピー中..." : `コピー${selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}`}
               </button>
             )}
             <button
@@ -636,6 +664,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
           onCellClicked={onCellClicked}
           onFilterChanged={onFilterChanged}
           onSortChanged={onSortChanged}
+          overlayNoRowsTemplate="<span style='font-size:13px;color:#666'>検索条件に一致するデータがありません</span>"
         />
       </div>
 

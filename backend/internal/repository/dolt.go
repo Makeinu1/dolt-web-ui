@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/config"
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -46,6 +47,13 @@ func New(cfg *config.Config) (*Repository, error) {
 // We use Dolt's revision specifier in the USE statement: USE `db/branch`
 // This makes the connection stateless and safe for pooling.
 func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	if err := validation.ValidateDBName(dbName); err != nil {
+		return nil, fmt.Errorf("invalid db name: %w", err)
+	}
+	if err := validation.ValidateBranchName(branchName); err != nil {
+		return nil, fmt.Errorf("invalid branch name: %w", err)
+	}
+
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
 	r.mu.RUnlock()
@@ -76,6 +84,13 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 // Required for write operations: INSERT, UPDATE, DELETE, DOLT_COMMIT, DOLT_ADD, etc.
 // Read-only queries should use Conn() which uses stateless revision specifiers.
 func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	if err := validation.ValidateDBName(dbName); err != nil {
+		return nil, fmt.Errorf("invalid db name: %w", err)
+	}
+	if err := validation.ValidateBranchName(branchName); err != nil {
+		return nil, fmt.Errorf("invalid branch name: %w", err)
+	}
+
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
 	r.mu.RUnlock()

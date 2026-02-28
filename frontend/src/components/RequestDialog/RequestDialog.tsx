@@ -142,7 +142,10 @@ export function SubmitDialog({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={() => {
+      if (summaryJa.trim() && !window.confirm("入力中の内容が破棄されます。閉じますか？")) return;
+      onClose();
+    }}>
       <div className="modal" style={{ minWidth: 600, maxWidth: 800 }} onClick={(e) => e.stopPropagation()}>
         <h2>承認を申請</h2>
         {error && <div className="error-banner" style={{ marginBottom: 12 }}>{error}</div>}
@@ -234,7 +237,11 @@ function ApproveModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={() => {
+      const defaultMsg = `承認マージ: ${requestId}`;
+      if (mergeMessage !== defaultMsg && mergeMessage.trim() && !window.confirm("入力中の内容が破棄されます。閉じますか？")) return;
+      onClose();
+    }}>
       <div className="modal" style={{ minWidth: 600, maxWidth: 800 }} onClick={(e) => e.stopPropagation()}>
         <h2>承認</h2>
         {error && <div className="error-banner">{error}</div>}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
 func (s *Service) ListTargets() []model.TargetResponse {
@@ -82,6 +83,10 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 }
 
 func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchRequest) error {
+	if validation.IsProtectedBranch(req.BranchName) {
+		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "protected branch cannot be deleted"}
+	}
+
 	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)

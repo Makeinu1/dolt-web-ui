@@ -2,10 +2,15 @@ const API_BASE = "/api/v1";
 import { ApiError } from "./errors";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    throw new ApiError(0, { code: "NETWORK_ERROR", message: "サーバーに接続できません" });
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({

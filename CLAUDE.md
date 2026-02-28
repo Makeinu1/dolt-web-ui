@@ -357,6 +357,24 @@ Database: Test
 - ドラフト更新マージ（同一行の連続 update を自動統合）
 - 自動生成保存メッセージ（`[{branch}] {table}テーブル: +{i} ~{u} -{d}`）
 
+### UX / データ安全性改善（UX網羅性レビュー対応）
+- **ブランチ/ターゲット/DB切替時の確認ダイアログ** — ドラフトがある場合 `window.confirm()` でデータ喪失防止（UX-19）
+- **モーダル外クリック保護** — SubmitDialog・ApproveModal で入力テキストがあれば閉じる前に確認（UX-17）
+- **StaleHeadDetected 時の UI 改善** — エラーバナーの ✕ を非表示、ステートバッジをクリックで `handleRefresh`（UX-11）
+- **ネットワークエラー可視化** — `fetch` の `TypeError` を `ApiError(NETWORK_ERROR)` に変換し「サーバーに接続できません」表示（UX-N1）
+- **テーブル/行読み込み失敗時のエラーバナー** — グリッド上部にエラー表示 + 再試行ボタン（UX-1）
+- **ZIPエクスポート失敗時のエラー表示**（UX-7）
+- **マージログ読み込み失敗時のエラー表示**（UX-8）
+- **行クローン中のフィードバック** — ボタン disable + 「コピー中...」表示、`useRef` で連打防止（UX-4）
+- **ブランチ読み込み中のローディング表示** — `disabled` + 「読み込み中...」（UX-2）
+- **テーブル一覧ローディング表示** — セレクタ `disabled` + 「読み込み中...」（UX-3）
+- **AG Grid エンプティステート日本語化** — `overlayNoRowsTemplate` を「検索条件に一致するデータがありません」に（UX-N2）
+- **BRANCH_LOCKED 専用メッセージ** — 「承認申請中のためロックされています」（Commit/Sync 両方対応、UX-9）
+- **ConflictView オーバーレイ外クリック** — 閉じる操作が可能に（UX-14）
+- **Sync ダブルクリック防止** — `baseState === "Syncing"` で早期リターン（UX-12）
+- **CommitDialog の `_memo_*` テーブル名変換** — 「{table} のメモ」として表示（UX-16）
+- **CellCommentPanel ドラフト破棄ボタン** — 「未保存の変更あり」バナーに「破棄」リンク追加（UX-18）
+
 ### 運用
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
@@ -385,8 +403,8 @@ Database: Test
 1. `npx tsc --noEmit`（フロントエンド変更時）/ `go build`（バックエンド変更時）でコンパイルエラーがないことを確認
 2. フロントエンド変更時: `cd frontend && npm run build` → `rm -rf ../backend/cmd/server/static && cp -r dist ../backend/cmd/server/static`
 3. `find backend/cmd/server/static -name $'Icon\r' -delete` — macOS ゴミファイル削除
-4. `bash /tmp/dolt-e2e-test.sh` — 58/58 PASS
-5. `bash /tmp/dolt-e2e-extended.sh` — 52/52 PASS
+4. `bash /tmp/dolt-e2e-4changes.sh` — 19/19 PASS（curl ベース統合テスト）
+5. `cd frontend && npx playwright test` — 20/20 PASS（Playwright ブラウザテスト）
 6. macOS バイナリビルド: `cd backend && go build -o ../dist/dolt-web-ui ./cmd/server`
 7. Linux バイナリビルド: `cd backend && GOOS=linux GOARCH=amd64 go build -o ../dist/dolt-web-ui-linux-amd64 ./cmd/server`
 8. `git add -f dist/dolt-web-ui dist/dolt-web-ui-linux-amd64` + ソース変更をステージング

@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useContextStore } from "../../store/context";
+import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { Target, Database, Branch } from "../../types/api";
 
 export function ContextSelector() {
   const { targetId, dbName, branchName, branchRefreshKey, setTarget, setDatabase, setBranch } =
     useContextStore();
   const setError = useUIStore((s) => s.setError);
+  const hasDraft = useDraftStore((s) => s.hasDraft);
 
   const [targets, setTargets] = useState<Target[]>([]);
   const [databases, setDatabases] = useState<Database[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -21,8 +25,7 @@ export function ContextSelector() {
 
   useEffect(() => {
     api.getTargets().then(setTargets).catch((err) => {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "ターゲットの読み込みに失敗しました");
+      setError(err instanceof ApiError ? err.message : "ターゲットの読み込みに失敗しました");
     });
   }, []);
 
@@ -32,8 +35,7 @@ export function ContextSelector() {
       return;
     }
     api.getDatabases(targetId).then(setDatabases).catch((err) => {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "データベースの読み込みに失敗しました");
+      setError(err instanceof ApiError ? err.message : "データベースの読み込みに失敗しました");
     });
   }, [targetId]);
 
@@ -42,6 +44,7 @@ export function ContextSelector() {
       setBranches([]);
       return;
     }
+    setLoadingBranches(true);
     try {
       const result = await api.getBranches(targetId, dbName);
       setBranches(result);
@@ -51,8 +54,9 @@ export function ContextSelector() {
         setBranch("");
       }
     } catch (err) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "ブランチの読み込みに失敗しました");
+      setError(err instanceof ApiError ? err.message : "ブランチの読み込みに失敗しました");
+    } finally {
+      setLoadingBranches(false);
     }
   };
 
@@ -96,8 +100,7 @@ export function ContextSelector() {
       setWorkItemName("");
       setShowCreate(false);
     } catch (err: unknown) {
-      const e = err as { error?: { message?: string } };
-      setCreateError(e?.error?.message || "ブランチの作成に失敗しました");
+      setCreateError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
     } finally {
       setCreating(false);
     }
@@ -129,18 +132,28 @@ export function ContextSelector() {
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <select
             value={branchName}
-            onChange={(e) => setBranch(e.target.value)}
+            onChange={(e) => {
+              if (hasDraft() && !window.confirm("未コミットの変更があります。破棄してブランチを切り替えますか？")) return;
+              setBranch(e.target.value);
+            }}
             style={{ minWidth: 120 }}
+            disabled={loadingBranches}
           >
-            <option value="">-- ブランチ --</option>
-            {branches.map((b) => {
-              const icon = b.name === "main" ? "🔒" : b.name === "audit" ? "📋" : "🌿";
-              return (
-                <option key={b.name} value={b.name}>
-                  {`${icon} ${b.name}`}
-                </option>
-              );
-            })}
+            {loadingBranches ? (
+              <option>読み込み中...</option>
+            ) : (
+              <>
+                <option value="">-- ブランチ --</option>
+                {branches.map((b) => {
+                  const icon = b.name === "main" ? "🔒" : b.name === "audit" ? "📋" : "🌿";
+                  return (
+                    <option key={b.name} value={b.name}>
+                      {`${icon} ${b.name}`}
+                    </option>
+                  );
+                })}
+              </>
+            )}
           </select>
 
           <button
@@ -205,7 +218,10 @@ export function ContextSelector() {
               </label>
               <select
                 value={targetId}
-                onChange={(e) => setTarget(e.target.value)}
+                onChange={(e) => {
+                  if (hasDraft() && !window.confirm("未コミットの変更があります。破棄して接続先を変更しますか？")) return;
+                  setTarget(e.target.value);
+                }}
                 style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
               >
                 <option value="">-- ターゲットを選択 --</option>
@@ -221,7 +237,10 @@ export function ContextSelector() {
               </label>
               <select
                 value={dbName}
-                onChange={(e) => setDatabase(e.target.value)}
+                onChange={(e) => {
+                  if (hasDraft() && !window.confirm("未コミットの変更があります。破棄してデータベースを変更しますか？")) return;
+                  setDatabase(e.target.value);
+                }}
                 disabled={!targetId}
                 style={{ width: "100%", padding: "6px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #cbd5e1" }}
               >

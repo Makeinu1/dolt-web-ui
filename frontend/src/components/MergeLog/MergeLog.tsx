@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { HistoryCommit, DiffSummaryEntry } from "../../types/api";
 
 // ─── MergeLog ────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ export function MergeLog({ onClose }: Props) {
     const [commits, setCommits] = useState<HistoryCommit[]>([]);
     const [loading, setLoading] = useState(false);
     const [searched, setSearched] = useState(false);
+    const [searchError, setSearchError] = useState<string | null>(null);
     const [page, setPage] = useState(1);
     const pageSize = 30;
 
@@ -51,6 +53,7 @@ export function MergeLog({ onClose }: Props) {
         if (!targetId || !dbName) return;
         setLoading(true);
         setSearched(false);
+        setSearchError(null);
         setExpandedHash(null);
         setExpandedTableKey(null);
         try {
@@ -68,8 +71,10 @@ export function MergeLog({ onClose }: Props) {
             setCommits(result || []);
             setPage(p);
             setSearched(true);
-        } catch {
+        } catch (err) {
+            const msg = err instanceof ApiError ? err.message : "マージログの読み込みに失敗しました";
             setCommits([]);
+            setSearchError(msg);
             setSearched(true);
         } finally {
             setLoading(false);
@@ -190,7 +195,13 @@ export function MergeLog({ onClose }: Props) {
                         <div style={{ textAlign: "center", color: "#888", padding: 32, fontSize: 13 }}>読み込み中...</div>
                     )}
 
-                    {searched && commits.length === 0 && (
+                    {searched && searchError && (
+                        <div style={{ textAlign: "center", color: "#991b1b", padding: 32, fontSize: 13 }}>
+                            ⚠ {searchError}
+                        </div>
+                    )}
+
+                    {searched && !searchError && commits.length === 0 && (
                         <div style={{ textAlign: "center", color: "#888", padding: 32, fontSize: 13 }}>
                             マージコミットがありません。
                         </div>

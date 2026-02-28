@@ -40,6 +40,7 @@ function App() {
   const { baseState, requestCount, error, setBaseState, setRequestCount, setError } = useUIStore();
 
   const [tables, setTables] = useState<Table[]>([]);
+  const [tablesLoading, setTablesLoading] = useState(false);
   const [selectedTable, setSelectedTable] = useState("");
   const [showCommit, setShowCommit] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
@@ -91,6 +92,7 @@ function App() {
       setSelectedTable("");
       return;
     }
+    setTablesLoading(true);
     api
       .getTables(targetId, dbName, branchName)
       .then((t) => {
@@ -102,7 +104,8 @@ function App() {
       .catch((err) => {
         const msg = err instanceof ApiError ? err.message : "テーブルの読み込みに失敗しました";
         setError(msg);
-      });
+      })
+      .finally(() => setTablesLoading(false));
   }, [targetId, dbName, branchName, isContextReady]);
 
   // C-3: React to context changes to clear draft and reset UI state.
@@ -159,6 +162,7 @@ function App() {
   }, [ops, baseState, hasDraft, setBaseState]);
 
   const handleSync = async () => {
+    if (baseState === "Syncing") return;
     if (hasDraft()) {
       setError("ドラフトを破棄してから同期してください。");
       return;
@@ -181,16 +185,22 @@ function App() {
       // ApiError carries flat .code and .message fields
       const code = err instanceof ApiError ? err.code : (err as { code?: string })?.code;
       const message = err instanceof ApiError ? err.message : (err as { message?: string })?.message;
-      if (code === "SCHEMA_CONFLICTS_PRESENT") {
+      if (code === "BRANCH_LOCKED") {
+        setBaseState("Idle");
+        setError("承認申請中のためロックされています");
+      } else if (code === "SCHEMA_CONFLICTS_PRESENT") {
         setBaseState("SchemaConflictDetected");
+        setError("同期に失敗しました" + (message ? ": " + message : ""));
       } else if (code === "CONSTRAINT_VIOLATIONS_PRESENT") {
         setBaseState("ConstraintViolationDetected");
+        setError("同期に失敗しました" + (message ? ": " + message : ""));
       } else if (code === "STALE_HEAD") {
         setBaseState("StaleHeadDetected");
+        setError("同期に失敗しました" + (message ? ": " + message : ""));
       } else {
         setBaseState("Idle");
+        setError("同期に失敗しました" + (message ? ": " + message : ""));
       }
-      setError("同期に失敗しました" + (message ? ": " + message : ""));
     }
   };
 
@@ -379,30 +389,40 @@ function App() {
       {/* === Single-line Header (36px) === */}
       <header className="unified-header">
         <div className="header-left">
-          <span className={`state-badge ${label.className}`}>{label.text}</span>
+          <span
+            className={`state-badge ${label.className}`}
+            onClick={baseState === "StaleHeadDetected" ? handleRefresh : undefined}
+            style={baseState === "StaleHeadDetected" ? { cursor: "pointer" } : undefined}
+            title={baseState === "StaleHeadDetected" ? "クリックで更新" : undefined}
+          >{label.text}</span>
           <ContextSelector />
           {/* Table selector */}
-          {isContextReady && tables.length > 0 && (
+          {isContextReady && (tablesLoading || tables.length > 0) && (
             <select
               className="header-table-select"
               value={selectedTable}
               onChange={(e) => setSelectedTable(e.target.value)}
+              disabled={tablesLoading}
             >
-              {tables.map((t) => {
-                const c = tableChanges.get(t.name);
-                const indicator = c
-                  ? ` (${[
-                    c.inserts > 0 ? `+${c.inserts}` : "",
-                    c.updates > 0 ? `~${c.updates}` : "",
-                    c.deletes > 0 ? `-${c.deletes}` : "",
-                  ].filter(Boolean).join(" ")})`
-                  : "";
-                return (
-                  <option key={t.name} value={t.name}>
-                    {t.name}{indicator}
-                  </option>
-                );
-              })}
+              {tablesLoading ? (
+                <option>読み込み中...</option>
+              ) : (
+                tables.map((t) => {
+                  const c = tableChanges.get(t.name);
+                  const indicator = c
+                    ? ` (${[
+                      c.inserts > 0 ? `+${c.inserts}` : "",
+                      c.updates > 0 ? `~${c.updates}` : "",
+                      c.deletes > 0 ? `-${c.deletes}` : "",
+                    ].filter(Boolean).join(" ")})`
+                    : "";
+                  return (
+                    <option key={t.name} value={t.name}>
+                      {t.name}{indicator}
+                    </option>
+                  );
+                })
+              )}
             </select>
           )}
         </div>
@@ -485,7 +505,9 @@ function App() {
       {error && (
         <div className="error-banner">
           <span>{error}</span>
-          <button onClick={() => setError(null)}>✕</button>
+          {baseState !== "StaleHeadDetected" && (
+            <button onClick={() => setError(null)}>✕</button>
+          )}
         </div>
       )}
 
@@ -511,11 +533,13 @@ function App() {
 
           {/* Overwrite notification overlay (shown after auto-resolved sync conflicts) */}
           {overwrittenTables.length > 0 && (
-            <div className="conflict-overlay">
-              <ConflictView
-                overwrittenTables={overwrittenTables}
-                onDismiss={() => setOverwrittenTables([])}
-              />
+            <div className="conflict-overlay" onClick={() => setOverwrittenTables([])}>
+              <div onClick={(e) => e.stopPropagation()}>
+                <ConflictView
+                  overwrittenTables={overwrittenTables}
+                  onDismiss={() => setOverwrittenTables([])}
+                />
+              </div>
             </div>
           )}
         </div>

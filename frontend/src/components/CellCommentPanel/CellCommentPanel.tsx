@@ -137,8 +137,19 @@ export function CellCommentPanel({
       ) : (
         <>
           {existingOp && (
-            <div style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", padding: "4px 10px", borderBottom: "1px solid #bae6fd" }}>
-              ✏ 未保存の変更あり
+            <div style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", padding: "4px 10px", borderBottom: "1px solid #bae6fd", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>✏ 未保存の変更あり</span>
+              <button
+                onClick={() => {
+                  if (window.confirm("このセルのドラフト変更を破棄しますか？")) {
+                    removeOp(existingOpIdx);
+                    setMemoText(dbMemoText);
+                  }
+                }}
+                style={{ fontSize: 10, padding: "1px 6px", background: "none", border: "1px solid #0369a1", color: "#0369a1", borderRadius: 3, cursor: "pointer" }}
+              >
+                破棄
+              </button>
             </div>
           )}
 

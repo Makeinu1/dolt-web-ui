@@ -3,6 +3,7 @@ import { AgGridReact } from "ag-grid-react";
 import type { ColDef, CellClassParams } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { Branch, DiffSummaryEntry, DiffRow } from "../../types/api";
 
 // --- DiffSummary Table ---
@@ -367,6 +368,7 @@ export function HistoryTab() {
   // Fullscreen DiffGrid
   const [diffGridTable, setDiffGridTable] = useState<string | null>(null);
   const [exportingZip, setExportingZip] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Load branches
   useEffect(() => {
@@ -400,6 +402,7 @@ export function HistoryTab() {
 
   const handleExportZip = async () => {
     setExportingZip(true);
+    setExportError(null);
     try {
       const { blob, filename } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
       const url = URL.createObjectURL(blob);
@@ -408,8 +411,9 @@ export function HistoryTab() {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // silently ignore
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "ZIPエクスポートに失敗しました";
+      setExportError(msg);
     } finally {
       setExportingZip(false);
     }
@@ -471,6 +475,13 @@ export function HistoryTab() {
 
         {summaryError && (
           <div style={{ fontSize: 12, color: "#991b1b", padding: "0 16px" }}>{summaryError}</div>
+        )}
+
+        {exportError && (
+          <div style={{ fontSize: 12, color: "#991b1b", padding: "0 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>⚠ {exportError}</span>
+            <button onClick={() => setExportError(null)} style={{ fontSize: 11, background: "none", border: "none", cursor: "pointer", color: "#991b1b" }}>✕</button>
+          </div>
         )}
 
         {compared && (

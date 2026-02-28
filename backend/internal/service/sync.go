@@ -138,20 +138,21 @@ func (s *Service) previewMergeInfo(ctx context.Context, conn *sql.Conn, branchNa
 // resolveDataConflicts calls DOLT_CONFLICTS_RESOLVE('--theirs', table) for each conflicted table
 // and returns an OverwrittenTable entry for each resolved table.
 func (s *Service) resolveDataConflicts(ctx context.Context, conn *sql.Conn, tables []string) ([]model.OverwrittenTable, error) {
-	var overwritten []model.OverwrittenTable
+	overwritten := make([]model.OverwrittenTable, 0)
 	for _, table := range tables {
+		if err := validateRef("table", table); err != nil {
+			return nil, fmt.Errorf("invalid table name %s: %w", table, err)
+		}
+
 		// Get conflict count for notification (best-effort; ignore scan errors)
 		var count int
 		conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_conflicts").Scan(&count)
 
-		resolveQuery := fmt.Sprintf("CALL DOLT_CONFLICTS_RESOLVE('--theirs', '%s')", table)
+		resolveQuery := fmt.Sprintf("CALL DOLT_CONFLICTS_RESOLVE('--theirs', `%s`)", table)
 		if _, err := conn.ExecContext(ctx, resolveQuery); err != nil {
 			return nil, fmt.Errorf("failed to resolve conflicts for table %s: %w", table, err)
 		}
 		overwritten = append(overwritten, model.OverwrittenTable{Table: table, Conflicts: count})
-	}
-	if overwritten == nil {
-		overwritten = []model.OverwrittenTable{}
 	}
 	return overwritten, nil
 }

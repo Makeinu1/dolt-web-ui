@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
@@ -45,6 +46,9 @@ func (s *Service) AuditMerge(ctx context.Context, req model.AuditMergeRequest) (
 	var preMergeHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&preMergeHead); err != nil {
 		return nil, fmt.Errorf("failed to get pre-merge HEAD: %w", err)
+	}
+	if err := validateRef("hash", preMergeHead); err != nil {
+		return nil, fmt.Errorf("invalid pre-merge HEAD hash: %w", err)
 	}
 
 	// Set autocommit=1 for DOLT_MERGE (required for non-transactional merge)
@@ -88,7 +92,8 @@ func (s *Service) AuditMerge(ctx context.Context, req model.AuditMergeRequest) (
 			// DELETE current memo data and restore from pre-merge HEAD
 			deleteSQL := fmt.Sprintf("DELETE FROM `%s`", mt)
 			if _, err := conn.ExecContext(ctx, deleteSQL); err != nil {
-				return nil, fmt.Errorf("failed to delete memo table %s: %w", mt, err)
+				log.Printf("[WARN] audit-merge: failed to delete memo table %s, skipping restore: %v", mt, err)
+				continue
 			}
 
 			insertSQL := fmt.Sprintf("INSERT INTO `%s` SELECT * FROM `%s` AS OF '%s'", mt, mt, preMergeHead)
@@ -97,7 +102,8 @@ func (s *Service) AuditMerge(ctx context.Context, req model.AuditMergeRequest) (
 				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "doesn't exist") {
 					continue
 				}
-				return nil, fmt.Errorf("failed to restore memo table %s: %w", mt, err)
+				log.Printf("[WARN] audit-merge: failed to restore memo table %s from %s: %v", mt, preMergeHead, err)
+				continue
 			}
 			restored = true
 		}

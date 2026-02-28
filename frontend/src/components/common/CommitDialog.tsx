@@ -62,7 +62,10 @@ export function CommitDialog({
       onCommitSuccess(result.hash);
       onClose();
     } catch (err: unknown) {
-      if (err instanceof ApiError && err.code === "STALE_HEAD") {
+      if (err instanceof ApiError && err.code === "BRANCH_LOCKED") {
+        setBaseState("DraftEditing");
+        setError("承認申請中のためロックされています");
+      } else if (err instanceof ApiError && err.code === "STALE_HEAD") {
         setBaseState("StaleHeadDetected");
         setError("データが更新されています" + (err.message ? ": " + err.message : ""));
       } else {
@@ -110,10 +113,12 @@ export function CommitDialog({
             marginBottom: 12,
           }}
         >
-          {Object.entries(grouped).map(([table, items]) => (
+          {Object.entries(grouped).map(([table, items]) => {
+          const displayName = table.startsWith("_memo_") ? `${table.slice(6)} のメモ` : table;
+          return (
             <div key={table}>
               <div style={{ padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#555", borderBottom: "1px solid #e2e8f0", background: "#f1f5f9" }}>
-                {table} ({items.length})
+                {displayName} ({items.length})
               </div>
               {items.map(({ op, index }) => {
                 const style = OP_COLORS[op.type] || OP_COLORS.update;
@@ -162,7 +167,8 @@ export function CommitDialog({
                 );
               })}
             </div>
-          ))}
+          );
+        })}
         </div>
 
         <div className="modal-actions">
