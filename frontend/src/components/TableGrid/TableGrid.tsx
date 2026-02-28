@@ -94,9 +94,11 @@ interface TableGridProps {
   refreshKey?: number;
   /** Called when the user clicks a cell. Null when focus leaves. */
   onCellSelected?: (info: SelectedCellInfo | null) => void;
+  /** Called when user wants to cross-copy selected rows to another DB */
+  onCrossCopyRows?: (pks: string[]) => void;
 }
 
-export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridProps) {
+export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRows }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
@@ -614,6 +616,19 @@ export function TableGrid({ tableName, refreshKey, onCellSelected }: TableGridPr
                 title="行をコピー"
               >
                 {cloning ? "コピー中..." : `コピー${selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}`}
+              </button>
+            )}
+            {onCrossCopyRows && (
+              <button
+                onClick={() => {
+                  const pks = selectedRows.map((r) => rowPkId(r));
+                  onCrossCopyRows(pks);
+                }}
+                disabled={pkCols.length === 0}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
+                title="選択行を他のDBにコピー"
+              >
+                他DBへコピー{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
               </button>
             )}
             <button

@@ -12,6 +12,8 @@ import * as api from "./api/client";
 import { ApiError } from "./api/errors";
 import type { Table, OverwrittenTable } from "./types/api";
 import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
+import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsModal";
+import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -56,6 +58,9 @@ function App() {
   const [overwrittenTables, setOverwrittenTables] = useState<OverwrittenTable[]>([]);
   const [showAuditMerge, setShowAuditMerge] = useState(false);
   const [auditMerging, setAuditMerging] = useState(false);
+  const [showCrossCopyRows, setShowCrossCopyRows] = useState(false);
+  const [crossCopyPKs, setCrossCopyPKs] = useState<string[]>([]);
+  const [showCrossCopyTable, setShowCrossCopyTable] = useState(false);
 
 
   const isMain = branchName === "main";
@@ -64,7 +69,7 @@ function App() {
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showAuditMerge;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showAuditMerge || showCrossCopyRows || showCrossCopyTable;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -372,6 +377,14 @@ function App() {
       });
     }
 
+    // Cross-DB Table Copy
+    if (selectedTable) {
+      items.push({
+        label: "他DBへテーブルコピー",
+        onClick: () => { setShowCrossCopyTable(true); setShowOverflow(false); },
+      });
+    }
+
     // Delete Branch (work branches only)
     if (!isProtected && branchName) {
       items.push({
@@ -527,6 +540,10 @@ function App() {
                   setSelectedCell(info);
                   if (!info) setShowCommentPanel(false);
                 }}
+                onCrossCopyRows={!isProtected ? (pks) => {
+                  setCrossCopyPKs(pks);
+                  setShowCrossCopyRows(true);
+                } : undefined}
               />
             )}
           </div>
@@ -571,6 +588,21 @@ function App() {
         deleting={deleting}
         selectedCell={selectedCell}
       />
+
+      {/* Cross-DB Copy Modals */}
+      {showCrossCopyRows && selectedTable && (
+        <CrossCopyRowsModal
+          tableName={selectedTable}
+          selectedPKs={crossCopyPKs}
+          onClose={() => setShowCrossCopyRows(false)}
+        />
+      )}
+      {showCrossCopyTable && selectedTable && (
+        <CrossCopyTableModal
+          tableName={selectedTable}
+          onClose={() => setShowCrossCopyTable(false)}
+        />
+      )}
 
       {/* Audit merge confirmation dialog */}
       {showAuditMerge && (

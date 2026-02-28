@@ -204,6 +204,66 @@ export interface DiffSummaryResponse {
   entries: DiffSummaryEntry[];
 }
 
+// --- Cross-DB Copy ---
+
+export interface CrossCopyPreviewRequest {
+  target_id: string;
+  source_db: string;
+  source_branch: string;
+  source_table: string;
+  source_pks: string[];
+  dest_db: string;
+  dest_branch: string;
+}
+
+export interface CrossCopyPreviewRow {
+  source_row: Record<string, unknown>;
+  dest_row?: Record<string, unknown>;
+  action: "insert" | "update";
+}
+
+export interface CrossCopyPreviewResponse {
+  shared_columns: string[];
+  source_only_columns: string[];
+  dest_only_columns: string[];
+  warnings: string[];
+  rows: CrossCopyPreviewRow[];
+}
+
+export interface CrossCopyRowsRequest {
+  target_id: string;
+  source_db: string;
+  source_branch: string;
+  source_table: string;
+  source_pks: string[];
+  dest_db: string;
+  dest_branch: string;
+}
+
+export interface CrossCopyRowsResponse {
+  hash: string;
+  inserted: number;
+  updated: number;
+  total: number;
+}
+
+export interface CrossCopyTableRequest {
+  target_id: string;
+  source_db: string;
+  source_branch: string;
+  source_table: string;
+  dest_db: string;
+}
+
+export interface CrossCopyTableResponse {
+  hash: string;
+  branch_name: string;
+  row_count: number;
+  shared_columns: string[];
+  source_only_columns: string[];
+  dest_only_columns: string[];
+}
+
 // --- Cell Memos ---
 
 export interface MemoResponse {

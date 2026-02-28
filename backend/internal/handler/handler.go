@@ -62,6 +62,11 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		// Cell Memos
 		r.Get("/memo", h.GetMemo)
 		r.Get("/memo/map", h.GetMemoMap)
+
+		// Cross-DB Copy
+		r.Post("/cross-copy/preview", h.CrossCopyPreview)
+		r.Post("/cross-copy/rows", h.CrossCopyRows)
+		r.Post("/cross-copy/table", h.CrossCopyTable)
 	})
 
 	// Health check

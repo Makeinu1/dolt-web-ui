@@ -1,0 +1,506 @@
+import { useEffect, useState } from "react";
+import { useContextStore } from "../../store/context";
+import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
+import type {
+  Database,
+  Branch,
+  CrossCopyPreviewResponse,
+  CrossCopyRowsResponse,
+} from "../../types/api";
+
+interface CrossCopyRowsModalProps {
+  tableName: string;
+  /** JSON-encoded PK strings for each selected row */
+  selectedPKs: string[];
+  onClose: () => void;
+}
+
+type Step = "select" | "preview" | "done";
+
+export function CrossCopyRowsModal({
+  tableName,
+  selectedPKs,
+  onClose,
+}: CrossCopyRowsModalProps) {
+  const { targetId, dbName, branchName } = useContextStore();
+
+  const [step, setStep] = useState<Step>("select");
+  const [databases, setDatabases] = useState<Database[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [destDB, setDestDB] = useState("");
+  const [destBranch, setDestBranch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Preview data
+  const [preview, setPreview] = useState<CrossCopyPreviewResponse | null>(null);
+
+  // Result data
+  const [result, setResult] = useState<CrossCopyRowsResponse | null>(null);
+
+  // Load databases on mount
+  useEffect(() => {
+    api
+      .getDatabases(targetId)
+      .then((dbs) => {
+        const filtered = dbs.filter((d) => d.name !== dbName);
+        setDatabases(filtered);
+        if (filtered.length > 0) setDestDB(filtered[0].name);
+      })
+      .catch(() => setError("データベースの読み込みに失敗しました"));
+  }, [targetId, dbName]);
+
+  // Load branches when destDB changes
+  useEffect(() => {
+    if (!destDB) {
+      setBranches([]);
+      setDestBranch("");
+      return;
+    }
+    api
+      .getBranches(targetId, destDB)
+      .then((brs) => {
+        const wiBranches = brs.filter((b) => b.name.startsWith("wi/"));
+        setBranches(wiBranches);
+        if (wiBranches.length > 0) setDestBranch(wiBranches[0].name);
+        else setDestBranch("");
+      })
+      .catch(() => setError("ブランチの読み込みに失敗しました"));
+  }, [targetId, destDB]);
+
+  const handlePreview = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.crossCopyPreview({
+        target_id: targetId,
+        source_db: dbName,
+        source_branch: branchName,
+        source_table: tableName,
+        source_pks: selectedPKs,
+        dest_db: destDB,
+        dest_branch: destBranch,
+      });
+      setPreview(res);
+      setStep("preview");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof ApiError ? err.message : "プレビューに失敗しました";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExecute = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.crossCopyRows({
+        target_id: targetId,
+        source_db: dbName,
+        source_branch: branchName,
+        source_table: tableName,
+        source_pks: selectedPKs,
+        dest_db: destDB,
+        dest_branch: destBranch,
+      });
+      setResult(res);
+      setStep("done");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof ApiError ? err.message : "コピーに失敗しました";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSwitchContext = () => {
+    const ctx = useContextStore.getState();
+    ctx.setDatabase(destDB);
+    setTimeout(() => {
+      useContextStore.getState().setBranch(destBranch);
+    }, 100);
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal"
+        style={{ minWidth: 600, maxWidth: 900, maxHeight: "80vh", overflow: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 12,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: 16 }}>他DBへコピー</h2>
+          <button
+            onClick={onClose}
+            style={{
+              fontSize: 18,
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Source info */}
+        <div
+          style={{
+            fontSize: 12,
+            color: "#666",
+            marginBottom: 12,
+            padding: "4px 8px",
+            background: "#f8fafc",
+            borderRadius: 4,
+          }}
+        >
+          コピー元: {dbName} / {branchName} / {tableName} ({selectedPKs.length}
+          件)
+        </div>
+
+        {error && (
+          <div
+            style={{
+              padding: "6px 10px",
+              background: "#fee2e2",
+              color: "#991b1b",
+              fontSize: 12,
+              borderRadius: 4,
+              marginBottom: 8,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Step 1: Select destination */}
+        {step === "select" && (
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  marginBottom: 4,
+                }}
+              >
+                宛先DB
+              </label>
+              <select
+                value={destDB}
+                onChange={(e) => setDestDB(e.target.value)}
+                style={{ width: "100%", padding: "4px 8px", fontSize: 13 }}
+              >
+                {databases.length === 0 && (
+                  <option value="">他のDBがありません</option>
+                )}
+                {databases.map((d) => (
+                  <option key={d.name} value={d.name}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  marginBottom: 4,
+                }}
+              >
+                宛先ブランチ
+              </label>
+              <select
+                value={destBranch}
+                onChange={(e) => setDestBranch(e.target.value)}
+                style={{ width: "100%", padding: "4px 8px", fontSize: 13 }}
+              >
+                {branches.length === 0 && (
+                  <option value="">wi/* ブランチがありません</option>
+                )}
+                {branches.map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div
+              style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
+            >
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "6px 16px",
+                  fontSize: 13,
+                  background: "#f1f5f9",
+                  color: "#334155",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                キャンセル
+              </button>
+              <button
+                className="primary"
+                onClick={handlePreview}
+                disabled={
+                  loading || !destDB || !destBranch || databases.length === 0
+                }
+                style={{ padding: "6px 16px", fontSize: 13 }}
+              >
+                {loading ? "読み込み中..." : "プレビュー"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Preview */}
+        {step === "preview" && preview && (
+          <div>
+            {/* Column info */}
+            <div
+              style={{
+                fontSize: 12,
+                marginBottom: 8,
+                padding: "6px 8px",
+                background: "#f0fdf4",
+                borderRadius: 4,
+              }}
+            >
+              共有カラム: {preview.shared_columns.join(", ")}
+            </div>
+
+            {/* Warnings */}
+            {preview.warnings.map((w, i) => (
+              <div
+                key={i}
+                style={{
+                  fontSize: 12,
+                  marginBottom: 4,
+                  padding: "4px 8px",
+                  background: "#fffbeb",
+                  color: "#92400e",
+                  borderRadius: 4,
+                }}
+              >
+                {w}
+              </div>
+            ))}
+
+            {/* Row table */}
+            <div
+              style={{
+                marginTop: 8,
+                maxHeight: "40vh",
+                overflow: "auto",
+                border: "1px solid #e2e8f0",
+                borderRadius: 4,
+              }}
+            >
+              <table
+                style={{
+                  width: "100%",
+                  fontSize: 12,
+                  borderCollapse: "collapse",
+                }}
+              >
+                <thead>
+                  <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                    <th
+                      style={{
+                        padding: "4px 8px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e2e8f0",
+                        fontWeight: 600,
+                      }}
+                    >
+                      操作
+                    </th>
+                    {preview.shared_columns.map((col) => (
+                      <th
+                        key={col}
+                        style={{
+                          padding: "4px 8px",
+                          textAlign: "left",
+                          borderBottom: "1px solid #e2e8f0",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((row, i) => (
+                    <tr
+                      key={i}
+                      style={{
+                        background:
+                          row.action === "insert" ? "#f0fdf4" : "#fffbeb",
+                      }}
+                    >
+                      <td
+                        style={{
+                          padding: "4px 8px",
+                          borderBottom: "1px solid #f1f5f9",
+                          fontWeight: 600,
+                          color:
+                            row.action === "insert" ? "#166534" : "#92400e",
+                        }}
+                      >
+                        {row.action === "insert" ? "INSERT" : "UPDATE"}
+                      </td>
+                      {preview.shared_columns.map((col) => {
+                        const srcVal = String(row.source_row[col] ?? "");
+                        const dstVal = row.dest_row
+                          ? String(row.dest_row[col] ?? "")
+                          : "";
+                        const changed =
+                          row.action === "update" && srcVal !== dstVal;
+                        return (
+                          <td
+                            key={col}
+                            style={{
+                              padding: "4px 8px",
+                              borderBottom: "1px solid #f1f5f9",
+                              background: changed ? "#fef3c7" : undefined,
+                            }}
+                          >
+                            {changed ? (
+                              <span>
+                                <span
+                                  style={{
+                                    textDecoration: "line-through",
+                                    color: "#9ca3af",
+                                    marginRight: 4,
+                                  }}
+                                >
+                                  {dstVal}
+                                </span>
+                                <span style={{ color: "#92400e" }}>
+                                  {srcVal}
+                                </span>
+                              </span>
+                            ) : (
+                              srcVal
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 12,
+              }}
+            >
+              <button
+                onClick={() => {
+                  setStep("select");
+                  setPreview(null);
+                }}
+                style={{
+                  padding: "6px 16px",
+                  fontSize: 13,
+                  background: "#f1f5f9",
+                  color: "#334155",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                戻る
+              </button>
+              <button
+                className="primary"
+                onClick={handleExecute}
+                disabled={loading || preview.rows.length === 0}
+                style={{ padding: "6px 16px", fontSize: 13 }}
+              >
+                {loading
+                  ? "コピー中..."
+                  : `コピー実行 (${preview.rows.length}件)`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: Done */}
+        {step === "done" && result && (
+          <div>
+            <div
+              style={{
+                padding: "12px 16px",
+                background: "#f0fdf4",
+                borderRadius: 4,
+                marginBottom: 12,
+                fontSize: 13,
+                color: "#166534",
+              }}
+            >
+              {result.total}件コピーしました（挿入: {result.inserted}, 更新:{" "}
+              {result.updated}）
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "6px 16px",
+                  fontSize: 13,
+                  background: "#f1f5f9",
+                  color: "#334155",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                閉じる
+              </button>
+              <button
+                className="primary"
+                onClick={handleSwitchContext}
+                style={{ padding: "6px 16px", fontSize: 13 }}
+              >
+                宛先に切り替え
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

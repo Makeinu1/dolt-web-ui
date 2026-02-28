@@ -262,6 +262,25 @@ export const getMemo = (
     `/memo${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table, pk, column })}`
   );
 
+// Cross-DB Copy
+export const crossCopyPreview = (body: import("../types/api").CrossCopyPreviewRequest) =>
+  request<import("../types/api").CrossCopyPreviewResponse>("/cross-copy/preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const crossCopyRows = (body: import("../types/api").CrossCopyRowsRequest) =>
+  request<import("../types/api").CrossCopyRowsResponse>("/cross-copy/rows", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const crossCopyTable = (body: import("../types/api").CrossCopyTableRequest) =>
+  request<import("../types/api").CrossCopyTableResponse>("/cross-copy/table", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 // Diff ZIP export — returns a Blob (application/zip)
 export const exportDiffZip = async (
   targetId: string,

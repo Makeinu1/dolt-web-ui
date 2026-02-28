@@ -108,11 +108,10 @@ func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName
 		conn.Close()
 		return nil, fmt.Errorf("failed to set db context %s: %w", dbName, err)
 	}
-	if branchName != "main" {
-		if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branchName); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("failed to checkout branch %s: %w", branchName, err)
-		}
+	// Always checkout the requested branch to avoid stale branch state from pooled connections.
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", branchName); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to checkout branch %s: %w", branchName, err)
 	}
 
 	return conn, nil

@@ -145,6 +145,21 @@ curl http://localhost:8080/health  # 起動確認
 
 `/api/v1/health` ではなく **`/health`**（ルートパス直下）に配置されている。
 
+### ConnWrite の注意事項
+
+`ConnWrite()` は branchName が `"main"` であっても常に `CALL DOLT_CHECKOUT(?)` を実行する。
+スキップすると、プールから再取得した接続が別ブランチのまま残り、`DOLT_BRANCH(name)` が誤ったHEADから作成される（"nothing to commit" の原因）。
+
+### 動的 DB 作成とプール
+
+`CREATE DATABASE` で作成した新規DBは、既存のプール接続では `USE \`newdb/branch\`` が "database not found" になる。
+テスト・開発時はサーバーを再起動してから接続する。
+
+### `DOLT_ADD` と新規テーブル
+
+`DOLT_COMMIT('--all')` は既存テーブルの変更のみステージする。
+`CREATE TABLE` 後は `CALL DOLT_ADD('.')` を明示的に呼ぶこと。
+
 ---
 
 ## Frontend Conventions
@@ -376,12 +391,18 @@ Database: Test
 - **CellCommentPanel ドラフト破棄ボタン** — 「未保存の変更あり」バナーに「破棄」リンク追加（UX-18）
 
 ### 運用
+- **クロスDB コピー（Cross-Copy）** — DB間データ転送
+  - `POST /cross-copy/preview` — コピー差分プレビュー（insert/update 判定、スキーマ差異警告）
+  - `POST /cross-copy/rows` — 選択PKをdest DB/branchへコピー（ON DUPLICATE KEY UPDATE、保護ブランチ/ブランチロック対応）
+  - `POST /cross-copy/table` — テーブル全件を `wi/import-{table}/NN` ブランチとしてコピー（ラウンド番号自動採番）
+  - CrossCopyModal（React）— プレビュー → 確認 → コピー実行のUIフロー
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
 - Playwright ブラウザテスト（20テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
 - curl ベース統合テスト（`/tmp/dolt-e2e-4changes.sh` — 19テスト、変更1〜4カバー）
+- curl ベース統合テスト（`/tmp/dolt-e2e-crosscopy.sh` — 46テスト、クロスDB P1〜P11カバー）
 
 ### 撤廃済み機能（簡素化計画 Phase 0〜3 で削除）
 - Revert（コミット取消）— 保存履歴を見せない方針と矛盾

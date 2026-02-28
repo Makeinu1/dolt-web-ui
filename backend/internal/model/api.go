@@ -32,6 +32,8 @@ const (
 	CodePreconditionFailed          = "PRECONDITION_FAILED"
 	CodeBranchLocked                = "BRANCH_LOCKED"
 	CodeInternal                    = "INTERNAL"
+	CodeCopyDataError               = "COPY_DATA_ERROR"
+	CodeCopyFKError                 = "COPY_FK_ERROR"
 )
 
 // TargetResponse represents a Dolt target.
@@ -302,4 +304,71 @@ type MemoResponse struct {
 	ColumnName string `json:"column_name"`
 	MemoText   string `json:"memo_text"`
 	UpdatedAt  string `json:"updated_at,omitempty"`
+}
+
+// --- Cross-DB Copy ---
+
+// CrossCopyPreviewRequest represents a request to preview cross-DB row copy.
+type CrossCopyPreviewRequest struct {
+	TargetID      string   `json:"target_id"`
+	SourceDB      string   `json:"source_db"`
+	SourceBranch  string   `json:"source_branch"`
+	SourceTable   string   `json:"source_table"`
+	SourcePKs     []string `json:"source_pks"`
+	DestDB        string   `json:"dest_db"`
+	DestBranch    string   `json:"dest_branch"`
+}
+
+// CrossCopyPreviewRow represents one row in the cross-copy preview.
+type CrossCopyPreviewRow struct {
+	SourceRow map[string]interface{} `json:"source_row"`
+	DestRow   map[string]interface{} `json:"dest_row,omitempty"`
+	Action    string                 `json:"action"` // "insert" or "update"
+}
+
+// CrossCopyPreviewResponse represents the result of a cross-copy preview.
+type CrossCopyPreviewResponse struct {
+	SharedColumns    []string              `json:"shared_columns"`
+	SourceOnlyCols   []string              `json:"source_only_columns"`
+	DestOnlyCols     []string              `json:"dest_only_columns"`
+	Warnings         []string              `json:"warnings"`
+	Rows             []CrossCopyPreviewRow `json:"rows"`
+}
+
+// CrossCopyRowsRequest represents a request to copy rows across databases.
+type CrossCopyRowsRequest struct {
+	TargetID      string   `json:"target_id"`
+	SourceDB      string   `json:"source_db"`
+	SourceBranch  string   `json:"source_branch"`
+	SourceTable   string   `json:"source_table"`
+	SourcePKs     []string `json:"source_pks"`
+	DestDB        string   `json:"dest_db"`
+	DestBranch    string   `json:"dest_branch"`
+}
+
+// CrossCopyRowsResponse represents the result of a cross-DB row copy.
+type CrossCopyRowsResponse struct {
+	Hash     string `json:"hash"`
+	Inserted int    `json:"inserted"`
+	Updated  int    `json:"updated"`
+	Total    int    `json:"total"`
+}
+
+// CrossCopyTableRequest represents a request to copy an entire table across databases.
+type CrossCopyTableRequest struct {
+	TargetID      string `json:"target_id"`
+	SourceDB      string `json:"source_db"`
+	SourceBranch  string `json:"source_branch"`
+	SourceTable   string `json:"source_table"`
+	DestDB        string `json:"dest_db"`
+}
+
+// CrossCopyTableResponse represents the result of a cross-DB table copy.
+type CrossCopyTableResponse struct {
+	Hash           string   `json:"hash"`
+	BranchName     string   `json:"branch_name"`
+	RowCount       int      `json:"row_count"`
+	SharedColumns  []string `json:"shared_columns"`
+	SourceOnlyCols []string `json:"source_only_columns"`
+	DestOnlyCols   []string `json:"dest_only_columns"`
 }

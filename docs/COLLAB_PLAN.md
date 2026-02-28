@@ -8,17 +8,17 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-02-28
-**最終コミット**: (本コミット) — 4機能追加（PK保持コピー・エラー表示改善・列固定・ブランチ種別/audit同期）
+**最終更新**: 2026-03-01
+**最終コミット**: (本コミット) — クロスDBコピー機能 実装 + バグ修正 + E2Eテスト
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
 
 ## 実装キュー（優先順位順）
 
-### 次のタスク: なし（4機能追加完了）
+### 次のタスク: なし（クロスDBコピー完了）
 
-4機能（PK保持コピー・エラー表示改善・Dolt_Description列固定・ブランチ種別/audit同期）の実装は本コミットでプッシュ済み。
+クロスDBコピー機能（3 API: preview/rows/table）の実装・バグ修正・E2Eテスト（46 PASS）は本コミットでプッシュ済み。
 
 次に追加したい機能や改修がある場合は、このセクションに記載してください。
 
@@ -54,7 +54,46 @@
 | **変更1** | PK保持コピー — 行クローン時にPK自動採番を廃止し元行のPKをそのまま保持 | 本コミット |
 | **変更2** | エラー表示改善 — 「日本語説明: 英語エラー詳細」併記 + ApiErrorエンベロープ展開修正 | 本コミット |
 | **変更3** | Dolt_Description列固定 — AG Grid `pinned: 'left'` で左端固定 + 先頭ソート | 本コミット |
-| **変更4** | ブランチ種別 — main/audit保護統一(isProtected) + audit→main同期エンドポイント + メモテーブル保護 + ContextSelectorアイコン | 本コミット |
+| **変更4** | ブランチ種別 — main/audit保護統一(isProtected) + audit→main同期エンドポイント + メモテーブル保護 + ContextSelectorアイコン | `7b280c7` |
+| **クロスDB コピー** | `POST /cross-copy/preview` + `/rows` + `/table` — DB間レコード/テーブルコピー + CrossCopyModal(React) | 本コミット |
+| **クロスDB バグ修正** | BUG-1〜7 + ConnWrite常時DOLT_CHECKOUT + DOLT_ADD新テーブル対応 | 本コミット |
+| **クロスDB E2Eテスト** | `/tmp/dolt-e2e-crosscopy.sh` — 46チェック (P1〜P11 全安全プロパティ証明) | 本コミット |
+
+---
+
+## クロスDB コピー 実装詳細（次 LLM への参考情報）
+
+### API 仕様
+
+| エンドポイント | 用途 |
+|---|---|
+| `POST /api/v1/cross-copy/preview` | 指定PKのコピー差分プレビュー（insert/update 判定） |
+| `POST /api/v1/cross-copy/rows` | 選択行を別DB/ブランチへコピー（ON DUPLICATE KEY UPDATE） |
+| `POST /api/v1/cross-copy/table` | テーブル全件を別DBに `wi/import-{table}/NN` ブランチとしてコピー |
+
+### 主要ファイル
+
+| ファイル | 変更内容 |
+|---|---|
+| `backend/internal/service/crosscopy.go` | 全3サービス実装 + BUG-1〜7 修正 |
+| `backend/internal/handler/crosscopy.go` | 3ハンドラー |
+| `backend/internal/model/api.go` | Request/Response 型定義 |
+| `backend/internal/repository/dolt.go` | `ConnWrite` 常時 DOLT_CHECKOUT 修正 |
+| `frontend/src/components/CrossCopyModal/` | CrossCopyModal コンポーネント群 |
+| `frontend/src/api/client.ts` | crossCopyPreview/Rows/Table API クライアント |
+| `frontend/src/types/api.ts` | CrossCopy 型定義 |
+
+### 重要な実装メモ
+
+- `ConnWrite()` は branchName が "main" であっても必ず `CALL DOLT_CHECKOUT(?)` を実行する（プールの古い接続がbranch汚染するため）
+- `CREATE DATABASE` した直後の DB はプール接続では認識されない → テスト時はサーバー再起動が必要
+- 新規テーブルのコミットは `DOLT_COMMIT('--all')` ではなく `DOLT_ADD('.') + DOLT_COMMIT('-m', ...)` が必要
+- `CrossCopyTable` のクロスDB SELECT: `INSERT INTO dst SELECT cols FROM \`srcdb/branch\`.tbl` は同一 Dolt サーバー内で動作確認済み（BUG-3は問題なし）
+- 0件コピー時（全PKがソースに存在しない）は `ROLLBACK` して current HEAD を返す（BUG-7修正）
+
+### E2E テスト
+
+`/tmp/dolt-e2e-crosscopy.sh` — 46チェック、全 PASS 確認済み
 
 ---
 

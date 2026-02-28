@@ -1,0 +1,67 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
+)
+
+func (h *Handler) CrossCopyPreview(w http.ResponseWriter, r *http.Request) {
+	var req model.CrossCopyPreviewRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "invalid request body")
+		return
+	}
+
+	if req.TargetID == "" || req.SourceDB == "" || req.SourceBranch == "" || req.SourceTable == "" || req.DestDB == "" || req.DestBranch == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, source_db, source_branch, source_table, dest_db, and dest_branch are required")
+		return
+	}
+
+	result, err := h.svc.CrossCopyPreview(r.Context(), req)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) CrossCopyRows(w http.ResponseWriter, r *http.Request) {
+	var req model.CrossCopyRowsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "invalid request body")
+		return
+	}
+
+	if req.TargetID == "" || req.SourceDB == "" || req.SourceBranch == "" || req.SourceTable == "" || req.DestDB == "" || req.DestBranch == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, source_db, source_branch, source_table, dest_db, and dest_branch are required")
+		return
+	}
+
+	result, err := h.svc.CrossCopyRows(r.Context(), req)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) CrossCopyTable(w http.ResponseWriter, r *http.Request) {
+	var req model.CrossCopyTableRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "invalid request body")
+		return
+	}
+
+	if req.TargetID == "" || req.SourceDB == "" || req.SourceBranch == "" || req.SourceTable == "" || req.DestDB == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, source_db, source_branch, source_table, and dest_db are required")
+		return
+	}
+
+	result, err := h.svc.CrossCopyTable(r.Context(), req)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
