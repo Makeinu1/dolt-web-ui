@@ -21,9 +21,38 @@ export const useDraftStore = create<DraftState>((set, get) => ({
   addOp: (op) => {
     const currentOps = get().ops;
 
-    // Auto-cancel logic for row updates
-    // If we're updating a row that was already updated, and the new value
-    // makes the total operation a no-op (e.g. A -> B -> A), we should remove it.
+    // Absorb UPDATE/DELETE into a pending INSERT for the same row.
+    // When a copied row (INSERT op) is subsequently edited or deleted,
+    // the new op must be folded into the INSERT rather than sent separately —
+    // otherwise the backend would try to INSERT a duplicate PK first and fail.
+    if ((op.type === "update" || op.type === "delete") && op.pk) {
+      const insertIdx = currentOps.findIndex(
+        (o) =>
+          o.type === "insert" &&
+          o.table === op.table &&
+          op.pk != null &&
+          Object.entries(op.pk).every(([k, v]) => String(o.values[k]) === String(v))
+      );
+      if (insertIdx !== -1) {
+        if (op.type === "delete") {
+          // Copying then deleting = no-op: cancel the INSERT entirely.
+          const nextOps = currentOps.filter((_, i) => i !== insertIdx);
+          saveDraft(nextOps);
+          set({ ops: nextOps });
+        } else {
+          // Merge the UPDATE's values into the INSERT's values.
+          const insertOp = currentOps[insertIdx];
+          const mergedValues = { ...insertOp.values, ...op.values };
+          const nextOps = [...currentOps];
+          nextOps[insertIdx] = { ...insertOp, values: mergedValues };
+          saveDraft(nextOps);
+          set({ ops: nextOps });
+        }
+        return;
+      }
+    }
+
+    // Merge consecutive UPDATEs to the same row into a single op.
     if (op.type === "update") {
       const existingIdx = currentOps.findIndex(
         (o) => o.type === "update" && o.table === op.table && JSON.stringify(o.pk) === JSON.stringify(op.pk)
@@ -31,17 +60,8 @@ export const useDraftStore = create<DraftState>((set, get) => ({
 
       if (existingIdx !== -1) {
         const existingOp = currentOps[existingIdx];
-        // For simplicity, if we are overwriting the ONLY changed column and it reverts to some known state
-        // Actually, without knowing the *original* DB state, it's hard to know if A->B->A reverts to DB.
-        // But we can at least merge updates for the same row.
         const mergedValues = { ...existingOp.values, ...op.values };
-
-        // If they just removed their change (e.g. cleared the cell and we don't have original data here)
-        // Wait, the UI (TableGrid) currently always sends the *new* value. 
-        // Real auto-cancelling requires knowing the original data from `rowData`.
-        // For now: we merge multiple updates to the same row into a single op to prevent clutter.
         const modifiedOp = { ...existingOp, values: mergedValues };
-
         const nextOps = [...currentOps];
         nextOps[existingIdx] = modifiedOp;
         saveDraft(nextOps);
