@@ -359,6 +359,9 @@ Database: Test
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
 - 行クローン（PK保持コピー方式 — 元行のPKをそのまま保持、`vary_column` + `new_values` レガシーモードも後方互換で維持）
+  - コピー後のセル編集（UPDATE）は `draft.ts` の `addOp` で INSERT op にマージされる → コミット時にPK_COLLISIONが発生しない
+  - コピー後の削除（DELETE）は INSERT op をキャンセルする（何も送信しない）
+  - **注意**: コピー後にPKを変更しないまま保存するとPK_COLLISION — これは正しい動作
 - **行の変更履歴ポップアップ** `RecordHistoryPopup` — 右クリック「履歴を表示」から起動
   - `GET /api/v1/history/row` — `dolt_history_{table}` から指定PKのスナップショット一覧（新しい順、最大30件）
   - 連続スナップショット間の変更カラムをハイライト表示
