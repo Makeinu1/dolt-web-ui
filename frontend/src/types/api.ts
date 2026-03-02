@@ -264,6 +264,19 @@ export interface CrossCopyTableResponse {
   dest_only_columns: string[];
 }
 
+// --- Row History ---
+
+export interface HistoryRowSnapshot {
+  commit_hash: string;
+  commit_date: string;
+  committer: string;
+  row: Record<string, unknown>;
+}
+
+export interface HistoryRowResponse {
+  snapshots: HistoryRowSnapshot[];
+}
+
 // --- Cell Memos ---
 
 export interface MemoResponse {

@@ -79,6 +79,14 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+
+	// Verification failed: roll back by deleting the branch we just created.
+	// Use context.Background() so cancellation of the HTTP request doesn't prevent cleanup.
+	rollbackConn, rbErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
+	if rbErr == nil {
+		rollbackConn.ExecContext(context.Background(), "CALL DOLT_BRANCH('-D', ?)", req.BranchName) //nolint:errcheck
+		rollbackConn.Close()
+	}
 	return fmt.Errorf("branch created but not yet queryable via USE")
 }
 

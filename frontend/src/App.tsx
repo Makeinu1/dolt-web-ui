@@ -14,6 +14,7 @@ import type { Table, OverwrittenTable } from "./types/api";
 import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsModal";
 import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
+import { RecordHistoryPopup } from "./components/common/RecordHistoryPopup";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -56,11 +57,11 @@ function App() {
   const [showCommentPanel, setShowCommentPanel] = useState(false);
   const [showMergeLog, setShowMergeLog] = useState(false);
   const [overwrittenTables, setOverwrittenTables] = useState<OverwrittenTable[]>([]);
-  const [showAuditMerge, setShowAuditMerge] = useState(false);
-  const [auditMerging, setAuditMerging] = useState(false);
   const [showCrossCopyRows, setShowCrossCopyRows] = useState(false);
   const [crossCopyPKs, setCrossCopyPKs] = useState<string[]>([]);
   const [showCrossCopyTable, setShowCrossCopyTable] = useState(false);
+  const [showRowHistory, setShowRowHistory] = useState(false);
+  const [rowHistoryInfo, setRowHistoryInfo] = useState<{ table: string; pk: string } | null>(null);
 
 
   const isMain = branchName === "main";
@@ -69,7 +70,7 @@ function App() {
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showAuditMerge || showCrossCopyRows || showCrossCopyTable;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showCrossCopyRows || showCrossCopyTable || showRowHistory;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -218,27 +219,6 @@ function App() {
     }
   };
 
-  const handleAuditMerge = async () => {
-    setAuditMerging(true);
-    try {
-      const result = await api.auditMerge({
-        target_id: targetId,
-        db_name: dbName,
-      });
-      setExpectedHead(result.hash);
-      setShowAuditMerge(false);
-      setRefreshKey((k) => k + 1);
-      // Switch to main after successful merge
-      setBranch("main");
-      triggerBranchRefresh();
-    } catch (err: unknown) {
-      const msg = err instanceof ApiError ? err.message : "";
-      setError("audit→main同期に失敗しました" + (msg ? ": " + msg : ""));
-    } finally {
-      setAuditMerging(false);
-    }
-  };
-
   const handleDeleteBranch = async () => {
     if (!branchName || isProtected) return;
     setDeleting(true);
@@ -368,14 +348,6 @@ function App() {
       label: "📋 マージログ",
       onClick: () => { setShowMergeLog(true); setShowOverflow(false); },
     });
-
-    // audit→main sync
-    if (isAudit) {
-      items.push({
-        label: "🔄 audit→main同期",
-        onClick: () => { setShowAuditMerge(true); setShowOverflow(false); },
-      });
-    }
 
     // Cross-DB Table Copy
     if (selectedTable) {
@@ -544,6 +516,10 @@ function App() {
                   setCrossCopyPKs(pks);
                   setShowCrossCopyRows(true);
                 } : undefined}
+                onShowRowHistory={(table, pk) => {
+                  setRowHistoryInfo({ table, pk });
+                  setShowRowHistory(true);
+                }}
               />
             )}
           </div>
@@ -604,25 +580,16 @@ function App() {
         />
       )}
 
-      {/* Audit merge confirmation dialog */}
-      {showAuditMerge && (
-        <div className="modal-overlay" onClick={() => !auditMerging && setShowAuditMerge(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>audit→main同期</h2>
-            <p style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
-              auditブランチの全データをmainにマージします。<br />
-              <span style={{ fontSize: 12, color: "#666" }}>※メモは保護されます</span>
-            </p>
-            <div className="modal-actions">
-              <button onClick={() => setShowAuditMerge(false)} disabled={auditMerging}>
-                キャンセル
-              </button>
-              <button className="primary" onClick={handleAuditMerge} disabled={auditMerging}>
-                {auditMerging ? "同期中..." : "同期する"}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Row History Popup */}
+      {showRowHistory && rowHistoryInfo && (
+        <RecordHistoryPopup
+          targetId={targetId}
+          dbName={dbName}
+          branchName={branchName}
+          table={rowHistoryInfo.table}
+          pk={rowHistoryInfo.pk}
+          onClose={() => { setShowRowHistory(false); setRowHistoryInfo(null); }}
+        />
       )}
 
       {/* CLI intervention screen for fatal states */}

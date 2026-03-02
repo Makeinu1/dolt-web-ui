@@ -350,7 +350,6 @@ Database: Test
 - セッション安全性（defer/ROLLBACK が HTTP 切断時も `context.Background()` で確実実行）
 - エラー表示改善（「日本語説明: 英語エラー詳細」併記フォーマット）
 - `Dolt_Description` 列の左端固定（AG Grid `pinned: 'left'`、存在する場合のみ）
-- audit→main 同期（`POST /audit-merge`、メモテーブル `_memo_*` を自動保護・復元）
 - ブランチ種別表示（🔒 main / 📋 audit / 🌿 wi/*）
 
 ### データ閲覧・比較
@@ -360,6 +359,9 @@ Database: Test
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
 - 行クローン（PK保持コピー方式 — 元行のPKをそのまま保持、`vary_column` + `new_values` レガシーモードも後方互換で維持）
+- **行の変更履歴ポップアップ** `RecordHistoryPopup` — 右クリック「履歴を表示」から起動
+  - `GET /api/v1/history/row` — `dolt_history_{table}` から指定PKのスナップショット一覧（新しい順、最大30件）
+  - 連続スナップショット間の変更カラムをハイライト表示
 
 ### セルメモ（Phase 2: メモテーブル移行済み）
 - `_memo_{table}` 隠しテーブルでメモ管理（ユーザーのテーブル一覧に非表示）
@@ -407,7 +409,6 @@ Database: Test
 ### 撤廃済み機能（簡素化計画 Phase 0〜3 で削除）
 - Revert（コミット取消）— 保存履歴を見せない方針と矛盾
 - BatchGenerateModal / PreviewBulkUpdate — 行クローンで代替
-- RecordHistoryPopup（行単位変更履歴）— 履歴非表示方針と矛盾
 - ActivityLog（変更ログ検索）— MergeLog に置換
 - exportDraftSQL（ドラフト SQL エクスポート）— 複雑性削減
 - ConflictView ours/theirs 選択 UI — main 優先自動解決に変更

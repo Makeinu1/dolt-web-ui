@@ -217,7 +217,13 @@ function DiffGrid({
         const displayVal = params.value != null ? String(params.value) : "";
 
         if (isChanged) {
-          return `${displayVal} <span style="font-size:10px;color:#92400e;margin-left:4px">(旧: ${fromVal})</span>`;
+          const container = document.createElement("span");
+          container.textContent = displayVal;
+          const old = document.createElement("span");
+          old.style.cssText = "font-size:10px;color:#92400e;margin-left:4px";
+          old.textContent = `(旧: ${fromVal})`;
+          container.appendChild(old);
+          return container;
         }
         return displayVal;
       },

@@ -282,17 +282,19 @@ type DiffSummaryResponse struct {
 	Entries []DiffSummaryEntry `json:"entries"`
 }
 
-// --- Audit Merge ---
+// --- Row History ---
 
-// AuditMergeRequest represents a request to merge audit → main.
-type AuditMergeRequest struct {
-	TargetID string `json:"target_id"`
-	DBName   string `json:"db_name"`
+// HistoryRowSnapshot represents a single historical snapshot of a row.
+type HistoryRowSnapshot struct {
+	CommitHash string                 `json:"commit_hash"`
+	CommitDate string                 `json:"commit_date"`
+	Committer  string                 `json:"committer"`
+	Row        map[string]interface{} `json:"row"`
 }
 
-// AuditMergeResponse represents the result of an audit merge.
-type AuditMergeResponse struct {
-	Hash string `json:"hash"`
+// HistoryRowResponse is the response for GET /history/row.
+type HistoryRowResponse struct {
+	Snapshots []HistoryRowSnapshot `json:"snapshots"`
 }
 
 // --- Cell Memos ---

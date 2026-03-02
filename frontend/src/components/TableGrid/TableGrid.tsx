@@ -23,6 +23,9 @@ import type { ColumnSchema, RowsResponse } from "../../types/api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
+// Module-level counter for unique draft row IDs
+let _draftIdCounter = 0;
+
 // --- Column toggle dropdown ---
 function ColumnToggle({
   columns,
@@ -96,9 +99,11 @@ interface TableGridProps {
   onCellSelected?: (info: SelectedCellInfo | null) => void;
   /** Called when user wants to cross-copy selected rows to another DB */
   onCrossCopyRows?: (pks: string[]) => void;
+  /** Called when user wants to view row history for a specific row */
+  onShowRowHistory?: (table: string, pk: string) => void;
 }
 
-export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRows }: TableGridProps) {
+export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRows, onShowRowHistory }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
@@ -156,9 +161,14 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
     [pkCols]
   );
 
-  // Stable row ID for AG Grid selection — sorted PK JSON
+  // Stable row ID for AG Grid selection — sorted PK JSON.
+  // Draft insert rows carry _draftId to prevent dedup when cloning a row
+  // that already exists with the same PK.
   const getRowId = useMemo(
     () => (params: { data: Record<string, unknown> }) => {
+      if (params.data._draftId != null) {
+        return `draft:${params.data._draftId}`;
+      }
       if (pkCols.length === 0) return String(Math.random());
       return JSON.stringify(
         Object.fromEntries(
@@ -366,7 +376,10 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
             setBaseState("DraftEditing");
             const insertOp = result.ops.find((op: { type: string }) => op.type === "insert");
             if (insertOp) {
-              onRowInserted(insertOp.values as Record<string, unknown>);
+              // Attach a unique _draftId so AG Grid treats this as a distinct row
+              // even when the PK matches an existing row (PK-preserving clone).
+              const displayRow = { ...(insertOp.values as Record<string, unknown>), _draftId: ++_draftIdCounter };
+              onRowInserted(displayRow);
             }
           }
         } catch (err: unknown) {
@@ -434,6 +447,16 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
         disabled: pkCols.length === 0,
       };
 
+      const crossCopyItem: MenuItemDef = {
+        name: n > 1 ? `選択 ${n} 行を他DBへコピー` : "他DBへコピー",
+        action: () => {
+          if (onCrossCopyRows) {
+            onCrossCopyRows(targetRows.map((r) => rowPkId(r)));
+          }
+        },
+        disabled: pkCols.length === 0 || !onCrossCopyRows,
+      };
+
       const deleteItem: MenuItemDef = {
         name: n > 1 ? `選択 ${n} 行を削除` : "行を削除",
         action: () => handleDeleteRows(targetRows),
@@ -441,14 +464,30 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
         cssClasses: ["ag-menu-option-danger"],
       };
 
-      return [
-        cloneItem,
+      const historyItem: MenuItemDef = {
+        name: "履歴を表示",
+        action: () => {
+          if (onShowRowHistory) {
+            onShowRowHistory(tableName, rowPkId(rowNode));
+          }
+        },
+        disabled: pkCols.length === 0 || !onShowRowHistory,
+      };
+
+      const items: MenuItemDef[] = [cloneItem];
+      if (onCrossCopyRows) {
+        items.push(crossCopyItem);
+      }
+      items.push(
         deleteItem,
         "separator" as unknown as MenuItemDef,
+        historyItem,
+        "separator" as unknown as MenuItemDef,
         "copy" as unknown as MenuItemDef,
-      ];
+      );
+      return items;
     },
-    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows]
+    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, onShowRowHistory, tableName]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON
@@ -568,9 +607,17 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
     (event: CellValueChangedEvent) => {
       if (pkCols.length === 0) return;
 
-      const pk = Object.fromEntries(pkCols.map((c) => [c.name, event.data[c.name]]));
       const changedCol = event.colDef.field;
       if (!changedCol) return;
+
+      // When a PK column is changed, use event.oldValue for that column to build
+      // the WHERE clause — event.data already holds the updated value at this point.
+      const pk = Object.fromEntries(
+        pkCols.map((c) => [
+          c.name,
+          c.name === changedCol ? event.oldValue : event.data[c.name],
+        ])
+      );
 
       addOp({
         type: "update",
@@ -613,7 +660,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
                 onClick={() => handleCloneRows(selectedRows)}
                 disabled={pkCols.length === 0 || cloning}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: cloning ? "not-allowed" : "pointer" }}
-                title="行をコピー"
+                title="行をコピー（同一ブランチ内）"
               >
                 {cloning ? "コピー中..." : `コピー${selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}`}
               </button>
@@ -628,7 +675,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
                 style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
                 title="選択行を他のDBにコピー"
               >
-                他DBへコピー{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+                他DBへ{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
               </button>
             )}
             <button

@@ -176,10 +176,19 @@ export function ContextSelector() {
             value={workItemName}
             onChange={(e) => setWorkItemName(e.target.value)}
             placeholder="ticket-123"
-            style={{ fontSize: 12, padding: "2px 6px", width: 120, background: "#fff", color: "#000", border: "none", borderRadius: 2 }}
+            style={{
+              fontSize: 12,
+              padding: "2px 6px",
+              width: 120,
+              background: "#fff",
+              color: "#000",
+              border: workItemName.trim() && !workItemValid ? "1px solid #f87171" : "none",
+              borderRadius: 2,
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") handleCreateBranch();
             }}
+            title="使用できる文字: A-Z a-z 0-9 . _ -"
             autoFocus
           />
           <span style={{ fontSize: 11, color: "#94a3b8" }}>/ {nextRound}</span>
@@ -200,6 +209,9 @@ export function ContextSelector() {
           >
             キャンセル
           </button>
+          {workItemName.trim() && !workItemValid && (
+            <span style={{ color: "#fca5a5", fontSize: 10 }}>使用できない文字が含まれています (A-Z a-z 0-9 . _ - のみ)</span>
+          )}
           {createError && (
             <span style={{ color: "#fca5a5", fontSize: 10 }}>{createError}</span>
           )}

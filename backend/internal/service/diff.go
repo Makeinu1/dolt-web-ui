@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
@@ -432,4 +433,101 @@ func parsePK(pkJSON string) (map[string]interface{}, error) {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "pk must not be empty"}
 	}
 	return pkMap, nil
+}
+
+// HistoryRow returns all historical snapshots of a specific row from dolt_history_{table}.
+// Snapshots are returned newest-first, up to limit entries.
+func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, table, pkJSON string, limit int) (*model.HistoryRowResponse, error) {
+	if err := validation.ValidateIdentifier("table", table); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
+	}
+
+	pkMap, err := parsePK(pkJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build WHERE clause from PK columns
+	whereParts := make([]string, 0, len(pkMap))
+	whereArgs := make([]interface{}, 0, len(pkMap))
+	for k, v := range pkMap {
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
+		}
+		// Convert JSON number (float64) to integer string for query
+		if fv, ok := v.(float64); ok && fv == float64(int64(fv)) {
+			v = strconv.FormatInt(int64(fv), 10)
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		whereArgs = append(whereArgs, v)
+	}
+
+	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	histTable := fmt.Sprintf("dolt_history_%s", table)
+	query := fmt.Sprintf(
+		"SELECT * FROM `%s` WHERE %s ORDER BY commit_date DESC LIMIT ?",
+		histTable, strings.Join(whereParts, " AND "),
+	)
+	whereArgs = append(whereArgs, limit)
+
+	rows, err := conn.QueryContext(ctx, query, whereArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query row history: %w", err)
+	}
+	defer rows.Close()
+
+	colNames, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %w", err)
+	}
+
+	snapshots := make([]model.HistoryRowSnapshot, 0)
+	for rows.Next() {
+		values := make([]interface{}, len(colNames))
+		valuePtrs := make([]interface{}, len(colNames))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan history row: %w", err)
+		}
+
+		snap := model.HistoryRowSnapshot{Row: make(map[string]interface{})}
+		for i, col := range colNames {
+			val := values[i]
+			if b, ok := val.([]byte); ok {
+				val = string(b)
+			}
+			switch col {
+			case "commit_hash":
+				if sv, ok := val.(string); ok {
+					snap.CommitHash = sv
+				}
+			case "commit_date":
+				if sv, ok := val.(string); ok {
+					snap.CommitDate = sv
+				} else {
+					snap.CommitDate = fmt.Sprintf("%v", val)
+				}
+			case "committer":
+				if sv, ok := val.(string); ok {
+					snap.Committer = sv
+				}
+			default:
+				snap.Row[col] = val
+			}
+		}
+		snapshots = append(snapshots, snap)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("history row query error: %w", err)
+	}
+
+	return &model.HistoryRowResponse{Snapshots: snapshots}, nil
 }

@@ -48,6 +48,7 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Get("/diff/summary", h.DiffSummary)
 		r.Get("/diff/export-zip", h.ExportDiffZip)
 		r.Get("/history/commits", h.HistoryCommits)
+		r.Get("/history/row", h.HistoryRow)
 
 		// Request/Approval
 		r.Post("/request/submit", h.SubmitRequest)
@@ -55,9 +56,6 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Get("/request", h.GetRequest)
 		r.Post("/request/approve", h.ApproveRequest)
 		r.Post("/request/reject", h.RejectRequest)
-
-		// Audit
-		r.Post("/audit-merge", h.AuditMerge)
 
 		// Cell Memos
 		r.Get("/memo", h.GetMemo)

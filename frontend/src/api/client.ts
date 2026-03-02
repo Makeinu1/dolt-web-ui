@@ -159,6 +159,25 @@ export const getDiffTable = (
     })}`
   );
 
+export const getHistoryRow = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  table: string,
+  pk: string,
+  limit = 30
+) =>
+  request<import("../types/api").HistoryRowResponse>(
+    `/history/row${queryString({
+      target_id: targetId,
+      db_name: dbName,
+      branch_name: branchName,
+      table,
+      pk,
+      limit: String(limit),
+    })}`
+  );
+
 export const getHistoryCommits = (
   targetId: string,
   dbName: string,
@@ -228,13 +247,6 @@ export const approveRequest = (body: import("../types/api").ApproveRequest) =>
 
 export const rejectRequest = (body: import("../types/api").RejectRequest) =>
   request<{ status: string }>("/request/reject", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
-// Audit merge
-export const auditMerge = (body: { target_id: string; db_name: string }) =>
-  request<{ hash: string }>("/audit-merge", {
     method: "POST",
     body: JSON.stringify(body),
   });
