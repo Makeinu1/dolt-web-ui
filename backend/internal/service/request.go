@@ -235,7 +235,12 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
-	defer conn.Close()
+	connClosed := false
+	defer func() {
+		if !connClosed {
+			conn.Close()
+		}
+	}()
 
 	var submittedWorkHash, message string
 	err = conn.QueryRowContext(ctx,
@@ -340,8 +345,22 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		return nil, fmt.Errorf("failed to delete request tag %s (merge succeeded but cleanup failed): %w", req.RequestID, err)
 	}
 
+	// Close merge conn before branch operations: the accumulated DOLT_MERGE + DOLT_CHECKOUT
+	// session state on this connection can interfere with DOLT_BRANCH creation, causing the
+	// new branch to be created from the wrong HEAD or the subsequent USE `db/branch` to fail.
+	connClosed = true
+	conn.Close()
+
+	// Open a fresh connection for branch delete/create (free of merge session state).
+	branchConn, err := s.repo.ConnDB(bgCtx, req.TargetID, req.DBName)
+	if err != nil {
+		log.Printf("ERROR: failed to get branch conn for cleanup: %v", err)
+		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
+	}
+	defer branchConn.Close()
+
 	// Delete old work branch
-	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", workBranch); err != nil {
+	if _, err := branchConn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", workBranch); err != nil {
 		log.Printf("ERROR: branch deletion failed for %s: %v", workBranch, err)
 	}
 
@@ -359,7 +378,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	nextBranch := fmt.Sprintf("wi/%s/%02d", item, round+1)
 
 	// Create next branch from current main HEAD
-	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
+	if _, err := branchConn.ExecContext(bgCtx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
 		log.Printf("ERROR: next branch creation failed for %s: %v", nextBranch, err)
 		// Non-fatal: return success with empty next_branch
 		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
@@ -370,7 +389,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	if err := s.verifyBranchQueryable(bgCtx, req.TargetID, req.DBName, nextBranch); err != nil {
 		log.Printf("WARN: branch %s created but not yet queryable: %v", nextBranch, err)
 		// Roll back: delete the unverified branch to keep state clean.
-		conn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", nextBranch) //nolint:errcheck
+		branchConn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", nextBranch) //nolint:errcheck
 		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
 	}
 

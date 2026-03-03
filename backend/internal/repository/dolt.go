@@ -66,6 +66,15 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 
+	// Reset any DOLT_CHECKOUT state left by a previous ConnWrite() on this pooled connection.
+	// Without this, USE `db/branch` (revision specifier) conflicts with a lingering DOLT_CHECKOUT
+	// session and causes HY000 errors on SHOW COLUMNS / SHOW TABLES.
+	resetStmt := fmt.Sprintf("USE `%s`", dbName)
+	if _, err := conn.ExecContext(ctx, resetStmt); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to reset db context %s: %w", dbName, err)
+	}
+
 	// USE `dbName/branchName` is the standard Dolt way to specify a revision database.
 	// This avoids stateful CALL DOLT_CHECKOUT(?) which pollutes the connection pool.
 	revisionDb := fmt.Sprintf("%s/%s", dbName, branchName)
