@@ -15,6 +15,8 @@ import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsModal";
 import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
 import { RecordHistoryPopup } from "./components/common/RecordHistoryPopup";
+import { CSVImportModal } from "./components/CSVImportModal/CSVImportModal";
+import { SearchModal } from "./components/SearchModal/SearchModal";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -62,6 +64,8 @@ function App() {
   const [showCrossCopyTable, setShowCrossCopyTable] = useState(false);
   const [showRowHistory, setShowRowHistory] = useState(false);
   const [rowHistoryInfo, setRowHistoryInfo] = useState<{ table: string; pk: string } | null>(null);
+  const [showCSVImport, setShowCSVImport] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
 
   const isMain = branchName === "main";
@@ -70,7 +74,7 @@ function App() {
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showCrossCopyRows || showCrossCopyTable || showRowHistory;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showCrossCopyRows || showCrossCopyTable || showRowHistory || showCSVImport || showSearch;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -131,6 +135,13 @@ function App() {
     prevContextRef.current = { targetId, dbName, branchName };
   }, [targetId, dbName, branchName, clearDraft, setBaseState, setError]);
 
+  // Auto-clear error after 8 seconds to prevent persistent error loops.
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(null), 8000);
+    return () => clearTimeout(timer);
+  }, [error, setError]);
+
   // C-1: Delegate HEAD management to the useHeadSync hook
   const { expectedHead, setExpectedHead, refreshHead } = useHeadSync({
     targetId,
@@ -139,6 +150,7 @@ function App() {
     branchRefreshKey,
     isContextReady,
     onError: (msg) => setError(msg),
+    hasError: () => error !== null,
   });
 
   // Refresh data when branchRefreshKey changes (e.g. after approve/reject)
@@ -166,49 +178,6 @@ function App() {
       setBaseState("DraftEditing");
     }
   }, [ops, baseState, hasDraft, setBaseState]);
-
-  const handleSync = async () => {
-    if (baseState === "Syncing") return;
-    if (hasDraft()) {
-      setError("ドラフトを破棄してから同期してください。");
-      return;
-    }
-    setBaseState("Syncing");
-    try {
-      const result = await api.sync({
-        target_id: targetId,
-        db_name: dbName,
-        branch_name: branchName,
-        expected_head: expectedHead,
-      });
-      setExpectedHead(result.hash);
-      setBaseState("Idle");
-      // Data conflicts were auto-resolved (main priority) — notify user
-      if (result.overwritten_tables && result.overwritten_tables.length > 0) {
-        setOverwrittenTables(result.overwritten_tables);
-      }
-    } catch (err: unknown) {
-      // ApiError carries flat .code and .message fields
-      const code = err instanceof ApiError ? err.code : (err as { code?: string })?.code;
-      const message = err instanceof ApiError ? err.message : (err as { message?: string })?.message;
-      if (code === "BRANCH_LOCKED") {
-        setBaseState("Idle");
-        setError("承認申請中のためロックされています");
-      } else if (code === "SCHEMA_CONFLICTS_PRESENT") {
-        setBaseState("SchemaConflictDetected");
-        setError("同期に失敗しました" + (message ? ": " + message : ""));
-      } else if (code === "CONSTRAINT_VIOLATIONS_PRESENT") {
-        setBaseState("ConstraintViolationDetected");
-        setError("同期に失敗しました" + (message ? ": " + message : ""));
-      } else if (code === "STALE_HEAD") {
-        setBaseState("StaleHeadDetected");
-        setError("同期に失敗しました" + (message ? ": " + message : ""));
-      } else {
-        setBaseState("Idle");
-        setError("同期に失敗しました" + (message ? ": " + message : ""));
-      }
-    }
-  };
 
   const handleRefresh = () => {
     refreshHead();
@@ -307,19 +276,7 @@ function App() {
     const items: { label: string; onClick: () => void; disabled?: boolean; disabledReason?: string; danger?: boolean }[] = [];
 
     if (!isProtected) {
-      // Sync
-      const syncDisabled = hasDraft() || baseState === "Syncing" || baseState === "Committing" ||
-        baseState === "SchemaConflictDetected" || baseState === "ConstraintViolationDetected";
-      items.push({
-        label: "↻ Main と同期",
-        onClick: () => { handleSync(); setShowOverflow(false); },
-        disabled: syncDisabled,
-        disabledReason: syncDisabled
-          ? (hasDraft() ? "ドラフトがあると同期できません" : "処理中は同期できません")
-          : undefined,
-      });
-
-      // Submit
+      // Submit (sync is now automatic inside submit request)
       const submitDisabled = hasDraft() || baseState !== "Idle";
       items.push({
         label: "📤 承認を申請",
@@ -336,6 +293,12 @@ function App() {
         onClick: () => { handleRefresh(); setShowOverflow(false); },
       });
     }
+
+    // Search
+    items.push({
+      label: "🔍 全テーブル検索",
+      onClick: () => { setShowSearch(true); setShowOverflow(false); },
+    });
 
     // Compare Versions (History)
     items.push({
@@ -354,6 +317,14 @@ function App() {
       items.push({
         label: "他DBへテーブルコピー",
         onClick: () => { setShowCrossCopyTable(true); setShowOverflow(false); },
+      });
+    }
+
+    // CSV Import (non-protected branch + table selected)
+    if (!isProtected && selectedTable) {
+      items.push({
+        label: "📥 CSVインポート",
+        onClick: () => { setShowCSVImport(true); setShowOverflow(false); },
       });
     }
 
@@ -559,7 +530,12 @@ function App() {
         onCloseCommentPanel={() => setShowCommentPanel(false)}
         onCloseMergeLog={() => setShowMergeLog(false)}
         onCommitSuccess={onCommitSuccess}
-        onSubmitted={() => setRequestCount(requestCount + 1)}
+        onSubmitted={(overwritten) => {
+          setRequestCount(requestCount + 1);
+          if (overwritten && overwritten.length > 0) {
+            setOverwrittenTables(overwritten);
+          }
+        }}
         onDeleteConfirm={handleDeleteBranch}
         deleting={deleting}
         selectedCell={selectedCell}
@@ -577,6 +553,29 @@ function App() {
         <CrossCopyTableModal
           tableName={selectedTable}
           onClose={() => setShowCrossCopyTable(false)}
+        />
+      )}
+
+      {/* Search Modal */}
+      {showSearch && (
+        <SearchModal
+          onClose={() => setShowSearch(false)}
+          onNavigate={(table) => {
+            setSelectedTable(table);
+          }}
+        />
+      )}
+
+      {/* CSV Import Modal */}
+      {showCSVImport && selectedTable && (
+        <CSVImportModal
+          tableName={selectedTable}
+          expectedHead={expectedHead}
+          onClose={() => setShowCSVImport(false)}
+          onApplied={(newHash) => {
+            onCommitSuccess(newHash);
+            setShowCSVImport(false);
+          }}
         />
       )}
 

@@ -120,6 +120,7 @@ export interface SubmitRequestResponse {
   request_id: string;
   submitted_main_hash: string;
   submitted_work_hash: string;
+  overwritten_tables?: OverwrittenTable[];
 }
 
 export interface RequestSummary {
@@ -206,6 +207,12 @@ export interface DiffSummaryResponse {
 
 // --- Cross-DB Copy ---
 
+export interface ExpandColumn {
+  name: string;
+  src_type: string;
+  dst_type: string;
+}
+
 export interface CrossCopyPreviewRequest {
   target_id: string;
   source_db: string;
@@ -228,6 +235,7 @@ export interface CrossCopyPreviewResponse {
   dest_only_columns: string[];
   warnings: string[];
   rows: CrossCopyPreviewRow[];
+  expand_columns?: ExpandColumn[];
 }
 
 export interface CrossCopyRowsRequest {
@@ -275,6 +283,61 @@ export interface HistoryRowSnapshot {
 
 export interface HistoryRowResponse {
   snapshots: HistoryRowSnapshot[];
+}
+
+// --- CSV Import ---
+
+export interface CSVPreviewRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table: string;
+  rows: Record<string, unknown>[];
+}
+
+export interface CSVDiffRow {
+  action: "insert" | "update";
+  row: Record<string, unknown>;
+  old_row?: Record<string, unknown>;
+}
+
+export interface CSVPreviewError {
+  row_index: number;
+  message: string;
+}
+
+export interface CSVPreviewResponse {
+  inserts: number;
+  updates: number;
+  skips: number;
+  errors: number;
+  sample_diffs: CSVDiffRow[];
+  preview_errors?: CSVPreviewError[];
+}
+
+export interface CSVApplyRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  table: string;
+  expected_head: string;
+  commit_message: string;
+  rows: Record<string, unknown>[];
+}
+
+// --- Search ---
+
+export interface SearchResult {
+  table: string;
+  pk: string;
+  column: string;
+  value: string;
+  match_type: "value" | "memo";
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+  total: number;
 }
 
 // --- Cell Memos ---

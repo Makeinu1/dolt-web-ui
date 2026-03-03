@@ -54,6 +54,23 @@ func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]
 	return branches, rows.Err()
 }
 
+// verifyBranchQueryable retries Conn() up to 3 times to confirm a newly created branch
+// is queryable via USE db/branch. Returns nil on success.
+// This guards against Dolt's branch propagation lag across connection pool connections.
+func (s *Service) verifyBranchQueryable(ctx context.Context, targetID, dbName, branch string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		conn, err := s.repo.Conn(ctx, targetID, dbName, branch)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		if attempt < 2 {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("branch %s created but not queryable after 3 retries", branch)
+}
+
 func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchRequest) error {
 	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
 	if err != nil {
@@ -69,25 +86,17 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 
 	// Verify the branch is queryable on a fresh connection (USE db/branch).
 	// Dolt may need a moment to propagate the branch across connections.
-	for attempt := 0; attempt < 3; attempt++ {
-		verifyConn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
-		if err == nil {
-			verifyConn.Close()
-			return nil
+	if err := s.verifyBranchQueryable(ctx, req.TargetID, req.DBName, req.BranchName); err != nil {
+		// Verification failed: roll back by deleting the branch we just created.
+		// Use context.Background() so cancellation of the HTTP request doesn't prevent cleanup.
+		rollbackConn, rbErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
+		if rbErr == nil {
+			rollbackConn.ExecContext(context.Background(), "CALL DOLT_BRANCH('-D', ?)", req.BranchName) //nolint:errcheck
+			rollbackConn.Close()
 		}
-		if attempt < 2 {
-			time.Sleep(200 * time.Millisecond)
-		}
+		return fmt.Errorf("branch created but not yet queryable via USE")
 	}
-
-	// Verification failed: roll back by deleting the branch we just created.
-	// Use context.Background() so cancellation of the HTTP request doesn't prevent cleanup.
-	rollbackConn, rbErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
-	if rbErr == nil {
-		rollbackConn.ExecContext(context.Background(), "CALL DOLT_BRANCH('-D', ?)", req.BranchName) //nolint:errcheck
-		rollbackConn.Close()
-	}
-	return fmt.Errorf("branch created but not yet queryable via USE")
+	return nil
 }
 
 func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchRequest) error {

@@ -34,6 +34,7 @@ export function MergeLog({ onClose }: Props) {
 
     const [fromDate, setFromDate] = useState("");
     const [toDate, setToDate] = useState("");
+    const [keyword, setKeyword] = useState("");
     const [commits, setCommits] = useState<HistoryCommit[]>([]);
     const [loading, setLoading] = useState(false);
     const [searched, setSearched] = useState(false);
@@ -64,7 +65,7 @@ export function MergeLog({ onClose }: Props) {
                 p,
                 pageSize,
                 "merges_only",
-                "",
+                keyword,
                 fromDate,
                 toDate
             );
@@ -79,7 +80,7 @@ export function MergeLog({ onClose }: Props) {
         } finally {
             setLoading(false);
         }
-    }, [targetId, dbName, fromDate, toDate]);
+    }, [targetId, dbName, keyword, fromDate, toDate]);
 
     // Auto-load on open
     useEffect(() => {
@@ -157,6 +158,19 @@ export function MergeLog({ onClose }: Props) {
                     gap: 8,
                     alignItems: "flex-end",
                 }}>
+                    <div style={{ flex: "2 1 200px" }}>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#555" }}>
+                            コミットメッセージ検索
+                        </label>
+                        <input
+                            type="text"
+                            value={keyword}
+                            onChange={(e) => setKeyword(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleSearch(1)}
+                            placeholder="キーワードで絞り込み"
+                            style={{ width: "100%", fontSize: 13, padding: "4px 8px", boxSizing: "border-box" }}
+                        />
+                    </div>
                     <div style={{ flex: "1 1 120px" }}>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#555" }}>
                             開始日

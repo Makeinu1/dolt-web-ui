@@ -3,7 +3,7 @@ import { useContextStore } from "../../store/context";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { RequestSummary, DiffSummaryEntry } from "../../types/api";
+import type { RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
 function ExpandableDiffSummary({ targetId, dbName, branchName }: {
@@ -103,7 +103,7 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
 interface SubmitDialogProps {
   expectedHead: string;
   onClose: () => void;
-  onSubmitted: () => void;
+  onSubmitted: (overwrittenTables?: OverwrittenTable[]) => void;
 }
 
 export function SubmitDialog({
@@ -124,14 +124,14 @@ export function SubmitDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await api.submitRequest({
+      const result = await api.submitRequest({
         target_id: targetId,
         db_name: dbName,
         branch_name: branchName,
         expected_head: expectedHead,
         summary_ja: summaryJa,
       });
-      onSubmitted();
+      onSubmitted(result.overwritten_tables);
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
@@ -208,7 +208,7 @@ function ApproveModal({
   requestId: string;
   workBranch: string;
   onClose: () => void;
-  onApproved: () => void;
+  onApproved: (nextBranch: string) => void;
 }) {
   const { targetId, dbName } = useContextStore();
   const [mergeMessage, setMergeMessage] = useState(`承認マージ: ${requestId}`);
@@ -219,14 +219,13 @@ function ApproveModal({
     setLoading(true);
     setError(null);
     try {
-      await api.approveRequest({
+      const result = await api.approveRequest({
         target_id: targetId,
         db_name: dbName,
         request_id: requestId,
         merge_message_ja: mergeMessage,
       });
-      // NOTE: auto-branch switching removed per plan (H5 fix)
-      onApproved();
+      onApproved(result.next_branch || "");
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
@@ -357,7 +356,7 @@ function RejectModal({
 
 // --- Approver inbox view ---
 export function ApproverInbox() {
-  const { targetId, dbName, triggerBranchRefresh } = useContextStore();
+  const { targetId, dbName, triggerBranchRefresh, setBranch } = useContextStore();
   const [requests, setRequests] = useState<RequestSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [approveTarget, setApproveTarget] = useState<string | null>(null);
@@ -378,11 +377,15 @@ export function ApproverInbox() {
     loadRequests();
   }, [targetId, dbName]);
 
-  const onApproved = () => {
+  const onApproved = (nextBranch: string) => {
     if (approveTarget) {
       setRequests((prev) => prev.filter((r) => r.request_id !== approveTarget));
     }
     triggerBranchRefresh();
+    // Navigate to the auto-created next round branch if available
+    if (nextBranch) {
+      setBranch(nextBranch);
+    }
   };
 
   const onRejected = () => {

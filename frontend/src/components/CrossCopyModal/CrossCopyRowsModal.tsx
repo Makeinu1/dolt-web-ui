@@ -289,6 +289,18 @@ export function CrossCopyRowsModal({
               共有カラム: {preview.shared_columns.join(", ")}
             </div>
 
+            {/* Auto-expand columns notification */}
+            {preview.expand_columns && preview.expand_columns.length > 0 && (
+              <div style={{ fontSize: 12, marginBottom: 4, padding: "6px 8px", background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, border: "1px solid #bfdbfe" }}>
+                以下のカラムを自動拡張します（DDL）:
+                <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                  {preview.expand_columns.map((ec, i) => (
+                    <li key={i}><strong>{ec.name}</strong>: {ec.dst_type} → {ec.src_type}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Warnings */}
             {preview.warnings.map((w, i) => (
               <div

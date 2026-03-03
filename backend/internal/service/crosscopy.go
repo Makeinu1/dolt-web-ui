@@ -5,11 +5,77 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
+
+// varcharRe parses varchar(N) type strings.
+var varcharRe = regexp.MustCompile(`^varchar\((\d+)\)$`)
+
+// stringTypeOrder defines the expansion order for text types.
+// A column can be expanded to a wider type automatically.
+var stringTypeOrder = []string{"tinytext", "text", "mediumtext", "longtext"}
+
+// parseVarcharLen returns the length from "varchar(N)" or -1 if not varchar.
+func parseVarcharLen(t string) int {
+	m := varcharRe.FindStringSubmatch(t)
+	if m == nil {
+		return -1
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// stringTypeLevel returns the expansion level of a text type (higher = wider), -1 if not a text type.
+func stringTypeLevel(t string) int {
+	for i, v := range stringTypeOrder {
+		if strings.EqualFold(t, v) {
+			return i
+		}
+	}
+	return -1
+}
+
+// needsExpansion checks if destType is narrower than srcType for string columns.
+// Returns (true, widenedType) if expansion is needed.
+func needsExpansion(srcType, dstType string) (bool, string) {
+	srcLen := parseVarcharLen(srcType)
+	dstLen := parseVarcharLen(dstType)
+
+	// Both varchar: expand if src is wider
+	if srcLen >= 0 && dstLen >= 0 {
+		if srcLen > dstLen {
+			return true, srcType // use src's varchar(N)
+		}
+		return false, ""
+	}
+
+	// varchar → text upgrade (varchar is always narrower than any text type)
+	if srcLen < 0 && dstLen >= 0 {
+		srcLevel := stringTypeLevel(srcType)
+		if srcLevel >= 0 {
+			// src is text type, dst is varchar — expand dst to src
+			return true, srcType
+		}
+		return false, ""
+	}
+	if srcLen >= 0 && dstLen < 0 {
+		// src is varchar, dst is text — dest is already wider
+		return false, ""
+	}
+
+	// Both text types: expand if src level is higher
+	srcLevel := stringTypeLevel(srcType)
+	dstLevel := stringTypeLevel(dstType)
+	if srcLevel >= 0 && dstLevel >= 0 && srcLevel > dstLevel {
+		return true, srcType
+	}
+	return false, ""
+}
 
 // parseCopyError maps MySQL data errors to user-friendly COPY_DATA_ERROR responses.
 // Returns nil if the error is not a recognized copy-related error.
@@ -272,12 +338,22 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 		}
 	}
 
-	// Check type mismatches on shared columns
+	// Check type mismatches on shared columns; detect string columns that need expansion.
+	expandColumns := make([]model.ExpandColumn, 0)
 	for _, colName := range shared {
 		sc := srcColMap[colName]
 		dc := dstColMap[colName]
 		if sc.Type != dc.Type {
-			warnings = append(warnings, fmt.Sprintf("カラム %s の型が異なります（コピー元: %s, 宛先: %s）", colName, sc.Type, dc.Type))
+			if expand, widenedType := needsExpansion(sc.Type, dc.Type); expand {
+				expandColumns = append(expandColumns, model.ExpandColumn{
+					Name:    colName,
+					SrcType: sc.Type,
+					DstType: dc.Type,
+				})
+				_ = widenedType // used during actual copy
+			} else {
+				warnings = append(warnings, fmt.Sprintf("カラム %s の型が異なります（コピー元: %s, 宛先: %s）", colName, sc.Type, dc.Type))
+			}
 		}
 	}
 
@@ -329,7 +405,34 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 		DestOnlyCols:   dstOnly,
 		Warnings:       warnings,
 		Rows:           previewRows,
+		ExpandColumns:  expandColumns,
 	}, nil
+}
+
+// applyExpandColumns runs ALTER TABLE MODIFY COLUMN for each column that needs widening.
+// Must be called outside of a transaction (DDL auto-commits in Dolt/MySQL).
+func applyExpandColumns(ctx context.Context, conn *sql.Conn, table string, srcColMap, dstColMap map[string]model.ColumnSchema, shared []string) error {
+	for _, colName := range shared {
+		sc := srcColMap[colName]
+		dc := dstColMap[colName]
+		if sc.Type == dc.Type {
+			continue
+		}
+		expand, widenedType := needsExpansion(sc.Type, dc.Type)
+		if !expand {
+			continue
+		}
+		// Preserve NOT NULL constraint from dest column
+		nullClause := "NULL"
+		if !dc.Nullable {
+			nullClause = "NOT NULL"
+		}
+		alterSQL := fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s", table, colName, widenedType, nullClause)
+		if _, err := conn.ExecContext(ctx, alterSQL); err != nil {
+			return fmt.Errorf("failed to expand column %s to %s: %w", colName, widenedType, err)
+		}
+	}
+	return nil
 }
 
 // CrossCopyRows copies selected rows from source DB/branch to dest DB/branch.
@@ -391,6 +494,21 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	shared, _, _ := computeSharedColumns(srcCols, dstCols)
 	if len(shared) == 0 {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "共有カラムがありません"}
+	}
+
+	// Build column maps for expansion check
+	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
+	for _, c := range srcCols {
+		srcColMap[c.Name] = c
+	}
+	dstColMap := make(map[string]model.ColumnSchema, len(dstCols))
+	for _, c := range dstCols {
+		dstColMap[c.Name] = c
+	}
+
+	// Auto-expand dest string columns that are narrower than source (DDL before transaction)
+	if err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMap, shared); err != nil {
+		return nil, fmt.Errorf("failed to expand columns: %w", err)
 	}
 
 	// Fetch source rows
@@ -593,12 +711,33 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	}
 	dstConnDB.Close()
 
+	// Verify branch is queryable before getting writable connection.
+	// Guards against Dolt propagation lag (same pattern as CreateBranch).
+	if err := s.verifyBranchQueryable(ctx, req.TargetID, req.DestDB, newBranchName); err != nil {
+		return nil, fmt.Errorf("failed to verify branch %s: %w", newBranchName, err)
+	}
+
 	// Get writable connection on the new branch
 	dstConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, newBranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to new branch: %w", err)
 	}
 	defer dstConn.Close()
+
+	// Build column maps for expansion check
+	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
+	for _, c := range srcCols {
+		srcColMap[c.Name] = c
+	}
+	dstColMapTable := make(map[string]model.ColumnSchema, len(dstCols))
+	for _, c := range dstCols {
+		dstColMapTable[c.Name] = c
+	}
+
+	// Auto-expand dest string columns that are narrower than source (DDL before transaction)
+	if err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMapTable, shared); err != nil {
+		return nil, fmt.Errorf("failed to expand columns: %w", err)
+	}
 
 	// START TRANSACTION
 	if _, err := dstConn.ExecContext(ctx, "START TRANSACTION"); err != nil {

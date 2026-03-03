@@ -41,7 +41,6 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 
 		// Write operations
 		r.Post("/commit", h.Commit)
-		r.Post("/sync", h.Sync)
 
 		// Diff & History
 		r.Get("/diff/table", h.DiffTable)
@@ -65,6 +64,13 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Post("/cross-copy/preview", h.CrossCopyPreview)
 		r.Post("/cross-copy/rows", h.CrossCopyRows)
 		r.Post("/cross-copy/table", h.CrossCopyTable)
+
+		// CSV Import
+		r.Post("/csv/preview", h.CSVPreview)
+		r.Post("/csv/apply", h.CSVApply)
+
+		// Search
+		r.Get("/search", h.Search)
 	})
 
 	// Health check

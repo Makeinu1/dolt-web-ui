@@ -58,9 +58,8 @@ export function CrossCopyTableModal({
     if (!result) return;
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
-    setTimeout(() => {
-      useContextStore.getState().setBranch(result.branch_name);
-    }, 100);
+    // Branch is verified queryable by backend before returning, so direct switch is safe.
+    ctx.setBranch(result.branch_name);
     onClose();
   };
 

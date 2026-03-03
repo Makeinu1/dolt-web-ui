@@ -65,11 +65,18 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		}
 	}
 
-	// Step 1.5: Auto-sync main into work branch before submit
-	if _, err := conn.ExecContext(ctx, "SET autocommit=1"); err != nil {
-		return nil, fmt.Errorf("failed to set autocommit: %w", err)
+	// Step 1.5: Auto-sync main into work branch before submit.
+	// Uses START TRANSACTION to support conflict detection and resolution.
+	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer conn.ExecContext(context.Background(), "SET autocommit=0")
+
+	// Preview: block on schema conflicts, collect data-conflicted table names.
+	dataConflictTables, previewErr := s.previewMergeInfo(ctx, conn, req.BranchName)
+	if previewErr != nil {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, previewErr
+	}
 
 	var syncHash string
 	var syncFF, syncConflicts int
@@ -77,25 +84,26 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").
 		Scan(&syncHash, &syncFF, &syncConflicts, &syncMsg)
 	if err != nil {
-		if strings.Contains(err.Error(), "conflict") {
-			return nil, &model.APIError{
-				Status: 409,
-				Code:   model.CodeMergeConflictsPresent,
-				Msg:    "Main との同期でコンフリクトが検出されました。ダイアログを閉じてコンフリクトを解決してください。",
-			}
-		}
-		// If merge returns "nothing to merge" or similar non-error, continue
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		// "up to date" is not an error
 		if !strings.Contains(err.Error(), "up to date") {
 			return nil, fmt.Errorf("failed to auto-sync main: %w", err)
 		}
 	}
+
+	var overwrittenTables []model.OverwrittenTable
 	if syncConflicts > 0 {
-		// Abort the conflicting merge
-		conn.ExecContext(ctx, "CALL DOLT_MERGE('--abort')")
-		return nil, &model.APIError{
-			Status: 409,
-			Code:   model.CodeMergeConflictsPresent,
-			Msg:    "Main との同期でコンフリクトが検出されました。ダイアログを閉じてコンフリクトを解決してください。",
+		// Auto-resolve data conflicts: main priority (--theirs)
+		var resolveErr error
+		overwrittenTables, resolveErr = s.resolveDataConflicts(ctx, conn, dataConflictTables)
+		if resolveErr != nil {
+			conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+			return nil, resolveErr
+		}
+		// Commit the resolved merge
+		if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '--all', '-m', '承認申請前の自動同期: コンフリクト解決 (main優先)')"); err != nil {
+			conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+			return nil, fmt.Errorf("failed to commit resolved merge: %w", err)
 		}
 	}
 
@@ -140,6 +148,7 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		RequestID:         requestID,
 		SubmittedMainHash: submittedMainHash,
 		SubmittedWorkHash: submittedWorkHash,
+		OverwrittenTables: overwrittenTables,
 	}, nil
 }
 
@@ -353,6 +362,15 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_BRANCH(?)", nextBranch); err != nil {
 		log.Printf("ERROR: next branch creation failed for %s: %v", nextBranch, err)
 		// Non-fatal: return success with empty next_branch
+		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
+	}
+
+	// Verify branch is queryable before returning (guards against Dolt propagation lag).
+	// Same pattern as CreateBranch in metadata.go.
+	if err := s.verifyBranchQueryable(bgCtx, req.TargetID, req.DBName, nextBranch); err != nil {
+		log.Printf("WARN: branch %s created but not yet queryable: %v", nextBranch, err)
+		// Roll back: delete the unverified branch to keep state clean.
+		conn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", nextBranch) //nolint:errcheck
 		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
 	}
 

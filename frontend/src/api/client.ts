@@ -293,6 +293,39 @@ export const crossCopyTable = (body: import("../types/api").CrossCopyTableReques
     body: JSON.stringify(body),
   });
 
+// CSV Import
+export const csvPreview = (body: import("../types/api").CSVPreviewRequest) =>
+  request<import("../types/api").CSVPreviewResponse>("/csv/preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const csvApply = (body: import("../types/api").CSVApplyRequest) =>
+  request<import("../types/api").CommitResponse>("/csv/apply", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+// Search
+export const search = (
+  targetId: string,
+  dbName: string,
+  branchName: string,
+  keyword: string,
+  includeMemo = false,
+  limit = 100
+) =>
+  request<import("../types/api").SearchResponse>(
+    `/search${queryString({
+      target_id: targetId,
+      db_name: dbName,
+      branch_name: branchName,
+      keyword,
+      include_memo: includeMemo ? "true" : "",
+      limit: String(limit),
+    })}`
+  );
+
 // Diff ZIP export — returns a Blob (application/zip)
 export const exportDiffZip = async (
   targetId: string,

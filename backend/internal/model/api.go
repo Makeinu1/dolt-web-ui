@@ -180,9 +180,10 @@ type SubmitRequestRequest struct {
 
 // SubmitRequestResponse represents the result of a request submission.
 type SubmitRequestResponse struct {
-	RequestID         string `json:"request_id"`
-	SubmittedMainHash string `json:"submitted_main_hash"`
-	SubmittedWorkHash string `json:"submitted_work_hash"`
+	RequestID         string             `json:"request_id"`
+	SubmittedMainHash string             `json:"submitted_main_hash"`
+	SubmittedWorkHash string             `json:"submitted_work_hash"`
+	OverwrittenTables []OverwrittenTable `json:"overwritten_tables,omitempty"`
 }
 
 // RequestSummary represents a pending approval request.
@@ -328,6 +329,13 @@ type CrossCopyPreviewRow struct {
 	Action    string                 `json:"action"` // "insert" or "update"
 }
 
+// ExpandColumn describes a string-type column in dest that must be widened to fit source data.
+type ExpandColumn struct {
+	Name    string `json:"name"`
+	SrcType string `json:"src_type"`
+	DstType string `json:"dst_type"`
+}
+
 // CrossCopyPreviewResponse represents the result of a cross-copy preview.
 type CrossCopyPreviewResponse struct {
 	SharedColumns    []string              `json:"shared_columns"`
@@ -335,6 +343,7 @@ type CrossCopyPreviewResponse struct {
 	DestOnlyCols     []string              `json:"dest_only_columns"`
 	Warnings         []string              `json:"warnings"`
 	Rows             []CrossCopyPreviewRow `json:"rows"`
+	ExpandColumns    []ExpandColumn        `json:"expand_columns,omitempty"`
 }
 
 // CrossCopyRowsRequest represents a request to copy rows across databases.
@@ -373,4 +382,66 @@ type CrossCopyTableResponse struct {
 	SharedColumns  []string `json:"shared_columns"`
 	SourceOnlyCols []string `json:"source_only_columns"`
 	DestOnlyCols   []string `json:"dest_only_columns"`
+}
+
+// --- CSV Import ---
+
+// CSVPreviewRequest represents a CSV preview request.
+type CSVPreviewRequest struct {
+	TargetID   string                   `json:"target_id"`
+	DBName     string                   `json:"db_name"`
+	BranchName string                   `json:"branch_name"`
+	Table      string                   `json:"table"`
+	Rows       []map[string]interface{} `json:"rows"`
+}
+
+// CSVDiffRow represents a single row in the CSV diff preview.
+type CSVDiffRow struct {
+	Action string                 `json:"action"` // "insert" or "update"
+	Row    map[string]interface{} `json:"row"`
+	OldRow map[string]interface{} `json:"old_row,omitempty"`
+}
+
+// CSVPreviewError represents an error for a specific CSV row.
+type CSVPreviewError struct {
+	RowIndex int    `json:"row_index"`
+	Message  string `json:"message"`
+}
+
+// CSVPreviewResponse represents the result of a CSV preview.
+type CSVPreviewResponse struct {
+	Inserts       int               `json:"inserts"`
+	Updates       int               `json:"updates"`
+	Skips         int               `json:"skips"`
+	Errors        int               `json:"errors"`
+	SampleDiffs   []CSVDiffRow      `json:"sample_diffs"`
+	PreviewErrors []CSVPreviewError `json:"preview_errors,omitempty"`
+}
+
+// CSVApplyRequest represents a request to apply CSV data.
+type CSVApplyRequest struct {
+	TargetID      string                   `json:"target_id"`
+	DBName        string                   `json:"db_name"`
+	BranchName    string                   `json:"branch_name"`
+	Table         string                   `json:"table"`
+	ExpectedHead  string                   `json:"expected_head"`
+	CommitMessage string                   `json:"commit_message"`
+	Rows          []map[string]interface{} `json:"rows"`
+}
+
+// --- Search ---
+
+// SearchResult represents a single search hit.
+type SearchResult struct {
+	Table     string `json:"table"`
+	PK        string `json:"pk"`
+	Column    string `json:"column"`
+	Value     string `json:"value"`
+	MatchType string `json:"match_type"` // "value" or "memo"
+}
+
+// SearchResponse represents the result of a full-table search.
+type SearchResponse struct {
+	Results []SearchResult `json:"results"`
+	Total   int            `json:"total"`
 }

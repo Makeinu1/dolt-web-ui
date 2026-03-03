@@ -4,6 +4,7 @@ import { HistoryTab } from "../HistoryTab/HistoryTab";
 import { CellCommentPanel } from "../CellCommentPanel/CellCommentPanel";
 import { MergeLog } from "../MergeLog/MergeLog";
 import type { SelectedCellInfo } from "../TableGrid/TableGrid";
+import type { OverwrittenTable } from "../../types/api";
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ export interface ModalManagerProps {
 
     // Callbacks
     onCommitSuccess: (newHash: string) => void;
-    onSubmitted: () => void;
+    onSubmitted: (overwrittenTables?: OverwrittenTable[]) => void;
     onDeleteConfirm: () => void;
 
     // State

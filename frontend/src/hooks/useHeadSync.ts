@@ -9,6 +9,7 @@ interface UseHeadSyncOptions {
     branchRefreshKey: number;
     isContextReady: boolean;
     onError: (msg: string) => void;
+    hasError?: () => boolean;
 }
 
 interface UseHeadSyncReturn {
@@ -33,6 +34,7 @@ export function useHeadSync({
     branchRefreshKey,
     isContextReady,
     onError,
+    hasError,
 }: UseHeadSyncOptions): UseHeadSyncReturn {
     const [expectedHead, setExpectedHead] = useState("");
 
@@ -54,6 +56,9 @@ export function useHeadSync({
             })
             .catch((err: unknown) => {
                 if (branchRef.current !== requestBranch) return;
+                // Don't overwrite an existing error with a background HEAD fetch error.
+                // This prevents the "error reappears after dismiss" loop.
+                if (hasError && hasError()) return;
                 const message =
                     err instanceof ApiError
                         ? err.message

@@ -8,18 +8,17 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-01
-**最終コミット**: (本コミット) — クロスDBコピー機能 実装 + バグ修正 + E2Eテスト
+**最終更新**: 2026-03-03
+**最終コミット**: (本コミット) — ユーザーフィードバック7件対応 (⑧〜⑭)
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
 
 ## 実装キュー（優先順位順）
 
-### 次のタスク: なし（クロスDBコピー完了）
+### 次のタスク: なし（フィードバック7件 全完了）
 
-クロスDBコピー機能（3 API: preview/rows/table）の実装・バグ修正・E2Eテスト（46 PASS）は本コミットでプッシュ済み。
-
+2026-03-03 に実装したユーザーフィードバック7件はすべてコミット・プッシュ済み。
 次に追加したい機能や改修がある場合は、このセクションに記載してください。
 
 ---
@@ -55,9 +54,84 @@
 | **変更2** | エラー表示改善 — 「日本語説明: 英語エラー詳細」併記 + ApiErrorエンベロープ展開修正 | 本コミット |
 | **変更3** | Dolt_Description列固定 — AG Grid `pinned: 'left'` で左端固定 + 先頭ソート | 本コミット |
 | **変更4** | ブランチ種別 — main/audit保護統一(isProtected) + audit→main同期エンドポイント + メモテーブル保護 + ContextSelectorアイコン | `7b280c7` |
-| **クロスDB コピー** | `POST /cross-copy/preview` + `/rows` + `/table` — DB間レコード/テーブルコピー + CrossCopyModal(React) | 本コミット |
-| **クロスDB バグ修正** | BUG-1〜7 + ConnWrite常時DOLT_CHECKOUT + DOLT_ADD新テーブル対応 | 本コミット |
-| **クロスDB E2Eテスト** | `/tmp/dolt-e2e-crosscopy.sh` — 46チェック (P1〜P11 全安全プロパティ証明) | 本コミット |
+| **クロスDB コピー** | `POST /cross-copy/preview` + `/rows` + `/table` — DB間レコード/テーブルコピー + CrossCopyModal(React) | `d9faf91` |
+| **クロスDB バグ修正** | BUG-1〜7 + ConnWrite常時DOLT_CHECKOUT + DOLT_ADD新テーブル対応 | `d9faf91` |
+| **クロスDB E2Eテスト** | `/tmp/dolt-e2e-crosscopy.sh` — 46チェック (P1〜P11 全安全プロパティ証明) | `d9faf91` |
+| **⑭ ブランチ作成バグ修正** | `verifyBranchQueryable()` 共通化 + ApproveRequest/CrossCopyTable に検証ループ追加 | 本コミット |
+| **⑨ マージログ検索** | MergeLog.tsx にキーワード入力フィールド追加（バックエンド変更なし） | 本コミット |
+| **⑪ エラー永続化修正** | 8秒自動消去タイマー + useHeadSync エラー上書き抑制（hasError ガード） | 本コミット |
+| **⑬ 手動同期廃止・申請統合** | SubmitRequest にコンフリクト自動解決を統合、/sync ルート削除、上書き通知追加 | 本コミット |
+| **⑩ 文字型カラム自動拡張** | CrossCopyPreview/Rows/Table で VARCHAR/TEXT 幅不足時に ALTER TABLE MODIFY COLUMN を自動実行 | 本コミット |
+| **⑫ CSVバルク更新** | `POST /csv/preview` + `/csv/apply` + CSVImportModal（最大1000行、INSERT/UPDATE/skip） | 本コミット |
+| **⑧ 全テーブル横断検索** | `GET /search` — 全テーブル + メモ検索（LIKE クエリ）+ SearchModal | 本コミット |
+
+---
+
+## フィードバック7件 実装詳細（2026-03-03）
+
+### ⑭ ブランチ作成後のスキーマ取得失敗バグ修正（最優先）
+
+**原因**: `ApproveRequest()` と `CrossCopyTable()` が `DOLT_BRANCH(name)` 後に検証なしで即 `ConnWrite()` → Dolt ブランチ伝播ラグで失敗
+
+**修正**:
+- `service/metadata.go` — `verifyBranchQueryable(ctx, targetID, dbName, branch)` 共通関数追加（3回リトライ、200ms 間隔）
+- `service/request.go` — `ApproveRequest()` の nextBranch 作成後に verifyBranchQueryable 呼び出し、失敗時は DOLT_BRANCH('-D') でロールバック
+- `service/crosscopy.go` — `CrossCopyTable()` の新ブランチ作成後に同じ検証を追加
+- `frontend/src/components/RequestDialog/RequestDialog.tsx` — `ApproveModal` が `result.next_branch` を読み setBranch 呼び出し
+- `frontend/src/components/CrossCopyModal/CrossCopyTableModal.tsx` — 100ms setTimeout を削除（バックエンドが検証後に返却するため不要）
+
+### ⑨ マージログ コミットメッセージ検索
+
+- `frontend/src/components/MergeLog/MergeLog.tsx` のみ変更（バックエンドは keyword 既対応済み）
+- `keyword` state + テキスト入力 + Enter キー対応
+
+### ⑪ エラー永続化修正
+
+- `frontend/src/App.tsx` — error 発生から8秒後に `setError(null)` する useEffect 追加
+- `frontend/src/hooks/useHeadSync.ts` — `hasError?: () => boolean` オプション追加。バックグラウンド HEAD 取得失敗時にユーザー表示中エラーを上書きしない
+
+### ⑬ 手動同期廃止・承認申請統合
+
+- `service/request.go` — `SubmitRequest()` に `previewMergeInfo()` + `resolveDataConflicts()` 統合（autocommit=1 → START TRANSACTION に変更）
+- `handler/handler.go` — `/sync` ルート削除
+- `handler/write.go` — `Sync` ハンドラ削除（Commit ハンドラのみ残留）
+- `frontend/src/App.tsx` — `handleSync` 削除、「↻ Main と同期」メニュー削除、上書きテーブル通知追加
+- `types/api.ts` / `model/api.go` — `SubmitRequestResponse.overwritten_tables` フィールド追加
+
+### ⑩ クロスDB コピー 文字型カラム自動拡張
+
+- `service/crosscopy.go` — `parseVarcharLen()` / `stringTypeLevel()` / `needsExpansion()` / `applyExpandColumns()` 追加
+  - `CrossCopyPreview()` — 型比較で expandable カラムを検出し `expand_columns` として返却
+  - `CrossCopyRows()` / `CrossCopyTable()` — コピー前に `applyExpandColumns()` で `ALTER TABLE MODIFY COLUMN` 実行
+- `model/api.go` — `ExpandColumn` 型 + `CrossCopyPreviewResponse.expand_columns` フィールド追加
+- `frontend/src/types/api.ts` — 同型追加
+- `frontend/src/components/CrossCopyModal/CrossCopyRowsModal.tsx` — expand_columns 通知表示
+
+### ⑫ CSVバルク更新（最大1000行）
+
+| ファイル | 内容 |
+|---|---|
+| `backend/internal/service/csvimport.go` | `CSVPreview()` + `CSVApply()` 実装 |
+| `backend/internal/handler/csvimport.go` | `POST /csv/preview` + `POST /csv/apply` ハンドラ |
+| `backend/internal/model/api.go` | CSV 関連型追加 |
+| `frontend/src/components/CSVImportModal/CSVImportModal.tsx` | 3ステップ モーダル（select→preview→done） |
+| `frontend/src/App.tsx` | overflow menu に「📥 CSVインポート」追加 |
+
+**動作仕様**:
+- CSVはフロントエンドで UTF-8 パース（引用符対応）、最大1000行
+- プレビューで insert/update/skip/error 件数 + サンプル差分表示
+- CSVにないPKはスキップ（削除しない）、_memo_ テーブルは触れない
+- 実行後は新 HEAD で TableGrid リフレッシュ
+
+### ⑧ 全テーブル横断検索
+
+| ファイル | 内容 |
+|---|---|
+| `backend/internal/service/search.go` | `Search()` 実装（全テーブル LIKE + メモ検索） |
+| `backend/internal/handler/search.go` | `GET /search` ハンドラ |
+| `backend/internal/model/api.go` | `SearchResult` + `SearchResponse` 型追加 |
+| `frontend/src/components/SearchModal/SearchModal.tsx` | 検索モーダル（テーブル別グループ表示、クリックでナビゲート） |
+| `frontend/src/App.tsx` | overflow menu に「🔍 全テーブル検索」追加 |
 
 ---
 
