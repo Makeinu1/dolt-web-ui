@@ -54,11 +54,12 @@ func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]
 	return branches, rows.Err()
 }
 
-// verifyBranchQueryable retries Conn() up to 3 times to confirm a newly created branch
+// verifyBranchQueryable retries Conn() up to 5 times to confirm a newly created branch
 // is queryable via USE db/branch. Returns nil on success.
 // This guards against Dolt's branch propagation lag across connection pool connections.
+// 5 retries × 500ms = up to 2000ms, sufficient for large DBs (2-5GB).
 func (s *Service) verifyBranchQueryable(ctx context.Context, targetID, dbName, branch string) error {
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 5; attempt++ {
 		conn, err := s.repo.Conn(ctx, targetID, dbName, branch)
 		if err == nil {
 			rows, queryErr := conn.QueryContext(ctx, "SHOW TABLES")
@@ -71,11 +72,11 @@ func (s *Service) verifyBranchQueryable(ctx context.Context, targetID, dbName, b
 			}
 			err = queryErr
 		}
-		if attempt < 2 {
-			time.Sleep(200 * time.Millisecond)
+		if attempt < 4 {
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
-	return fmt.Errorf("branch %s not queryable after 3 retries", branch)
+	return fmt.Errorf("branch %s not queryable after 5 retries", branch)
 }
 
 func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchRequest) error {

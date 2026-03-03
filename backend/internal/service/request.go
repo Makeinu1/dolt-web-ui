@@ -387,10 +387,8 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	// Verify branch is queryable before returning (guards against Dolt propagation lag).
 	// Same pattern as CreateBranch in metadata.go.
 	if err := s.verifyBranchQueryable(bgCtx, req.TargetID, req.DBName, nextBranch); err != nil {
-		log.Printf("WARN: branch %s created but not yet queryable: %v", nextBranch, err)
-		// Roll back: delete the unverified branch to keep state clean.
-		branchConn.ExecContext(bgCtx, "CALL DOLT_BRANCH('-D', ?)", nextBranch) //nolint:errcheck
-		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
+		log.Printf("WARN: branch %s verify failed (returning anyway): %v", nextBranch, err)
+		// Do NOT delete the branch — it was successfully created; lag is transient.
 	}
 
 	return &model.ApproveResponse{Hash: newHead, NextBranch: nextBranch}, nil

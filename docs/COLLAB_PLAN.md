@@ -8,18 +8,17 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-03
-**最終コミット**: (本コミット) — ユーザーフィードバック7件対応 (⑧〜⑭)
+**最終更新**: 2026-03-04
+**最終コミット**: fix: 大規模DB対応 — ブランチ削除バグ修正 + リトライ強化 + WriteTimeout延長
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
 
 ## 実装キュー（優先順位順）
 
-### 次のタスク: なし（フィードバック7件 全完了）
+### 次のタスク: なし
 
-2026-03-03 に実装したユーザーフィードバック7件はすべてコミット・プッシュ済み。
-次に追加したい機能や改修がある場合は、このセクションに記載してください。
+2026-03-04 の本番障害修正（Fix A+B+C）完了。次に対処すべき構造的問題は以下に記録（スコープ外）。
 
 ---
 
@@ -57,13 +56,30 @@
 | **クロスDB コピー** | `POST /cross-copy/preview` + `/rows` + `/table` — DB間レコード/テーブルコピー + CrossCopyModal(React) | `d9faf91` |
 | **クロスDB バグ修正** | BUG-1〜7 + ConnWrite常時DOLT_CHECKOUT + DOLT_ADD新テーブル対応 | `d9faf91` |
 | **クロスDB E2Eテスト** | `/tmp/dolt-e2e-crosscopy.sh` — 46チェック (P1〜P11 全安全プロパティ証明) | `d9faf91` |
-| **⑭ ブランチ作成バグ修正** | `verifyBranchQueryable()` 共通化 + ApproveRequest/CrossCopyTable に検証ループ追加 | 本コミット |
+| **⑭ ブランチ作成バグ修正** | `verifyBranchQueryable()` 共通化 + ApproveRequest/CrossCopyTable に検証ループ追加 | `f5fa279` |
+| **本番障害修正 Fix A** | ApproveRequest: verifyBranchQueryable 失敗時のブランチ削除を廃止 → 常に NextBranch 返却 | 本コミット |
+| **本番障害修正 Fix B** | verifyBranchQueryable: リトライ 3回×200ms → 5回×500ms (2-5GB DB 対応) | 本コミット |
+| **本番障害修正 Fix C** | HTTP WriteTimeout: 60s → 300s (大規模 DOLT_MERGE タイムアウト対応) | 本コミット |
 | **⑨ マージログ検索** | MergeLog.tsx にキーワード入力フィールド追加（バックエンド変更なし） | 本コミット |
 | **⑪ エラー永続化修正** | 8秒自動消去タイマー + useHeadSync エラー上書き抑制（hasError ガード） | 本コミット |
 | **⑬ 手動同期廃止・申請統合** | SubmitRequest にコンフリクト自動解決を統合、/sync ルート削除、上書き通知追加 | 本コミット |
 | **⑩ 文字型カラム自動拡張** | CrossCopyPreview/Rows/Table で VARCHAR/TEXT 幅不足時に ALTER TABLE MODIFY COLUMN を自動実行 | 本コミット |
 | **⑫ CSVバルク更新** | `POST /csv/preview` + `/csv/apply` + CSVImportModal（最大1000行、INSERT/UPDATE/skip） | 本コミット |
 | **⑧ 全テーブル横断検索** | `GET /search` — 全テーブル + メモ検索（LIKE クエリ）+ SearchModal | 本コミット |
+
+---
+
+## 将来的に対処すべき構造的問題（スコープ外・記録のみ）
+
+2-5GB DB での調査で発見。優先度順に記録。
+
+| # | 問題 | ファイル | 影響 |
+|---|------|---------|------|
+| D | DiffSummary: 全テーブル×DOLT_DIFF をN+1で逐次実行 | `diff.go:179-216` | 50テーブル×数秒=分単位 |
+| E | Submit/Sync: previewMergeInfo + DOLT_MERGE で2回マージ評価 | `sync.go:52+65`, `request.go:75+84` | merge処理2倍 |
+| F | Search: 全テーブル×全カラムのLIKE走査 | `search.go:49-115` | 分単位 |
+| G | ExportDiffZip: 全diffをメモリにバッファ | `diff.go:313-423` | OOMリスク |
+| H | ConnMaxIdleTime未設定 | `dolt.go:39` | MySQL側タイムアウトでstale接続 |
 
 ---
 

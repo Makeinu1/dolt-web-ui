@@ -88,7 +88,7 @@ func main() {
 		Addr:         addr,
 		Handler:      r,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 300 * time.Second, // 大規模DB (2-5GB) での DOLT_MERGE タイムアウト対応
 		IdleTimeout:  120 * time.Second,
 	}
 
