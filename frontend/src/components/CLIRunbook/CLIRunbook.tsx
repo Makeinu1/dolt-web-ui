@@ -8,6 +8,7 @@ export function CLIRunbook() {
   const { baseState, setBaseState, setError } = useUIStore();
   const [checking, setChecking] = useState(false);
   const [minimized, setMinimized] = useState(false);
+  const [aborting, setAborting] = useState(false);
 
   if (
     baseState !== "SchemaConflictDetected" &&
@@ -64,16 +65,28 @@ CALL DOLT_MERGE('--abort');`;
   const handleRefreshCheck = async () => {
     setChecking(true);
     try {
-      // CLIで解決済みか確認。ヘッド取得が成功すれば安定状態と見なす。
-      // 次回 Sync 時にスキーマ/制約違反が残っていれば再検出される。
       await api.getHead(targetId, dbName, branchName);
       setBaseState("Idle");
       setError(null);
     } catch {
-      // ヘッド取得失敗 → まだ未解決の可能性
       setError("まだ解決されていない可能性があります。CLIで再度確認してください。");
     } finally {
       setChecking(false);
+    }
+  };
+
+  // L3-2: Allow aborting a stuck merge directly from the UI.
+  const handleAbortMerge = async () => {
+    if (!window.confirm("マージを中止します。未コミットのマージ変更は失われます。よろしいですか？")) return;
+    setAborting(true);
+    try {
+      await api.mergeAbort({ target_id: targetId, db_name: dbName, branch_name: branchName });
+      setBaseState("Idle");
+      setError(null);
+    } catch {
+      setError("マージ中止に失敗しました。管理者にCLIでの対応を依頼してください。");
+    } finally {
+      setAborting(false);
     }
   };
 
@@ -225,6 +238,13 @@ CALL DOLT_MERGE('--abort');`;
         </p>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            onClick={handleAbortMerge}
+            disabled={aborting}
+            style={{ fontSize: 13, background: "#dc3545", color: "#fff", border: "none", borderRadius: 4, padding: "6px 14px", cursor: "pointer" }}
+          >
+            {aborting ? "中止中..." : "💥 マージを中止"}
+          </button>
           <button
             onClick={() => setMinimized(true)}
             style={{ fontSize: 13 }}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/config"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -36,7 +37,13 @@ func New(cfg *config.Config) (*Repository, error) {
 		// Previously MaxIdleConns=0 was used to avoid Stale Context,
 		// but we now use stateless revision specifiers (`db/branch`).
 		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(0) // Connections can be reused indefinitely
+		// L1-1: Set connection lifetime to survive Dolt server restarts.
+		// Default 1 hour via config.Pool.ConnLifetimeSec.
+		connLifetime := 1 * time.Hour
+		if cfg.Server.Timeouts.IdleSec > 0 {
+			connLifetime = time.Duration(cfg.Server.Timeouts.IdleSec*30) * time.Second
+		}
+		db.SetConnMaxLifetime(connLifetime)
 		r.pools[target.ID] = db
 	}
 

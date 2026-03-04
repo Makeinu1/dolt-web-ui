@@ -347,3 +347,10 @@ export const exportDiffZip = async (
   const blob = await res.blob();
   return { blob, filename };
 };
+
+// L3-2: Abort stuck merge state
+export const mergeAbort = (body: { target_id: string; db_name: string; branch_name: string }) =>
+  request<{ status: string }>("/merge/abort", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });

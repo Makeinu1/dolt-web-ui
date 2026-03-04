@@ -158,3 +158,23 @@ func (s *Service) resolveDataConflicts(ctx context.Context, conn *sql.Conn, tabl
 	}
 	return overwritten, nil
 }
+
+// AbortMerge performs DOLT_MERGE('--abort') to escape from a stuck merge state.
+// L3-2: Provides an escape hatch for users who can't use CLI.
+func (s *Service) AbortMerge(ctx context.Context, targetID, dbName, branchName string) error {
+	if validation.IsProtectedBranch(branchName) {
+		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "cannot abort merge on protected branch"}
+	}
+
+	conn, err := s.repo.ConnWrite(ctx, targetID, dbName, branchName)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_MERGE('--abort')"); err != nil {
+		return fmt.Errorf("failed to abort merge: %w", err)
+	}
+
+	return nil
+}

@@ -18,6 +18,7 @@ import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
+import { safeGetJSON, safeSetJSON } from "../../utils/safeStorage";
 import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 
@@ -120,12 +121,8 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
   const [serverSort, setServerSort] = useState("");
   const colVisibilityKey = `colVisibility/${targetId}/${dbName}/${tableName}`;
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(`colVisibility/${targetId}/${dbName}/${tableName}`);
-      return saved ? new Set<string>(JSON.parse(saved) as string[]) : new Set<string>();
-    } catch {
-      return new Set<string>();
-    }
+    const saved = safeGetJSON<string[]>(localStorage, colVisibilityKey, []);
+    return new Set<string>(saved);
   });
   const [selectedRows, setSelectedRows] = useState<Record<string, unknown>[]>([]);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
@@ -135,9 +132,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
 
   // Persist column visibility to localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem(colVisibilityKey, JSON.stringify([...hiddenColumns]));
-    } catch { /* ignore */ }
+    safeSetJSON(localStorage, colVisibilityKey, [...hiddenColumns]);
   }, [hiddenColumns, colVisibilityKey]);
 
   const isProtected = branchName === "main" || branchName === "audit";

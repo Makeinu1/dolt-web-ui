@@ -344,9 +344,18 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	}
 
 	// Delete request tag (critical: if this fails, branch stays locked)
-	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
-		log.Printf("ERROR: req tag deletion failed for %s: %v", req.RequestID, err)
-		return nil, fmt.Errorf("failed to delete request tag %s (merge succeeded but cleanup failed): %w", req.RequestID, err)
+	// L1-2: Retry up to 3 times to prevent orphaned lock from transient errors.
+	var tagDeleteErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, tagDeleteErr = conn.ExecContext(bgCtx, "CALL DOLT_TAG('-d', ?)", req.RequestID); tagDeleteErr == nil {
+			break
+		}
+		log.Printf("WARN: req tag deletion attempt %d failed for %s: %v", attempt+1, req.RequestID, tagDeleteErr)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if tagDeleteErr != nil {
+		log.Printf("CRITICAL: req tag deletion failed after 3 retries for %s: %v (merge succeeded but branch locked)", req.RequestID, tagDeleteErr)
+		return nil, fmt.Errorf("failed to delete request tag %s (merge succeeded but cleanup failed): %w", req.RequestID, tagDeleteErr)
 	}
 
 	// Close merge conn before branch operations: the accumulated DOLT_MERGE + DOLT_CHECKOUT
