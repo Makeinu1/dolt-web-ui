@@ -137,7 +137,7 @@ type OverwrittenTable struct {
 
 // SyncResponse represents the result of a sync.
 type SyncResponse struct {
-	Hash             string             `json:"hash"`
+	Hash              string             `json:"hash"`
 	OverwrittenTables []OverwrittenTable `json:"overwritten_tables,omitempty"`
 }
 
@@ -163,10 +163,11 @@ type DiffTableResponse struct {
 
 // HistoryCommit represents a commit in history.
 type HistoryCommit struct {
-	Hash      string `json:"hash"`
-	Author    string `json:"author"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
+	Hash        string `json:"hash"`
+	Author      string `json:"author"`
+	Message     string `json:"message"`
+	Timestamp   string `json:"timestamp"`
+	MergeBranch string `json:"merge_branch,omitempty"` // 2a: work branch merged into main (merges_only filter)
 }
 
 // SubmitRequestRequest represents a request submission for approval.
@@ -313,13 +314,13 @@ type MemoResponse struct {
 
 // CrossCopyPreviewRequest represents a request to preview cross-DB row copy.
 type CrossCopyPreviewRequest struct {
-	TargetID      string   `json:"target_id"`
-	SourceDB      string   `json:"source_db"`
-	SourceBranch  string   `json:"source_branch"`
-	SourceTable   string   `json:"source_table"`
-	SourcePKs     []string `json:"source_pks"`
-	DestDB        string   `json:"dest_db"`
-	DestBranch    string   `json:"dest_branch"`
+	TargetID     string   `json:"target_id"`
+	SourceDB     string   `json:"source_db"`
+	SourceBranch string   `json:"source_branch"`
+	SourceTable  string   `json:"source_table"`
+	SourcePKs    []string `json:"source_pks"`
+	DestDB       string   `json:"dest_db"`
+	DestBranch   string   `json:"dest_branch"`
 }
 
 // CrossCopyPreviewRow represents one row in the cross-copy preview.
@@ -338,23 +339,23 @@ type ExpandColumn struct {
 
 // CrossCopyPreviewResponse represents the result of a cross-copy preview.
 type CrossCopyPreviewResponse struct {
-	SharedColumns    []string              `json:"shared_columns"`
-	SourceOnlyCols   []string              `json:"source_only_columns"`
-	DestOnlyCols     []string              `json:"dest_only_columns"`
-	Warnings         []string              `json:"warnings"`
-	Rows             []CrossCopyPreviewRow `json:"rows"`
-	ExpandColumns    []ExpandColumn        `json:"expand_columns,omitempty"`
+	SharedColumns  []string              `json:"shared_columns"`
+	SourceOnlyCols []string              `json:"source_only_columns"`
+	DestOnlyCols   []string              `json:"dest_only_columns"`
+	Warnings       []string              `json:"warnings"`
+	Rows           []CrossCopyPreviewRow `json:"rows"`
+	ExpandColumns  []ExpandColumn        `json:"expand_columns,omitempty"`
 }
 
 // CrossCopyRowsRequest represents a request to copy rows across databases.
 type CrossCopyRowsRequest struct {
-	TargetID      string   `json:"target_id"`
-	SourceDB      string   `json:"source_db"`
-	SourceBranch  string   `json:"source_branch"`
-	SourceTable   string   `json:"source_table"`
-	SourcePKs     []string `json:"source_pks"`
-	DestDB        string   `json:"dest_db"`
-	DestBranch    string   `json:"dest_branch"`
+	TargetID     string   `json:"target_id"`
+	SourceDB     string   `json:"source_db"`
+	SourceBranch string   `json:"source_branch"`
+	SourceTable  string   `json:"source_table"`
+	SourcePKs    []string `json:"source_pks"`
+	DestDB       string   `json:"dest_db"`
+	DestBranch   string   `json:"dest_branch"`
 }
 
 // CrossCopyRowsResponse represents the result of a cross-DB row copy.
@@ -367,11 +368,11 @@ type CrossCopyRowsResponse struct {
 
 // CrossCopyTableRequest represents a request to copy an entire table across databases.
 type CrossCopyTableRequest struct {
-	TargetID      string `json:"target_id"`
-	SourceDB      string `json:"source_db"`
-	SourceBranch  string `json:"source_branch"`
-	SourceTable   string `json:"source_table"`
-	DestDB        string `json:"dest_db"`
+	TargetID     string `json:"target_id"`
+	SourceDB     string `json:"source_db"`
+	SourceBranch string `json:"source_branch"`
+	SourceTable  string `json:"source_table"`
+	DestDB       string `json:"dest_db"`
 }
 
 // CrossCopyTableResponse represents the result of a cross-DB table copy.

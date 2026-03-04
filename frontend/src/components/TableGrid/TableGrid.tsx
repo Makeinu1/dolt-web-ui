@@ -96,6 +96,8 @@ export interface SelectedCellInfo {
 interface TableGridProps {
   tableName: string;
   refreshKey?: number;
+  /** 2c: When set, reads rows from this past commit hash (read-only). */
+  previewCommitHash?: string;
   /** Called when the user clicks a cell. Null when focus leaves. */
   onCellSelected?: (info: SelectedCellInfo | null) => void;
   /** Called when user wants to cross-copy selected rows to another DB */
@@ -104,8 +106,10 @@ interface TableGridProps {
   onShowRowHistory?: (table: string, pk: string) => void;
 }
 
-export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRows, onShowRowHistory }: TableGridProps) {
+export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSelected, onCrossCopyRows, onShowRowHistory }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
+  // 2c: Use commit hash as branch reference for past-version read-only viewing
+  const effectiveBranch = previewCommitHash ?? branchName;
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
   const setBaseState = useUIStore((s) => s.setBaseState);
@@ -179,7 +183,9 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
 
 
   // Editing is only allowed in Idle or DraftEditing states on non-main branches
+  // 2c: Also block editing when viewing a past commit
   const editingBlocked =
+    !!previewCommitHash ||
     isProtected ||
     baseState === "Committing" ||
     baseState === "Syncing" ||
@@ -276,7 +282,7 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
     setLoading(true);
     setGridError(null);
     api
-      .getTableRows(targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort)
+      .getTableRows(targetId, dbName, effectiveBranch, tableName, page, pageSize, serverFilter, serverSort)
       .then((res: RowsResponse) => {
         setRowData(res.rows || []);
         setTotalCount(res.total_count);

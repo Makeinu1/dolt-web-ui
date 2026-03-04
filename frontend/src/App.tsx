@@ -58,6 +58,8 @@ function App() {
   const [selectedCell, setSelectedCell] = useState<SelectedCellInfo | null>(null);
   const [showCommentPanel, setShowCommentPanel] = useState(false);
   const [showMergeLog, setShowMergeLog] = useState(false);
+  // 2c: Preview a past commit (read-only). null = current HEAD.
+  const [previewCommit, setPreviewCommit] = useState<{ hash: string; label: string } | null>(null);
   const [overwrittenTables, setOverwrittenTables] = useState<OverwrittenTable[]>([]);
   const [showCrossCopyRows, setShowCrossCopyRows] = useState(false);
   const [crossCopyPKs, setCrossCopyPKs] = useState<string[]>([]);
@@ -473,17 +475,40 @@ function App() {
         </div>
       ) : (
         <div className="work-content">
+          {/* 2c: Past version preview banner */}
+          {previewCommit && (
+            <div style={{
+              background: "#fef3c7",
+              border: "1px solid #f59e0b",
+              borderRadius: 4,
+              padding: "5px 14px",
+              fontSize: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}>
+              <span>📌 <strong>過去バージョン閲覧中</strong>: {previewCommit.label} — 読み取り専用</span>
+              <button
+                onClick={() => setPreviewCommit(null)}
+                style={{ marginLeft: "auto", fontSize: 11, padding: "2px 10px", background: "#f59e0b", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer" }}
+              >
+                ✕ 現在に戻る
+              </button>
+            </div>
+          )}
+
           {/* Grid fills all remaining space */}
           <div className="grid-container">
             {selectedTable && (
               <TableGrid
                 tableName={selectedTable}
                 refreshKey={refreshKey}
+                previewCommitHash={previewCommit?.hash}
                 onCellSelected={(info) => {
                   setSelectedCell(info);
                   if (!info) setShowCommentPanel(false);
                 }}
-                onCrossCopyRows={!isProtected ? (pks) => {
+                onCrossCopyRows={!isProtected && !previewCommit ? (pks) => {
                   setCrossCopyPKs(pks);
                   setShowCrossCopyRows(true);
                 } : undefined}
@@ -529,6 +554,9 @@ function App() {
         onCloseDeleteConfirm={() => setShowDeleteConfirm(false)}
         onCloseCommentPanel={() => setShowCommentPanel(false)}
         onCloseMergeLog={() => setShowMergeLog(false)}
+        onPreviewCommit={(hash, label) => {
+          setPreviewCommit({ hash, label });
+        }}
         onCommitSuccess={onCommitSuccess}
         onSubmitted={(overwritten) => {
           setRequestCount(requestCount + 1);

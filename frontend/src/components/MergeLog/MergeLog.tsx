@@ -14,6 +14,8 @@ import type { HistoryCommit, DiffSummaryEntry } from "../../types/api";
 
 interface Props {
     onClose: () => void;
+    /** 2c: Called when user clicks "Browse" on a past merge commit */
+    onPreviewCommit?: (hash: string, label: string) => void;
 }
 
 interface CommitDiff {
@@ -29,7 +31,7 @@ function formatTimestamp(ts: string): string {
     return d.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
 }
 
-export function MergeLog({ onClose }: Props) {
+export function MergeLog({ onClose, onPreviewCommit }: Props) {
     const { targetId, dbName } = useContextStore();
 
     const [fromDate, setFromDate] = useState("");
@@ -50,6 +52,13 @@ export function MergeLog({ onClose }: Props) {
     const [expandedTableKey, setExpandedTableKey] = useState<string | null>(null);
     const [exportingZip, setExportingZip] = useState(false);
     const [zipError, setZipError] = useState<string | null>(null);
+
+    // 2b: cross-merge comparison — up to 2 selected hashes
+    const [compareHashes, setCompareHashes] = useState<string[]>([]);
+    const [compareResult, setCompareResult] = useState<CommitDiff | null>(null);
+    const [compareLoading, setCompareLoading] = useState(false);
+    const [compareError, setCompareError] = useState<string | null>(null);
+    const [compareTableKey, setCompareTableKey] = useState<string | null>(null);
 
     const handleSearch = useCallback(async (p = 1) => {
         if (!targetId || !dbName) return;
@@ -129,11 +138,46 @@ export function MergeLog({ onClose }: Props) {
             a.click();
             URL.revokeObjectURL(url);
         } catch {
-            // NEW-22: surface ZIP export errors to user.
             setZipError("ZIPのエクスポートに失敗しました");
         } finally {
             setExportingZip(false);
         }
+    };
+
+    // 2b: Compare two selected merge commits (from older to newer by list position)
+    const handleCompare = async () => {
+        if (compareHashes.length !== 2) return;
+        // Determine order: find which comes first in the commits list
+        const idxA = commits.findIndex((c) => c.hash === compareHashes[0]);
+        const idxB = commits.findIndex((c) => c.hash === compareHashes[1]);
+        // commits are sorted newest-first, so higher index = older
+        const [newerHash, olderHash] = idxA < idxB
+            ? [compareHashes[0], compareHashes[1]]
+            : [compareHashes[1], compareHashes[0]];
+        setCompareLoading(true);
+        setCompareError(null);
+        setCompareResult(null);
+        setCompareTableKey(null);
+        try {
+            const res = await api.getDiffSummary(targetId, dbName, "main", olderHash, newerHash, "two_dot");
+            setCompareResult({ entries: res.entries || [], loading: false, error: null });
+        } catch {
+            setCompareError("比較の読み込みに失敗しました");
+        } finally {
+            setCompareLoading(false);
+        }
+    };
+
+    const toggleCompareHash = (hash: string) => {
+        setCompareHashes((prev) => {
+            if (prev.includes(hash)) return prev.filter((h) => h !== hash);
+            if (prev.length >= 2) return [prev[1], hash]; // keep latest 2
+            return [...prev, hash];
+        });
+        // Reset existing comparison when selection changes
+        setCompareResult(null);
+        setCompareError(null);
+        setCompareTableKey(null);
     };
 
     return (
@@ -149,10 +193,108 @@ export function MergeLog({ onClose }: Props) {
                     <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#666" }}>✕</button>
                 </div>
 
-                {/* NEW-22: ZIP export error display */}
+                {/* ZIP export error */}
                 {zipError && (
                     <div style={{ padding: "4px 10px", background: "#fee2e2", color: "#991b1b", fontSize: 12, borderRadius: 4, marginBottom: 8 }}>
                         {zipError}
+                    </div>
+                )}
+
+                {/* 2b: compare selection bar */}
+                <div style={{
+                    padding: "8px 12px",
+                    background: compareHashes.length > 0 ? "#eff6ff" : "#f8fafc",
+                    border: `1px solid ${compareHashes.length > 0 ? "#93c5fd" : "#e2e8f0"}`,
+                    borderRadius: 6,
+                    marginBottom: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 12,
+                }}>
+                    <span style={{ color: "#555", flex: 1 }}>
+                        {compareHashes.length === 0
+                            ? "☑ 比べたい2件にチェックを入れて「比較」ボタンを押してください"
+                            : compareHashes.length === 1
+                                ? "☑ もう1件チェックしてください"
+                                : "✅ 2件選択済み — 比較できます"}
+                    </span>
+                    {compareHashes.length === 2 && (
+                        <button
+                            onClick={handleCompare}
+                            disabled={compareLoading}
+                            style={{ fontSize: 12, padding: "3px 12px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap" }}
+                        >
+                            {compareLoading ? "読み込み中..." : "🔍 比較"}
+                        </button>
+                    )}
+                    {compareHashes.length > 0 && (
+                        <button
+                            onClick={() => { setCompareHashes([]); setCompareResult(null); setCompareError(null); setCompareTableKey(null); }}
+                            style={{ fontSize: 11, padding: "2px 8px", background: "none", border: "1px solid #94a3b8", borderRadius: 4, cursor: "pointer", color: "#64748b" }}
+                        >
+                            ✕ 解除
+                        </button>
+                    )}
+                </div>
+
+                {/* 2b: comparison result panel */}
+                {(compareResult || compareError) && (
+                    <div style={{ border: "1px solid #93c5fd", borderRadius: 6, marginBottom: 10, background: "#f0f7ff" }}>
+                        <div style={{ padding: "6px 12px", borderBottom: "1px solid #bfdbfe", fontSize: 12, fontWeight: 600, color: "#1d4ed8" }}>
+                            🔍 2バージョン間の変更一覧
+                        </div>
+                        {compareError && (
+                            <div style={{ padding: "8px 12px", color: "#991b1b", fontSize: 12 }}>{compareError}</div>
+                        )}
+                        {compareResult && compareResult.entries.length === 0 && (
+                            <div style={{ padding: "8px 12px", color: "#888", fontSize: 12 }}>変更なし</div>
+                        )}
+                        {compareResult && compareResult.entries.length > 0 && (
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                <thead>
+                                    <tr style={{ borderBottom: "1px solid #bfdbfe", color: "#555" }}>
+                                        <th style={{ textAlign: "left", padding: "4px 12px" }}>テーブル</th>
+                                        <th style={{ textAlign: "right", padding: "4px 8px", color: "#065f46" }}>+追加</th>
+                                        <th style={{ textAlign: "right", padding: "4px 8px", color: "#92400e" }}>~変更</th>
+                                        <th style={{ textAlign: "right", padding: "4px 8px", color: "#991b1b" }}>-削除</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {compareResult.entries.map((e) => {
+                                        const ck = `compare::${e.table}`;
+                                        const isExp = compareTableKey === ck;
+                                        return (
+                                            <tr
+                                                key={e.table}
+                                                style={{ borderBottom: "1px solid #dbeafe", cursor: "pointer", background: isExp ? "#dbeafe" : undefined }}
+                                                onClick={() => setCompareTableKey(isExp ? null : ck)}
+                                            >
+                                                <td style={{ padding: "3px 12px", fontFamily: "monospace" }}>{e.table}{isExp ? " ▲" : " ▶"}</td>
+                                                <td style={{ textAlign: "right", padding: "3px 8px", color: "#065f46" }}>{e.added > 0 ? `+${e.added}` : "—"}</td>
+                                                <td style={{ textAlign: "right", padding: "3px 8px", color: "#92400e" }}>{e.modified > 0 ? `~${e.modified}` : "—"}</td>
+                                                <td style={{ textAlign: "right", padding: "3px 8px", color: "#991b1b" }}>{e.removed > 0 ? `-${e.removed}` : "—"}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        )}
+                        {compareResult && compareTableKey && compareTableKey.startsWith("compare::") && (() => {
+                            const idxA = commits.findIndex((c) => c.hash === compareHashes[0]);
+                            const idxB = commits.findIndex((c) => c.hash === compareHashes[1]);
+                            const [newerH, olderH] = idxA < idxB ? [compareHashes[0], compareHashes[1]] : [compareHashes[1], compareHashes[0]];
+                            return (
+                                <InlineDiff
+                                    targetId={targetId}
+                                    dbName={dbName}
+                                    branchName="main"
+                                    table={compareTableKey.split("::")[1]}
+                                    fromRef={olderH}
+                                    toRef={newerH}
+                                />
+                            );
+                        })()}
                     </div>
                 )}
 
@@ -235,16 +377,16 @@ export function MergeLog({ onClose }: Props) {
                         const diff = diffMap[c.hash];
                         const msgLines = c.message.split("\n");
                         const firstLine = msgLines[0];
-                        const rest = msgLines.slice(1).filter(Boolean).join("\n");
+                        const isChecked = compareHashes.includes(c.hash);
 
                         return (
                             <div
                                 key={c.hash}
                                 style={{
-                                    border: "1px solid #e2e8f0",
+                                    border: `1px solid ${isChecked ? "#4361ee" : "#e2e8f0"}`,
                                     borderRadius: 6,
                                     marginBottom: 8,
-                                    background: isExpanded ? "#f0f9ff" : "#fff",
+                                    background: isChecked ? "#f0f4ff" : isExpanded ? "#f0f9ff" : "#fff",
                                 }}
                             >
                                 {/* コミットヘッダ */}
@@ -254,25 +396,69 @@ export function MergeLog({ onClose }: Props) {
                                         justifyContent: "space-between",
                                         alignItems: "flex-start",
                                         padding: "8px 12px",
-                                        cursor: "pointer",
                                     }}
-                                    onClick={() => handleToggleCommit(c.hash)}
                                 >
-                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                    {/* 2b: checkbox */}
+                                    <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => toggleCompareHash(c.hash)}
+                                        title="比較対象として選択"
+                                        style={{ marginRight: 8, marginTop: 3, flexShrink: 0, cursor: "pointer" }}
+                                    />
+                                    <div
+                                        style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+                                        onClick={() => handleToggleCommit(c.hash)}
+                                    >
+                                        {/* 2a: branch name badge */}
+                                        {c.merge_branch && (
+                                            <span style={{
+                                                display: "inline-block",
+                                                background: "#dbeafe",
+                                                color: "#1d4ed8",
+                                                fontSize: 10,
+                                                fontWeight: 700,
+                                                padding: "1px 6px",
+                                                borderRadius: 10,
+                                                marginBottom: 3,
+                                                fontFamily: "monospace",
+                                            }}>
+                                                🔀 {c.merge_branch}
+                                            </span>
+                                        )}
                                         <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 2 }}>
                                             {firstLine}
                                         </div>
-                                        {rest && (
-                                            <div style={{ fontSize: 11, color: "#555", whiteSpace: "pre-wrap" }}>{rest}</div>
-                                        )}
                                         <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
                                             📅 {formatTimestamp(c.timestamp)}
                                             {c.author ? `　👤 ${c.author}` : ""}
                                         </div>
                                     </div>
-                                    <span style={{ fontSize: 12, color: "#3b82f6", marginLeft: 8, flexShrink: 0 }}>
-                                        {isExpanded ? "▲ 閉じる" : "▶ 差分"}
-                                    </span>
+                                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: 8 }}>
+                                        {/* 2c: browse past version */}
+                                        {onPreviewCommit && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const label = c.merge_branch
+                                                        ? `${c.merge_branch} (${formatTimestamp(c.timestamp)})`
+                                                        : formatTimestamp(c.timestamp);
+                                                    onPreviewCommit(c.hash, label);
+                                                    onClose();
+                                                }}
+                                                title="このバージョンのデータを閲覧"
+                                                style={{ fontSize: 11, padding: "2px 8px", background: "#f0fdf4", border: "1px solid #16a34a", borderRadius: 4, color: "#16a34a", cursor: "pointer", whiteSpace: "nowrap" }}
+                                            >
+                                                📋 閲覧
+                                            </button>
+                                        )}
+                                        <span
+                                            style={{ fontSize: 12, color: "#3b82f6", cursor: "pointer" }}
+                                            onClick={() => handleToggleCommit(c.hash)}
+                                        >
+                                            {isExpanded ? "▲ 閉じる" : "▶ 差分"}
+                                        </span>
+                                    </div>
                                 </div>
 
                                 {/* 差分サマリー展開 */}

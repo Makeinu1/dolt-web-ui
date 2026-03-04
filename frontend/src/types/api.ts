@@ -106,6 +106,7 @@ export interface HistoryCommit {
   author: string;
   message: string;
   timestamp: string;
+  merge_branch?: string; // 2a: extracted work branch name for merges_only
 }
 
 export interface SubmitRequestRequest {

@@ -33,6 +33,7 @@ export interface ModalManagerProps {
     onCloseDeleteConfirm: () => void;
     onCloseCommentPanel: () => void;
     onCloseMergeLog: () => void;
+    onPreviewCommit?: (hash: string, label: string) => void; // 2c
 
     // Callbacks
     onCommitSuccess: (newHash: string) => void;
@@ -76,6 +77,7 @@ export function ModalManager({
     onDeleteConfirm,
     deleting,
     selectedCell,
+    onPreviewCommit,
 }: ModalManagerProps) {
     return (
         <>
@@ -169,7 +171,10 @@ export function ModalManager({
 
             {/* Merge Log Modal */}
             {showMergeLog && (
-                <MergeLog onClose={onCloseMergeLog} />
+                <MergeLog
+                    onClose={onCloseMergeLog}
+                    onPreviewCommit={onPreviewCommit}
+                />
             )}
         </>
     );

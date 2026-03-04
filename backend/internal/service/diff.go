@@ -217,6 +217,9 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 	return result, nil
 }
 
+// workBranchExtractRe extracts a work branch name (wi/xxx/xx) from a commit message.
+var workBranchExtractRe = regexp.MustCompile(`wi/[A-Za-z0-9._-]+/[0-9]{1,3}`)
+
 // HistoryCommits returns the commit log for a branch.
 // filter: "all" (default), "merges_only" (main: merge commits only),
 // "exclude_auto_merge" (work branch: exclude auto-sync merges).
@@ -304,6 +307,12 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		var c model.HistoryCommit
 		if err := rows.Scan(&c.Hash, &c.Author, &c.Message, &c.Timestamp); err != nil {
 			return nil, fmt.Errorf("failed to scan commit: %w", err)
+		}
+		// 2a: Extract work branch name from merge commit message
+		if filter == "merges_only" {
+			if m := workBranchExtractRe.FindString(c.Message); m != "" {
+				c.MergeBranch = m
+			}
 		}
 		commits = append(commits, c)
 	}
