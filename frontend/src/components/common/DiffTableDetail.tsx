@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { DiffRow } from "../../types/api";
 
 /**
@@ -49,8 +50,8 @@ export function DiffTableDetail({
                 if (!cancelled) setRows(res.rows || []);
             })
             .catch((err) => {
-                const e = err as { error?: { message?: string } };
-                if (!cancelled) setError(e?.error?.message || "Failed to load diff");
+                const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
+                if (!cancelled) setError(msg);
             })
             .finally(() => {
                 if (!cancelled) setLoading(false);

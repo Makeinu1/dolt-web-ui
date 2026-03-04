@@ -7,7 +7,7 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
 
-var workBranchRe = regexp.MustCompile(`^wi/[A-Za-z0-9._-]+/[0-9]{2}$`)
+var workBranchRe = regexp.MustCompile(`^wi/[A-Za-z0-9._-]+/[0-9]{1,3}$`)
 
 func (h *Handler) ListTargets(w http.ResponseWriter, r *http.Request) {
 	targets := h.svc.ListTargets()
@@ -39,7 +39,7 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 
 	branches, err := h.svc.ListBranches(r.Context(), targetID, dbName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.CodeInternal, err.Error())
+		handleServiceError(w, err) // NEW-5: use handleServiceError to avoid leaking internal error details
 		return
 	}
 	writeJSON(w, http.StatusOK, branches)
@@ -68,7 +68,7 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.CreateBranch(r.Context(), req); err != nil {
-		writeError(w, http.StatusInternalServerError, model.CodeInternal, err.Error())
+		handleServiceError(w, err) // NEW-5: use handleServiceError
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"branch_name": req.BranchName})
@@ -91,7 +91,7 @@ func (h *Handler) DeleteBranch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.DeleteBranch(r.Context(), req); err != nil {
-		writeError(w, http.StatusInternalServerError, model.CodeInternal, err.Error())
+		handleServiceError(w, err) // NEW-5: use handleServiceError
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -108,7 +108,7 @@ func (h *Handler) GetHead(w http.ResponseWriter, r *http.Request) {
 
 	head, err := h.svc.GetHead(r.Context(), targetID, dbName, branchName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.CodeInternal, err.Error())
+		handleServiceError(w, err) // NEW-5: use handleServiceError
 		return
 	}
 	writeJSON(w, http.StatusOK, head)

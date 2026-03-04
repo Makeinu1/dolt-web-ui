@@ -95,7 +95,10 @@ export function CommitDialog({
   }, {});
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={() => {
+      // BUG-N: confirm before discarding uncommitted changes.
+      if (window.confirm("変更を破棄して閉じますか？")) onClose();
+    }}>
       <div className="modal" style={{ minWidth: 520 }} onClick={(e) => e.stopPropagation()}>
         <h2>変更を保存</h2>
         <p style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
@@ -114,61 +117,61 @@ export function CommitDialog({
           }}
         >
           {Object.entries(grouped).map(([table, items]) => {
-          const displayName = table.startsWith("_memo_") ? `${table.slice(6)} のメモ` : table;
-          return (
-            <div key={table}>
-              <div style={{ padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#555", borderBottom: "1px solid #e2e8f0", background: "#f1f5f9" }}>
-                {displayName} ({items.length})
-              </div>
-              {items.map(({ op, index }) => {
-                const style = OP_COLORS[op.type] || OP_COLORS.update;
-                const pkText = op.pk ? Object.values(op.pk).join(",") : "";
-                const valText = op.values
-                  ? Object.entries(op.values)
-                    .filter(([k]) => !op.pk || !(k in op.pk))
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join(", ")
-                  : "";
-                return (
-                  <div
-                    key={index}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "3px 10px",
-                      fontSize: 11,
-                      borderBottom: "1px solid #f0f0f5",
-                      background: style.bg,
-                    }}
-                  >
-                    <span style={{ fontWeight: 700, color: style.color, width: 70, flexShrink: 0 }}>
-                      {style.label}
-                    </span>
-                    <span style={{ flex: 1, fontFamily: "monospace", fontSize: 10, color: "#333", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {pkText && <span style={{ color: "#666" }}>PK={pkText} </span>}
-                      {valText}
-                    </span>
-                    <button
-                      onClick={() => handleRemoveOp(index)}
+            const displayName = table.startsWith("_memo_") ? `${table.slice(6)} のメモ` : table;
+            return (
+              <div key={table}>
+                <div style={{ padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#555", borderBottom: "1px solid #e2e8f0", background: "#f1f5f9" }}>
+                  {displayName} ({items.length})
+                </div>
+                {items.map(({ op, index }) => {
+                  const style = OP_COLORS[op.type] || OP_COLORS.update;
+                  const pkText = op.pk ? Object.values(op.pk).join(",") : "";
+                  const valText = op.values
+                    ? Object.entries(op.values)
+                      .filter(([k]) => !op.pk || !(k in op.pk))
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")
+                    : "";
+                  return (
+                    <div
+                      key={index}
                       style={{
-                        background: "none",
-                        border: "none",
-                        color: "#991b1b",
-                        cursor: "pointer",
-                        fontSize: 13,
-                        padding: "0 4px",
-                        flexShrink: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "3px 10px",
+                        fontSize: 11,
+                        borderBottom: "1px solid #f0f0f5",
+                        background: style.bg,
                       }}
-                      title="この操作を取り消す"
                     >
-                      ✕
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+                      <span style={{ fontWeight: 700, color: style.color, width: 70, flexShrink: 0 }}>
+                        {style.label}
+                      </span>
+                      <span style={{ flex: 1, fontFamily: "monospace", fontSize: 10, color: "#333", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {pkText && <span style={{ color: "#666" }}>PK={pkText} </span>}
+                        {valText}
+                      </span>
+                      <button
+                        onClick={() => handleRemoveOp(index)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#991b1b",
+                          cursor: "pointer",
+                          fontSize: 13,
+                          padding: "0 4px",
+                          flexShrink: 0,
+                        }}
+                        title="この操作を取り消す"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
 
         <div className="modal-actions">

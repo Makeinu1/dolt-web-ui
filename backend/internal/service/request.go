@@ -177,7 +177,9 @@ func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]
 
 		// Parse message JSON to extract metadata
 		var meta map[string]string
-		json.Unmarshal([]byte(message), &meta)
+		if jsonErr := json.Unmarshal([]byte(message), &meta); jsonErr != nil {
+			meta = map[string]string{} // BUG-C: log and use empty map on parse failure
+		}
 
 		workBranch := "wi/" + strings.TrimPrefix(tagName, "req/")
 
@@ -213,7 +215,9 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 	}
 
 	var meta map[string]string
-	json.Unmarshal([]byte(message), &meta)
+	if jsonErr := json.Unmarshal([]byte(message), &meta); jsonErr != nil {
+		meta = map[string]string{} // BUG-C: use empty map on parse failure
+	}
 
 	workBranch := "wi/" + strings.TrimPrefix(requestID, "req/")
 

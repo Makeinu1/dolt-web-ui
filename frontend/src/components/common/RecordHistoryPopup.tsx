@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import type { HistoryRowSnapshot } from "../../types/api";
 
 interface RecordHistoryPopupProps {
@@ -30,8 +31,8 @@ export function RecordHistoryPopup({
       .getHistoryRow(targetId, dbName, branchName, table, pk)
       .then((res) => setSnapshots(res.snapshots || []))
       .catch((err) => {
-        const e = err as { message?: string };
-        setError(e?.message || "履歴の読み込みに失敗しました");
+        const msg = err instanceof ApiError ? err.message : "履歴の読み込みに失敗しました";
+        setError(msg);
       })
       .finally(() => setLoading(false));
   }, [targetId, dbName, branchName, table, pk]);

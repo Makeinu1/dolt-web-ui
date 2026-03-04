@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
@@ -26,8 +26,8 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
         if (!cancelled) setEntries(res.entries || []);
       })
       .catch((err) => {
-        const e = err as { error?: { message?: string } };
-        if (!cancelled) setError(e?.error?.message || "Failed to load diff");
+        const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
+        if (!cancelled) setError(msg);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -53,7 +53,7 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
         </thead>
         <tbody>
           {entries.map((e) => (
-            <>
+            <React.Fragment key={e.table}>
               <tr
                 key={e.table}
                 style={{
@@ -91,7 +91,7 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
                   </td>
                 </tr>
               )}
-            </>
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -363,7 +363,8 @@ export function ApproverInbox() {
   const [approveWorkBranch, setApproveWorkBranch] = useState<string>("");
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
 
-  const loadRequests = () => {
+  // BUG-F: wrapped in useCallback so the function identity is stable and can be listed in deps.
+  const loadRequests = useCallback(() => {
     if (!targetId || !dbName) return;
     setLoading(true);
     api
@@ -371,11 +372,11 @@ export function ApproverInbox() {
       .then((data) => setRequests(data || []))
       .catch(console.error)
       .finally(() => setLoading(false));
-  };
+  }, [targetId, dbName]);
 
   useEffect(() => {
     loadRequests();
-  }, [targetId, dbName]);
+  }, [loadRequests]);
 
   const onApproved = (nextBranch: string) => {
     if (approveTarget) {

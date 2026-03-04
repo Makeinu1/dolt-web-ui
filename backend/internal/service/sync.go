@@ -34,20 +34,6 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 		return nil, apiErr
 	}
 
-	// Step 0: expected_head check
-	var currentHead string
-	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-	if currentHead != req.ExpectedHead {
-		return nil, &model.APIError{
-			Status:  409,
-			Code:    model.CodeStaleHead,
-			Msg:     "expected_head mismatch",
-			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
-		}
-	}
-
 	// Step 1: Preview — block on schema conflicts, collect data-conflicted tables
 	dataConflictTables, apiErr := s.previewMergeInfo(ctx, conn, req.BranchName)
 	if apiErr != nil {
@@ -57,6 +43,22 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 	// Step 2: START TRANSACTION and merge
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	// NEW-4: expected_head check inside TX to eliminate race window.
+	var currentHead string
+	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	if currentHead != req.ExpectedHead {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, &model.APIError{
+			Status:  409,
+			Code:    model.CodeStaleHead,
+			Msg:     "expected_head mismatch",
+			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
+		}
 	}
 
 	var mergeHash string

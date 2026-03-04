@@ -28,8 +28,22 @@ type Database struct {
 }
 
 type Server struct {
-	Port       int    `yaml:"port"`
-	CORSOrigin string `yaml:"cors_origin"`
+	Port        int      `yaml:"port"`
+	CORSOrigin  string   `yaml:"cors_origin"`
+	BodyLimitMB int      `yaml:"body_limit_mb"` // BUG-J: configurable request body size limit
+	Timeouts    Timeouts `yaml:"timeouts"`
+}
+
+type Timeouts struct {
+	ReadSec  int `yaml:"read_sec"`  // HTTP read timeout (default 30s)
+	WriteSec int `yaml:"write_sec"` // HTTP write timeout for heavy ops like DOLT_MERGE (default 300s)
+	IdleSec  int `yaml:"idle_sec"`  // HTTP idle timeout (default 120s)
+}
+
+type Pool struct {
+	MaxOpen         int `yaml:"max_open"`          // max open DB connections (default 5)
+	MaxIdle         int `yaml:"max_idle"`          // max idle DB connections (default 5)
+	ConnLifetimeSec int `yaml:"conn_lifetime_sec"` // max connection lifetime (default 3600s)
 }
 
 func Load(path string) (*Config, error) {
@@ -48,6 +62,20 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Server.CORSOrigin == "" {
 		cfg.Server.CORSOrigin = "*"
+	}
+	// Phase 4: apply defaults for timeouts
+	if cfg.Server.Timeouts.ReadSec == 0 {
+		cfg.Server.Timeouts.ReadSec = 30
+	}
+	if cfg.Server.Timeouts.WriteSec == 0 {
+		cfg.Server.Timeouts.WriteSec = 300
+	}
+	if cfg.Server.Timeouts.IdleSec == 0 {
+		cfg.Server.Timeouts.IdleSec = 120
+	}
+	// BUG-J: default body size limit
+	if cfg.Server.BodyLimitMB == 0 {
+		cfg.Server.BodyLimitMB = 10
 	}
 
 	return &cfg, nil

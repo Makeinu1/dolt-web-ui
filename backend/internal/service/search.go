@@ -44,7 +44,10 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	}
 
 	results := make([]model.SearchResult, 0)
-	likePattern := "%" + keyword + "%"
+	// BUG-L: escape LIKE special characters to prevent wildcard injection.
+	escapedKw := strings.ReplaceAll(strings.ReplaceAll(keyword, "\\", "\\\\"), "%", "\\%")
+	escapedKw = strings.ReplaceAll(escapedKw, "_", "\\_")
+	likePattern := "%" + escapedKw + "%"
 
 	for _, tableName := range tableNames {
 		if len(results) >= limit {
@@ -59,8 +62,8 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		}
 
 		type colInfo struct {
-			name       string
-			isPK       bool
+			name string
+			isPK bool
 		}
 		var cols []colInfo
 		for colRows.Next() {

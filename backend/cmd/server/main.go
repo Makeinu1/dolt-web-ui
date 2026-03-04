@@ -48,6 +48,14 @@ func main() {
 
 	handler.Register(r, svc, cfg)
 
+	// BUG-J: limit request body size to prevent OOM from large uploads.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, int64(cfg.Server.BodyLimitMB)*1024*1024)
+			next.ServeHTTP(w, r)
+		})
+	})
+
 	// Serve frontend static files (embedded from build)
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -85,11 +93,12 @@ func main() {
 	log.Printf("starting server on %s", addr)
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // 大規模DB (2-5GB) での DOLT_MERGE タイムアウト対応
-		IdleTimeout:  120 * time.Second,
+		Addr:    addr,
+		Handler: r,
+		// Phase 4: use config values instead of hardcoded timeouts.
+		ReadTimeout:  time.Duration(cfg.Server.Timeouts.ReadSec) * time.Second,
+		WriteTimeout: time.Duration(cfg.Server.Timeouts.WriteSec) * time.Second,
+		IdleTimeout:  time.Duration(cfg.Server.Timeouts.IdleSec) * time.Second,
 	}
 
 	go func() {

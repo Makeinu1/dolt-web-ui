@@ -177,6 +177,11 @@ databases:
 server:
   port: 8080
   cors_origin: "*"
+  body_limit_mb: 10       # リクエストボディ上限 (MB)
+  timeouts:
+    read_sec: 30          # HTTP read タイムアウト
+    write_sec: 300        # HTTP write タイムアウト (DOLT_MERGE 等の重い操作向け)
+    idle_sec: 120         # HTTP idle タイムアウト
 ```
 
 ### 起動

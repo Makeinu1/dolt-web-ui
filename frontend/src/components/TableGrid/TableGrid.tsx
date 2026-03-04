@@ -169,7 +169,8 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
       if (params.data._draftId != null) {
         return `draft:${params.data._draftId}`;
       }
-      if (pkCols.length === 0) return String(Math.random());
+      // BUG-O: use rowIndex instead of Math.random() for stable (within-session) IDs for PK-less tables.
+      if (pkCols.length === 0) return `row:${(params as { rowIndex?: number }).rowIndex ?? Math.random()}`;
       return JSON.stringify(
         Object.fromEntries(
           [...pkCols]
@@ -296,35 +297,37 @@ export function TableGrid({ tableName, refreshKey, onCellSelected, onCrossCopyRo
     loadRows();
   }, [loadRows]);
 
-  // Load memo map (which cells have memos), merging with draft ops for immediate feedback.
+  // BUG-I: split getMemoMap into two effects to avoid API call on every draftOps change.
+  // Effect 1: fetch base memo map from API (only on tableName/branch change).
+  const [baseMemoMap, setBaseMemoMap] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!tableName || !targetId || !dbName || !branchName) return;
-    const memoTable = `_memo_${tableName}`;
     api.getMemoMap(targetId, dbName, branchName, tableName)
-      .then((res) => {
-        const cells = new Set(res.cells);
-        // Merge pending draft ops for this memo table
-        for (const op of draftOps) {
-          if (op.table !== memoTable) continue;
-          let pkVal: string, colName: string;
-          if (op.type === "insert") {
-            pkVal = String(op.values?.pk_value ?? "");
-            colName = String(op.values?.column_name ?? "");
-          } else {
-            pkVal = String(op.pk?.pk_value ?? "");
-            colName = String(op.pk?.column_name ?? "");
-          }
-          const key = `${pkVal}:${colName}`;
-          if (op.type === "delete") {
-            cells.delete(key);
-          } else {
-            cells.add(key);
-          }
-        }
-        setCommentCells(cells);
-      })
-      .catch(() => setCommentCells(new Set()));
-  }, [targetId, dbName, branchName, tableName, draftOps]);
+      .then((res) => setBaseMemoMap(new Set(res.cells)))
+      .catch(() => setBaseMemoMap(new Set()));
+  }, [targetId, dbName, branchName, tableName]);
+
+  // Effect 2: merge draft ops locally (no API call, runs on draftOps change).
+  useEffect(() => {
+    if (!tableName) return;
+    const memoTable = `_memo_${tableName}`;
+    const cells = new Set(baseMemoMap);
+    for (const op of draftOps) {
+      if (op.table !== memoTable) continue;
+      let pkVal: string, colName: string;
+      if (op.type === "insert") {
+        pkVal = String(op.values?.pk_value ?? "");
+        colName = String(op.values?.column_name ?? "");
+      } else {
+        pkVal = String(op.pk?.pk_value ?? "");
+        colName = String(op.pk?.column_name ?? "");
+      }
+      const key = `${pkVal}:${colName}`;
+      if (op.type === "delete") cells.delete(key);
+      else cells.add(key);
+    }
+    setCommentCells(cells);
+  }, [baseMemoMap, draftOps, tableName]);
 
   // Optimistic row insert (used after clone)
   const onRowInserted = useCallback((row: Record<string, unknown>) => {

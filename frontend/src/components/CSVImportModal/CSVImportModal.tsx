@@ -102,6 +102,10 @@ export function CSVImportModal({
       setHeaders(h);
       setCsvRows(rows);
     };
+    // BUG-G: handle file read errors explicitly.
+    reader.onerror = () => {
+      setParseError("ファイルの読み込みに失敗しました");
+    };
     reader.readAsText(file, "UTF-8");
   };
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -100,7 +101,14 @@ func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+zipName+`"`)
+	// NEW-6: sanitize zipName to prevent Content-Disposition header injection.
+	safeZipName := strings.Map(func(r rune) rune {
+		if r == '"' || r == '\r' || r == '\n' || r < 0x20 {
+			return -1
+		}
+		return r
+	}, zipName)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safeZipName+`"`)
 	w.WriteHeader(http.StatusOK)
 	w.Write(data) //nolint:errcheck
 }
@@ -167,4 +175,3 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, commits)
 }
-

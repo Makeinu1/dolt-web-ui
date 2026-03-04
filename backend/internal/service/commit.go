@@ -75,20 +75,6 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		return nil, apiErr
 	}
 
-	// Step 0: expected_head check
-	var currentHead string
-	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-	if currentHead != req.ExpectedHead {
-		return nil, &model.APIError{
-			Status:  409,
-			Code:    model.CodeStaleHead,
-			Msg:     "expected_head mismatch",
-			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
-		}
-	}
-
 	// Step 1a: Pre-ensure memo tables (DDL cannot run inside a transaction)
 	for _, op := range req.Ops {
 		if strings.HasPrefix(op.Table, "_memo_") {
@@ -101,6 +87,23 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 	// Step 1b: START TRANSACTION
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	// Step 0 (inside TX): expected_head check — must be inside transaction to eliminate race window.
+	// BUG-B fix: moved from pre-TX position.
+	var currentHead string
+	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	if currentHead != req.ExpectedHead {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, &model.APIError{
+			Status:  409,
+			Code:    model.CodeStaleHead,
+			Msg:     "expected_head mismatch",
+			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
+		}
 	}
 
 	// Step 2: Apply ops

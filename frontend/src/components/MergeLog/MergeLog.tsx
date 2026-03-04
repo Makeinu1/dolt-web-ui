@@ -49,6 +49,7 @@ export function MergeLog({ onClose }: Props) {
     // Expanded table (within a commit)
     const [expandedTableKey, setExpandedTableKey] = useState<string | null>(null);
     const [exportingZip, setExportingZip] = useState(false);
+    const [zipError, setZipError] = useState<string | null>(null);
 
     const handleSearch = useCallback(async (p = 1) => {
         if (!targetId || !dbName) return;
@@ -85,7 +86,7 @@ export function MergeLog({ onClose }: Props) {
     // Auto-load on open
     useEffect(() => {
         handleSearch(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleToggleCommit = async (hash: string) => {
@@ -118,6 +119,7 @@ export function MergeLog({ onClose }: Props) {
 
     const handleExportZip = async (hash: string) => {
         setExportingZip(true);
+        setZipError(null);
         try {
             const { blob, filename } = await api.exportDiffZip(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
             const url = URL.createObjectURL(blob);
@@ -127,7 +129,8 @@ export function MergeLog({ onClose }: Props) {
             a.click();
             URL.revokeObjectURL(url);
         } catch {
-            // silently ignore
+            // NEW-22: surface ZIP export errors to user.
+            setZipError("ZIPのエクスポートに失敗しました");
         } finally {
             setExportingZip(false);
         }
@@ -146,7 +149,13 @@ export function MergeLog({ onClose }: Props) {
                     <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#666" }}>✕</button>
                 </div>
 
-                {/* フィルタフォーム */}
+                {/* NEW-22: ZIP export error display */}
+                {zipError && (
+                    <div style={{ padding: "4px 10px", background: "#fee2e2", color: "#991b1b", fontSize: 12, borderRadius: 4, marginBottom: 8 }}>
+                        {zipError}
+                    </div>
+                )}
+
                 <div style={{
                     padding: "10px 12px",
                     background: "#f8fafc",

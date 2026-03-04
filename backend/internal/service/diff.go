@@ -268,8 +268,11 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	// Optional keyword filter
 	if keyword != "" {
-		conditions = append(conditions, "l.message LIKE ?")
-		args = append(args, "%"+keyword+"%")
+		// NEW-10: escape LIKE special characters (% and _) to prevent unintended wildcard matching.
+		escapedKw := strings.ReplaceAll(strings.ReplaceAll(keyword, "\\", "\\\\"), "%", "\\%")
+		escapedKw = strings.ReplaceAll(escapedKw, "_", "\\_")
+		conditions = append(conditions, "l.message LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+escapedKw+"%")
 	}
 
 	// Optional date range filters
@@ -351,8 +354,13 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 				continue
 			}
 
+			// BUG-K: cap rows to prevent OOM on large tables.
+			rowLimit := count + 100
+			if rowLimit > 10000 {
+				rowLimit = 10000
+			}
 			// Fetch all rows for this table/diffType (no pagination)
-			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, 1, count+100)
+			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, 1, rowLimit)
 			if err != nil || len(resp.Rows) == 0 {
 				continue
 			}

@@ -4,6 +4,7 @@ import type { ColDef, CellClassParams } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
+import { ErrorBoundary } from "../common/ErrorBoundary";
 import type { Branch, DiffSummaryEntry, DiffRow } from "../../types/api";
 
 // --- DiffSummary Table ---
@@ -117,8 +118,8 @@ function DiffGrid({
       setRows(res.rows || []);
       setTotalCount(res.total_count);
     } catch (err) {
-      const e = err as { error?: { message?: string } };
-      setError(e?.error?.message || "差分の読み込みに失敗しました");
+      const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -188,6 +189,7 @@ function DiffGrid({
       filter: true,
       resizable: true,
       cellStyle: (params: CellClassParams) => {
+        if (!params.data) return { fontFamily: "monospace", fontSize: "12px" };
         const row = params.data as Record<string, unknown>;
         const dt = row._diff_type as string;
         const fromVal = String(row[`_from_${col}`] ?? "");
@@ -209,6 +211,7 @@ function DiffGrid({
         return base;
       },
       cellRenderer: (params: { data: Record<string, unknown>; value: unknown }) => {
+        if (!params.data) return null;
         const row = params.data;
         const dt = row._diff_type as string;
         const fromVal = String(row[`_from_${col}`] ?? "");
@@ -399,8 +402,8 @@ export function HistoryTab() {
       setEntries(res.entries || []);
       setCompared(true);
     } catch (err) {
-      const e = err as { error?: { message?: string } };
-      setSummaryError(e?.error?.message || "差分サマリーの読み込みに失敗しました");
+      const msg = err instanceof ApiError ? err.message : "差分サマリーの読み込みに失敗しました";
+      setSummaryError(msg);
     } finally {
       setLoadingSummary(false);
     }
@@ -507,16 +510,18 @@ export function HistoryTab() {
       </div>
 
       {diffGridTable && (
-        <DiffGrid
-          targetId={targetId}
-          dbName={dbName}
-          branchName={branchName || "main"}
-          tableName={diffGridTable}
-          fromRef={fromBranch}
-          toRef={toBranch}
-          summaryEntry={entries.find((e) => e.table === diffGridTable)}
-          onClose={() => setDiffGridTable(null)}
-        />
+        <ErrorBoundary>
+          <DiffGrid
+            targetId={targetId}
+            dbName={dbName}
+            branchName={branchName || "main"}
+            tableName={diffGridTable}
+            fromRef={fromBranch}
+            toRef={toBranch}
+            summaryEntry={entries.find((e) => e.table === diffGridTable)}
+            onClose={() => setDiffGridTable(null)}
+          />
+        </ErrorBoundary>
       )}
     </>
   );

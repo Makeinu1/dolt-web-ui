@@ -21,7 +21,8 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "CSVデータが空です"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
+	// NEW-7: CSVPreview is read-only, use Conn (not ConnWrite) to avoid unnecessary write lock.
+	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
@@ -149,11 +150,11 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 	}
 
 	return &model.CSVPreviewResponse{
-		Inserts:    inserts,
-		Updates:    updates,
-		Skips:      skips,
-		Errors:     len(previewErrors),
-		SampleDiffs: sampleDiffs,
+		Inserts:       inserts,
+		Updates:       updates,
+		Skips:         skips,
+		Errors:        len(previewErrors),
+		SampleDiffs:   sampleDiffs,
 		PreviewErrors: previewErrors,
 	}, nil
 }
@@ -181,20 +182,6 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		return nil, apiErr
 	}
 
-	// expected_head check
-	var currentHead string
-	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-	if currentHead != req.ExpectedHead {
-		return nil, &model.APIError{
-			Status:  409,
-			Code:    model.CodeStaleHead,
-			Msg:     "expected_head mismatch",
-			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
-		}
-	}
-
 	// Get schema
 	cols, err := getSchemaColumns(ctx, conn, req.Table)
 	if err != nil {
@@ -208,6 +195,22 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 	// START TRANSACTION
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	// NEW-3: expected_head check inside TX to eliminate race window.
+	var currentHead string
+	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	if currentHead != req.ExpectedHead {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, &model.APIError{
+			Status:  409,
+			Code:    model.CodeStaleHead,
+			Msg:     "expected_head mismatch",
+			Details: map[string]string{"expected_head": req.ExpectedHead, "actual_head": currentHead},
+		}
 	}
 
 	for i, csvRow := range req.Rows {
@@ -278,12 +281,26 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 			}
 			updateSQL := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s",
 				req.Table, strings.Join(setParts, ", "), strings.Join(whereParts, " AND "))
-			allArgs := append(setArgs, whereArgs...)
+			// NEW-1: avoid append backing-array corruption by allocating a new slice.
+			allArgs := make([]interface{}, 0, len(setArgs)+len(whereArgs))
+			allArgs = append(allArgs, setArgs...)
+			allArgs = append(allArgs, whereArgs...)
 			if _, err := conn.ExecContext(ctx, updateSQL, allArgs...); err != nil {
 				conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
 				return nil, fmt.Errorf("failed to update row %d: %w", i, err)
 			}
 		}
+	}
+
+	// NEW-2: DOLT_VERIFY_CONSTRAINTS — ensure FK/CHECK constraints are not violated.
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_VERIFY_CONSTRAINTS()"); err != nil {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, fmt.Errorf("failed to verify constraints: %w", err)
+	}
+	var violationCount int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_constraint_violations").Scan(&violationCount); err == nil && violationCount > 0 {
+		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "constraint violations detected"}
 	}
 
 	// DOLT_ADD + DOLT_COMMIT
