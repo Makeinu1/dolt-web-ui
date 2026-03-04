@@ -303,7 +303,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [baseMemoMap, setBaseMemoMap] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!tableName || !targetId || !dbName || !branchName) return;
-    api.getMemoMap(targetId, dbName, branchName, tableName)
+    api.getMemoMap(targetId, dbName, effectiveBranch, tableName)
       .then((res) => setBaseMemoMap(new Set(res.cells)))
       .catch(() => setBaseMemoMap(new Set()));
   }, [targetId, dbName, branchName, tableName]);
