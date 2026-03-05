@@ -46,15 +46,17 @@ func main() {
 	r.Use(middleware.CORS(cfg.Server.CORSOrigin))
 	r.Use(middleware.Audit)
 
-	handler.Register(r, svc, cfg)
-
 	// BUG-J: limit request body size to prevent OOM from large uploads.
+	// NOTE: must be registered BEFORE handler.Register() — chi panics if
+	// r.Use() is called after any route has been defined on the same mux.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r.Body = http.MaxBytesReader(w, r.Body, int64(cfg.Server.BodyLimitMB)*1024*1024)
 			next.ServeHTTP(w, r)
 		})
 	})
+
+	handler.Register(r, svc, cfg)
 
 	// Serve frontend static files (embedded from build)
 	staticSub, err := fs.Sub(staticFS, "static")
