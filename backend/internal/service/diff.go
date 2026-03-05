@@ -240,12 +240,16 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	switch filter {
 	case "merges_only":
-		// For main branch: show only merge commits (2+ parents)
+		// Show merge commits on main: 2+ parents in dolt_commit_ancestors (standard Dolt merge)
+		// OR message contains wi/xxx/xx branch pattern (our custom Approve merge commit).
+		// LEFT JOIN ensures commits with our custom messages are not filtered out when
+		// dolt_commit_ancestors doesn't yet reflect the merge topology.
 		baseFrom = `dolt_log AS l
-			INNER JOIN (
+			LEFT JOIN (
 				SELECT commit_hash FROM dolt_commit_ancestors
 				GROUP BY commit_hash HAVING COUNT(*) > 1
 			) AS m ON l.commit_hash = m.commit_hash`
+
 	case "exclude_auto_merge":
 		// For work branches: exclude auto-generated merge commits
 		baseFrom = `dolt_log AS l`
@@ -261,6 +265,10 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	var conditions []string
 
 	switch filter {
+	case "merges_only":
+		// Keep only commits that are either standard merge commits (2+ parents via LEFT JOIN)
+		// OR contain our wi/xxx/xx branch name pattern (custom Approve merge message).
+		conditions = append(conditions, "(m.commit_hash IS NOT NULL OR l.message REGEXP 'wi/[A-Za-z0-9._-]+/[0-9]+')")
 	case "exclude_auto_merge":
 		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'")
 	case "exclude_comments":

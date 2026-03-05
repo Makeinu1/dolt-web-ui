@@ -219,14 +219,12 @@ function DiffGrid({
         const isChanged = dt === "modified" && fromVal !== toVal;
         const displayVal = params.value != null ? String(params.value) : "";
 
+        // Fix React #31: Do NOT return DOM elements (document.createElement).
+        // AG Grid's React integration passes cellRenderer results through React's
+        // reconciler; DOM element objects cause "Objects are not valid as React child".
+        // Return a plain string instead — AG Grid renders it directly.
         if (isChanged) {
-          const container = document.createElement("span");
-          container.textContent = displayVal;
-          const old = document.createElement("span");
-          old.style.cssText = "font-size:10px;color:#92400e;margin-left:4px";
-          old.textContent = `(旧: ${fromVal})`;
-          container.appendChild(old);
-          return container;
+          return `${displayVal}  (旧: ${fromVal})`;
         }
         return displayVal;
       },
