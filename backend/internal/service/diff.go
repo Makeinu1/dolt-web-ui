@@ -16,7 +16,7 @@ import (
 )
 
 // safeRefRe validates Dolt refs (commit hashes, branch names, tags).
-var safeRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/\-]+$`)
+var safeRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/\-\^~]+$`)
 
 func validateRef(name, value string) error {
 	if !safeRefRe.MatchString(value) {

@@ -219,14 +219,21 @@ function DiffGrid({
         const isChanged = dt === "modified" && fromVal !== toVal;
         const displayVal = params.value != null ? String(params.value) : "";
 
-        // Fix React #31: Do NOT return DOM elements (document.createElement).
-        // AG Grid's React integration passes cellRenderer results through React's
-        // reconciler; DOM element objects cause "Objects are not valid as React child".
-        // Return a plain string instead — AG Grid renders it directly.
+        // Fix React #31: Return a proper React JSX element.
+        // Returning raw DOM elements or plain strings in ag-grid-react
+        // can cause reconciliation errors where AG Grid's wrapper DOM nodes
+        // leak into React.
         if (isChanged) {
-          return `${displayVal}  (旧: ${fromVal})`;
+          return (
+            <span>
+              {displayVal}
+              <span style={{ fontSize: "10px", color: "#92400e", marginLeft: "4px" }}>
+                (旧: {fromVal})
+              </span>
+            </span>
+          );
         }
-        return displayVal;
+        return <span>{displayVal}</span>;
       },
     }));
 
