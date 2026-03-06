@@ -468,16 +468,6 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         cssClasses: ["ag-menu-option-danger"],
       };
 
-      const historyItem: MenuItemDef = {
-        name: "履歴を表示",
-        action: () => {
-          if (onShowRowHistory) {
-            onShowRowHistory(tableName, rowPkId(rowNode));
-          }
-        },
-        disabled: pkCols.length === 0 || !onShowRowHistory,
-      };
-
       const items: MenuItemDef[] = [cloneItem];
       if (onCrossCopyRows) {
         items.push(crossCopyItem);
@@ -485,13 +475,11 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       items.push(
         deleteItem,
         "separator" as unknown as MenuItemDef,
-        historyItem,
-        "separator" as unknown as MenuItemDef,
         "copy" as unknown as MenuItemDef,
       );
       return items;
     },
-    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, onShowRowHistory, tableName]
+    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, tableName]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON
@@ -700,6 +688,18 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
               </button>
             )}
           </div>
+        )}
+
+        {/* 履歴ボタン (読み取り専用 — 保護ブランチ・編集ブロック中でも表示) */}
+        {selectedRows.length === 1 && onShowRowHistory && pkCols.length > 0 && (
+          <button
+            onClick={() => onShowRowHistory(tableName, rowPkId(selectedRows[0]))}
+            style={{ fontSize: 11, padding: "2px 8px", background: "#f0f9ff", color: "#0369a1",
+                     border: "1px solid #bae6fd", borderRadius: 4, cursor: "pointer" }}
+            title="このレコードのマージ履歴を表示"
+          >
+            履歴
+          </button>
         )}
 
         <ColumnToggle

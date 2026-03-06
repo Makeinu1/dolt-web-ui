@@ -359,7 +359,7 @@ Database: Test
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
   - **検索対象切替**: コミットログ / ブランチ名 のセレクトボックスで切替（`search_field=branch` → `wi/{keyword}%` でLIKE検索）
-  - **レコード単位マージ履歴**: 右クリック「履歴を表示」→ MergeLog が `filterTable` + `filterPk` 付きで開く。そのレコードに変更があったマージコミットのみ表示（`dolt_history_{table}` のスナップショット比較でフィルタ）。差分展開・閲覧・ZIP など MergeLog の全機能がそのまま利用可能
+  - **レコード単位マージ履歴**: ツールバー「履歴」ボタン（1行選択時 + PK有り）→ MergeLog が `filterTable` + `filterPk` 付きで開く。そのレコードに変更があったマージコミットのみ表示（`dolt_history_{table}` のスナップショット比較でフィルタ）。差分展開・閲覧・ZIP など MergeLog の全機能がそのまま利用可能。main/audit 等の保護ブランチでも常時表示（読み取り専用のため）
   - **ESCAPE バグ修正**: `ESCAPE '\\'` → `ESCAPE '|'` に変更（Dolt SQL パーサーのエスケープクォート誤解釈を回避）
 - 行クローン（PK保持コピー方式 — 元行のPKをそのまま保持、`vary_column` + `new_values` レガシーモードも後方互換で維持）
   - コピー後のセル編集（UPDATE）は `draft.ts` の `addOp` で INSERT op にマージされる → コミット時にPK_COLLISIONが発生しない
@@ -417,7 +417,8 @@ Database: Test
 - ConflictView ours/theirs 選択 UI — main 優先自動解決に変更
 - コメント系 API 6 本（`/comments/*`）— メモ系 API 2 本に置換
 - コンフリクト系 API 3 本（`/conflicts/*`）— 自動解決のため不要
-- `RecordHistoryPopup` — MergeLog のレコードフィルタ機能に完全置換（右クリック「履歴を表示」→ MergeLog + filterTable/filterPk）
+- `RecordHistoryPopup` — MergeLog のレコードフィルタ機能に完全置換（ツールバー「履歴」ボタン → MergeLog + filterTable/filterPk）
+- 右クリック「履歴を表示」— Chrome で右クリックメニューが動作しない問題によりツールバーボタン方式に移行し削除
 
 ---
 
