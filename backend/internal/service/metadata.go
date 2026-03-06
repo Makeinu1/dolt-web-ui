@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
@@ -117,6 +118,14 @@ func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchReques
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
+
+	// wi/* ブランチ削除時に残留 req/ タグをクリーンアップ（ゾンビタグ防止）。
+	// Submit 後に Approve/Reject せず削除した場合、req/ タグが残り同名ブランチ再作成後に
+	// BRANCH_LOCKED (423) となるバグを防ぐ。タグが存在しない場合のエラーは無視する。
+	if strings.HasPrefix(req.BranchName, "wi/") {
+		reqTag := "req/" + strings.TrimPrefix(req.BranchName, "wi/")
+		conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", reqTag) //nolint:errcheck
+	}
 
 	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", req.BranchName)
 	if err != nil {
