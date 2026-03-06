@@ -151,7 +151,7 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to add: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('-m', ?)", req.CommitMessage); err != nil {
+	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", req.CommitMessage); err != nil {
 		conn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}

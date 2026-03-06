@@ -616,7 +616,7 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	}
 
 	commitMsg := fmt.Sprintf("[cross-copy] %sから%d件コピー（%s）", req.SourceDB, inserted+updated, req.SourceTable)
-	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('-m', ?)", commitMsg); err != nil {
+	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", commitMsg); err != nil {
 		dstConn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
@@ -791,7 +791,7 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	}
 
 	commitMsg := fmt.Sprintf("[cross-copy] %sから%sテーブルを全件コピー（%d行）", req.SourceDB, req.SourceTable, rowCount)
-	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('-m', ?)", commitMsg); err != nil {
+	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", commitMsg); err != nil {
 		dstConn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
