@@ -64,6 +64,13 @@ export function ContextSelector() {
     refreshBranches();
   }, [targetId, dbName, branchRefreshKey]);
 
+  // コンテキスト切替時にブランチ作成フォームをリセット
+  useEffect(() => {
+    setShowCreate(false);
+    setWorkItemName("");
+    setCreateError(null);
+  }, [targetId, dbName]);
+
   // Auto-calculate next Round from existing branches for the given WorkItem
   const nextRound = useMemo(() => {
     const trimmed = workItemName.trim();

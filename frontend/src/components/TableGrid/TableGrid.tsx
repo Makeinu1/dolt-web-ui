@@ -123,6 +123,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [gridError, setGridError] = useState<string | null>(null);
   const [serverFilter, setServerFilter] = useState("");
   const [serverSort, setServerSort] = useState("");
+  const [schemaTable, setSchemaTable] = useState<string>("");
   const colVisibilityKey = `colVisibility/${targetId}/${dbName}/${tableName}`;
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
     const saved = safeGetJSON<string[]>(localStorage, colVisibilityKey, []);
@@ -263,12 +264,19 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   useEffect(() => {
     if (!tableName) return;
     setGridError(null);
+    setSchemaTable("");           // ガード ON: loadRows をブロック
+    setServerFilter("");          // フィルタリセット
+    setServerSort("");            // ソートリセット
+    setPage(1);                   // ページリセット
+    gridRef.current?.api?.setFilterModel({});
+    gridRef.current?.api?.applyColumnState({ defaultState: { sort: null } });
     api
       .getTableSchema(targetId, dbName, branchName, tableName)
       .then((schema) => {
         setColumns(schema.columns);
         setHiddenColumns(new Set());
         setSelectedRows([]);
+        setSchemaTable(tableName); // ガード OFF: loadRows を解禁
       })
       .catch((err) => {
         const msg = err instanceof ApiError ? err.message : "スキーマの読み込みに失敗しました";
@@ -278,7 +286,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
 
   // Load rows (server-side filter + sort)
   const loadRows = useCallback(() => {
-    if (!tableName) return;
+    if (!tableName || schemaTable !== tableName) return; // スキーマ未ロードならスキップ
     setLoading(true);
     setGridError(null);
     api
@@ -292,7 +300,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         setGridError(msg);
       })
       .finally(() => setLoading(false));
-  }, [targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort, refreshKey]);
+  }, [targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort, refreshKey, schemaTable]);
 
   useEffect(() => {
     loadRows();
