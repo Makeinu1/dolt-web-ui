@@ -34,6 +34,8 @@ export interface ModalManagerProps {
     onCloseCommentPanel: () => void;
     onCloseMergeLog: () => void;
     onPreviewCommit?: (hash: string, label: string) => void; // 2c
+    mergeLogFilterTable?: string;
+    mergeLogFilterPk?: string;
 
     // Callbacks
     onCommitSuccess: (newHash: string) => void;
@@ -78,6 +80,8 @@ export function ModalManager({
     deleting,
     selectedCell,
     onPreviewCommit,
+    mergeLogFilterTable,
+    mergeLogFilterPk,
 }: ModalManagerProps) {
     return (
         <>
@@ -174,6 +178,8 @@ export function ModalManager({
                 <MergeLog
                     onClose={onCloseMergeLog}
                     onPreviewCommit={onPreviewCommit}
+                    filterTable={mergeLogFilterTable}
+                    filterPk={mergeLogFilterPk}
                 />
             )}
         </>

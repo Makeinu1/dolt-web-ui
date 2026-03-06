@@ -14,7 +14,6 @@ import type { Table, OverwrittenTable } from "./types/api";
 import type { SelectedCellInfo } from "./components/TableGrid/TableGrid";
 import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsModal";
 import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
-import { RecordHistoryPopup } from "./components/common/RecordHistoryPopup";
 import { CSVImportModal } from "./components/CSVImportModal/CSVImportModal";
 import { SearchModal } from "./components/SearchModal/SearchModal";
 import "./App.css";
@@ -64,7 +63,6 @@ function App() {
   const [showCrossCopyRows, setShowCrossCopyRows] = useState(false);
   const [crossCopyPKs, setCrossCopyPKs] = useState<string[]>([]);
   const [showCrossCopyTable, setShowCrossCopyTable] = useState(false);
-  const [showRowHistory, setShowRowHistory] = useState(false);
   const [rowHistoryInfo, setRowHistoryInfo] = useState<{ table: string; pk: string } | null>(null);
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -76,7 +74,7 @@ function App() {
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
-  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showCrossCopyRows || showCrossCopyTable || showRowHistory || showCSVImport || showSearch;
+  const anyModalOpen = showCommit || showSubmit || showApprover || showHistory || showDeleteConfirm || showMergeLog || showCrossCopyRows || showCrossCopyTable || showCSVImport || showSearch;
 
   useEffect(() => {
     if (anyModalOpen) {
@@ -514,7 +512,7 @@ function App() {
                 } : undefined}
                 onShowRowHistory={(table, pk) => {
                   setRowHistoryInfo({ table, pk });
-                  setShowRowHistory(true);
+                  setShowMergeLog(true);
                 }}
               />
             )}
@@ -553,10 +551,12 @@ function App() {
         onCloseHistory={() => setShowHistory(false)}
         onCloseDeleteConfirm={() => setShowDeleteConfirm(false)}
         onCloseCommentPanel={() => setShowCommentPanel(false)}
-        onCloseMergeLog={() => setShowMergeLog(false)}
+        onCloseMergeLog={() => { setShowMergeLog(false); setRowHistoryInfo(null); }}
         onPreviewCommit={(hash, label) => {
           setPreviewCommit({ hash, label });
         }}
+        mergeLogFilterTable={rowHistoryInfo?.table}
+        mergeLogFilterPk={rowHistoryInfo?.pk}
         onCommitSuccess={onCommitSuccess}
         onSubmitted={(overwritten) => {
           setRequestCount(requestCount + 1);
@@ -604,18 +604,6 @@ function App() {
             onCommitSuccess(newHash);
             setShowCSVImport(false);
           }}
-        />
-      )}
-
-      {/* Row History Popup */}
-      {showRowHistory && rowHistoryInfo && (
-        <RecordHistoryPopup
-          targetId={targetId}
-          dbName={dbName}
-          branchName={branchName}
-          table={rowHistoryInfo.table}
-          pk={rowHistoryInfo.pk}
-          onClose={() => { setShowRowHistory(false); setRowHistoryInfo(null); }}
         />
       )}
 

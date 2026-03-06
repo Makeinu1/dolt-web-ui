@@ -16,6 +16,9 @@ interface Props {
     onClose: () => void;
     /** 2c: Called when user clicks "Browse" on a past merge commit */
     onPreviewCommit?: (hash: string, label: string) => void;
+    /** Record-level filter: show only merges that changed this table's record */
+    filterTable?: string;
+    filterPk?: string;
 }
 
 interface CommitDiff {
@@ -31,12 +34,13 @@ function formatTimestamp(ts: string): string {
     return d.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
 }
 
-export function MergeLog({ onClose, onPreviewCommit }: Props) {
+export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Props) {
     const { targetId, dbName } = useContextStore();
 
     const [fromDate, setFromDate] = useState("");
     const [toDate, setToDate] = useState("");
     const [keyword, setKeyword] = useState("");
+    const [searchField, setSearchField] = useState<"message" | "branch">("message");
     const [commits, setCommits] = useState<HistoryCommit[]>([]);
     const [loading, setLoading] = useState(false);
     const [searched, setSearched] = useState(false);
@@ -77,7 +81,10 @@ export function MergeLog({ onClose, onPreviewCommit }: Props) {
                 "merges_only",
                 keyword,
                 fromDate,
-                toDate
+                toDate,
+                searchField,
+                filterTable ?? "",
+                filterPk ?? ""
             );
             setCommits(result || []);
             setPage(p);
@@ -90,7 +97,7 @@ export function MergeLog({ onClose, onPreviewCommit }: Props) {
         } finally {
             setLoading(false);
         }
-    }, [targetId, dbName, keyword, fromDate, toDate]);
+    }, [targetId, dbName, keyword, fromDate, toDate, searchField, filterTable, filterPk]);
 
     // Auto-load on open
     useEffect(() => {
@@ -189,9 +196,16 @@ export function MergeLog({ onClose, onPreviewCommit }: Props) {
             >
                 {/* ヘッダ */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <h2 style={{ margin: 0, fontSize: 16 }}>📋 マージログ</h2>
+                    <h2 style={{ margin: 0, fontSize: 16 }}>{filterTable ? "🔍 行のマージ履歴" : "📋 マージログ"}</h2>
                     <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#666" }}>✕</button>
                 </div>
+
+                {/* Record filter badge */}
+                {filterTable && (
+                    <div style={{ fontSize: 11, color: "#1e40af", background: "#dbeafe", padding: "4px 10px", borderRadius: 4, marginBottom: 8 }}>
+                        🔍 {filterTable} のレコード — PK: {filterPk}
+                    </div>
+                )}
 
                 {/* ZIP export error */}
                 {zipError && (
@@ -311,16 +325,26 @@ export function MergeLog({ onClose, onPreviewCommit }: Props) {
                 }}>
                     <div style={{ flex: "2 1 200px" }}>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#555" }}>
-                            コミットメッセージ検索
+                            {searchField === "branch" ? "ブランチ名検索" : "コミットメッセージ検索"}
                         </label>
-                        <input
-                            type="text"
-                            value={keyword}
-                            onChange={(e) => setKeyword(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && handleSearch(1)}
-                            placeholder="キーワードで絞り込み"
-                            style={{ width: "100%", fontSize: 13, padding: "4px 8px", boxSizing: "border-box" }}
-                        />
+                        <div style={{ display: "flex", gap: 4 }}>
+                            <select
+                                value={searchField}
+                                onChange={(e) => setSearchField(e.target.value as "message" | "branch")}
+                                style={{ fontSize: 12, padding: "4px 6px", flexShrink: 0 }}
+                            >
+                                <option value="message">コミットログ</option>
+                                <option value="branch">ブランチ名</option>
+                            </select>
+                            <input
+                                type="text"
+                                value={keyword}
+                                onChange={(e) => setKeyword(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleSearch(1)}
+                                placeholder={searchField === "branch" ? "ブランチ名で絞り込み" : "キーワードで絞り込み"}
+                                style={{ flex: 1, fontSize: 13, padding: "4px 8px", boxSizing: "border-box" }}
+                            />
+                        </div>
                     </div>
                     <div style={{ flex: "1 1 120px" }}>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#555" }}>

@@ -187,7 +187,10 @@ export const getHistoryCommits = (
   filter = "",
   keyword = "",
   fromDate = "",
-  toDate = ""
+  toDate = "",
+  searchField = "",
+  filterTable = "",
+  filterPk = ""
 ) =>
   request<import("../types/api").HistoryCommit[]>(
     `/history/commits${queryString({
@@ -200,6 +203,9 @@ export const getHistoryCommits = (
       ...(keyword ? { keyword } : {}),
       ...(fromDate ? { from_date: fromDate } : {}),
       ...(toDate ? { to_date: toDate } : {}),
+      ...(searchField ? { search_field: searchField } : {}),
+      ...(filterTable ? { filter_table: filterTable } : {}),
+      ...(filterPk ? { filter_pk: filterPk } : {}),
     })}`
   );
 

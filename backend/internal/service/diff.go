@@ -225,7 +225,9 @@ var workBranchExtractRe = regexp.MustCompile(`wi/[A-Za-z0-9._-]+/[0-9]{1,3}`)
 // "exclude_auto_merge" (work branch: exclude auto-sync merges).
 // keyword: substring match on message (empty = no filter).
 // fromDate/toDate: ISO date "YYYY-MM-DD" inclusive range (empty = no filter).
-func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter, keyword, fromDate, toDate string) ([]model.HistoryCommit, error) {
+// searchField: "message" (default) | "branch" — controls keyword matching target.
+// filterTable/filterPk: if both set, further filter to commits that changed the specific record.
+func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter, keyword, fromDate, toDate, searchField, filterTable, filterPk string) ([]model.HistoryCommit, error) {
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -277,13 +279,17 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'", "l.message NOT LIKE '[comment]%'")
 	}
 
-	// Optional keyword filter
+	// Optional keyword filter — use | as ESCAPE character to avoid Dolt parser issues with backslash.
 	if keyword != "" {
-		// NEW-10: escape LIKE special characters (% and _) to prevent unintended wildcard matching.
-		escapedKw := strings.ReplaceAll(strings.ReplaceAll(keyword, "\\", "\\\\"), "%", "\\%")
-		escapedKw = strings.ReplaceAll(escapedKw, "_", "\\_")
-		conditions = append(conditions, "l.message LIKE ? ESCAPE '\\'")
-		args = append(args, "%"+escapedKw+"%")
+		escapedKw := strings.ReplaceAll(keyword, "|", "||")
+		escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
+		escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
+		conditions = append(conditions, "l.message LIKE ? ESCAPE '|'")
+		if searchField == "branch" {
+			args = append(args, "%wi/"+escapedKw+"%")
+		} else {
+			args = append(args, "%"+escapedKw+"%")
+		}
 	}
 
 	// Optional date range filters
@@ -296,24 +302,32 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		args = append(args, toDate+" 23:59:59")
 	}
 
-	// Assemble query
+	// Assemble query. When filtering by record, fetch a larger batch (paginate after filtering).
+	fetchLimit := pageSize
+	fetchOffset := offset
+	if filterTable != "" && filterPk != "" {
+		fetchLimit = 500
+		fetchOffset = 0
+	}
+
 	query := fmt.Sprintf("SELECT l.commit_hash, l.committer, l.message, l.date FROM %s", baseFrom)
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += " ORDER BY l.date DESC LIMIT ? OFFSET ?"
-	args = append(args, pageSize, offset)
+	args = append(args, fetchLimit, fetchOffset)
 
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
-	defer rows.Close()
 
+	// Collect commits — must close rows explicitly before any potential Step 2 query.
 	commits := make([]model.HistoryCommit, 0)
 	for rows.Next() {
 		var c model.HistoryCommit
 		if err := rows.Scan(&c.Hash, &c.Author, &c.Message, &c.Timestamp); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("failed to scan commit: %w", err)
 		}
 		// 2a: Extract work branch name from merge commit message
@@ -324,7 +338,163 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		}
 		commits = append(commits, c)
 	}
-	return commits, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close() // Explicit close BEFORE potential Step 2 query on same connection.
+
+	// If no record filter, return with pagination already applied by the query.
+	if filterTable == "" || filterPk == "" {
+		return commits, nil
+	}
+
+	// Steps 2-4: Further filter to commits that changed the specific record.
+
+	if err := validation.ValidateIdentifier("filter_table", filterTable); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid filter_table name"}
+	}
+
+	pkMap, err := parsePK(filterPk)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(commits) == 0 {
+		return make([]model.HistoryCommit, 0), nil
+	}
+
+	// Build IN clause for commit hashes.
+	hashPlaceholders := make([]string, len(commits))
+	hashArgs := make([]interface{}, len(commits))
+	for i, c := range commits {
+		hashPlaceholders[i] = "?"
+		hashArgs[i] = c.Hash
+	}
+
+	// Build PK WHERE conditions.
+	whereParts := make([]string, 0, len(pkMap))
+	pkArgs := make([]interface{}, 0, len(pkMap))
+	for k, v := range pkMap {
+		if err := validation.ValidateIdentifier("pk column", k); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid pk column name"}
+		}
+		if fv, ok := v.(float64); ok && fv == float64(int64(fv)) {
+			v = strconv.FormatInt(int64(fv), 10)
+		}
+		whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", k))
+		pkArgs = append(pkArgs, v)
+	}
+
+	histQuery := fmt.Sprintf(
+		"SELECT * FROM `dolt_history_%s` WHERE %s AND commit_hash IN (%s) ORDER BY commit_date DESC",
+		filterTable,
+		strings.Join(whereParts, " AND "),
+		strings.Join(hashPlaceholders, ", "),
+	)
+	allHistArgs := make([]interface{}, 0, len(pkArgs)+len(hashArgs))
+	allHistArgs = append(allHistArgs, pkArgs...)
+	allHistArgs = append(allHistArgs, hashArgs...)
+
+	histRows, err := conn.QueryContext(ctx, histQuery, allHistArgs...)
+	if err != nil {
+		// If history table query fails (e.g. table not tracked), return empty gracefully.
+		return make([]model.HistoryCommit, 0), nil
+	}
+
+	histCols, err := histRows.Columns()
+	if err != nil {
+		histRows.Close()
+		return nil, fmt.Errorf("failed to get history columns: %w", err)
+	}
+
+	type histSnap struct {
+		commitHash string
+		vals       map[string]interface{}
+	}
+	var snapshots []histSnap
+
+	for histRows.Next() {
+		vals := make([]interface{}, len(histCols))
+		vPtrs := make([]interface{}, len(histCols))
+		for i := range vals {
+			vPtrs[i] = &vals[i]
+		}
+		if err := histRows.Scan(vPtrs...); err != nil {
+			histRows.Close()
+			return nil, fmt.Errorf("failed to scan history row: %w", err)
+		}
+		snap := histSnap{vals: make(map[string]interface{})}
+		for i, col := range histCols {
+			v := vals[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			switch col {
+			case "commit_hash":
+				if sv, ok := v.(string); ok {
+					snap.commitHash = sv
+				}
+			case "commit_date", "committer":
+				// skip metadata columns
+			default:
+				snap.vals[col] = v
+			}
+		}
+		snapshots = append(snapshots, snap)
+	}
+	if err := histRows.Err(); err != nil {
+		histRows.Close()
+		return nil, err
+	}
+	histRows.Close()
+
+	if len(snapshots) == 0 {
+		return make([]model.HistoryCommit, 0), nil
+	}
+
+	// Step 3: Find commit hashes where record values changed.
+	// snapshots are ORDER BY commit_date DESC: index 0 = newest, index n-1 = oldest.
+	// Compare each snapshot to the next (older) one; if different, include it.
+	changedHashes := make(map[string]bool)
+	for i, snap := range snapshots {
+		if i == len(snapshots)-1 {
+			// Oldest merge snapshot: include (no prior merge to compare against).
+			changedHashes[snap.commitHash] = true
+		} else {
+			older := snapshots[i+1]
+			changed := len(snap.vals) != len(older.vals)
+			if !changed {
+				for k, av := range snap.vals {
+					if fmt.Sprintf("%v", av) != fmt.Sprintf("%v", older.vals[k]) {
+						changed = true
+						break
+					}
+				}
+			}
+			if changed {
+				changedHashes[snap.commitHash] = true
+			}
+		}
+	}
+
+	// Step 4: Filter mergeCommits to changedHashes, then apply pagination.
+	filtered := make([]model.HistoryCommit, 0)
+	for _, c := range commits {
+		if changedHashes[c.Hash] {
+			filtered = append(filtered, c)
+		}
+	}
+
+	startIdx := (page - 1) * pageSize
+	if startIdx >= len(filtered) {
+		return make([]model.HistoryCommit, 0), nil
+	}
+	endIdx := startIdx + pageSize
+	if endIdx > len(filtered) {
+		endIdx = len(filtered)
+	}
+	return filtered[startIdx:endIdx], nil
 }
 
 // ExportDiffZip generates a ZIP archive containing per-table, per-diff-type CSV files.

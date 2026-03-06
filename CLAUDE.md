@@ -358,13 +358,13 @@ Database: Test
   - サーバーサイドページネーション（50件/ページ）
   - diff_type フィルタ（全て / 追加 / 変更 / 削除）
 - マージログ MergeLog（main へのマージ履歴のみ、日付範囲フィルタ、DiffSummary 展開、ZIP エクスポート、ハッシュ非表示）
+  - **検索対象切替**: コミットログ / ブランチ名 のセレクトボックスで切替（`search_field=branch` → `wi/{keyword}%` でLIKE検索）
+  - **レコード単位マージ履歴**: 右クリック「履歴を表示」→ MergeLog が `filterTable` + `filterPk` 付きで開く。そのレコードに変更があったマージコミットのみ表示（`dolt_history_{table}` のスナップショット比較でフィルタ）。差分展開・閲覧・ZIP など MergeLog の全機能がそのまま利用可能
+  - **ESCAPE バグ修正**: `ESCAPE '\\'` → `ESCAPE '|'` に変更（Dolt SQL パーサーのエスケープクォート誤解釈を回避）
 - 行クローン（PK保持コピー方式 — 元行のPKをそのまま保持、`vary_column` + `new_values` レガシーモードも後方互換で維持）
   - コピー後のセル編集（UPDATE）は `draft.ts` の `addOp` で INSERT op にマージされる → コミット時にPK_COLLISIONが発生しない
   - コピー後の削除（DELETE）は INSERT op をキャンセルする（何も送信しない）
   - **注意**: コピー後にPKを変更しないまま保存するとPK_COLLISION — これは正しい動作
-- **行の変更履歴ポップアップ** `RecordHistoryPopup` — 右クリック「履歴を表示」から起動
-  - `GET /api/v1/history/row` — `dolt_history_{table}` から指定PKのスナップショット一覧（新しい順、最大30件）
-  - 連続スナップショット間の変更カラムをハイライト表示
 
 ### セルメモ（Phase 2: メモテーブル移行済み）
 - `_memo_{table}` 隠しテーブルでメモ管理（ユーザーのテーブル一覧に非表示）
@@ -417,6 +417,7 @@ Database: Test
 - ConflictView ours/theirs 選択 UI — main 優先自動解決に変更
 - コメント系 API 6 本（`/comments/*`）— メモ系 API 2 本に置換
 - コンフリクト系 API 3 本（`/conflicts/*`）— 自動解決のため不要
+- `RecordHistoryPopup` — MergeLog のレコードフィルタ機能に完全置換（右クリック「履歴を表示」→ MergeLog + filterTable/filterPk）
 
 ---
 
