@@ -411,7 +411,9 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 
 // applyExpandColumns runs ALTER TABLE MODIFY COLUMN for each column that needs widening.
 // Must be called outside of a transaction (DDL auto-commits in Dolt/MySQL).
-func applyExpandColumns(ctx context.Context, conn *sql.Conn, table string, srcColMap, dstColMap map[string]model.ColumnSchema, shared []string) error {
+// Returns (true, nil) if at least one column was widened, (false, nil) if no expansion was needed.
+func applyExpandColumns(ctx context.Context, conn *sql.Conn, table string, srcColMap, dstColMap map[string]model.ColumnSchema, shared []string) (bool, error) {
+	expanded := false
 	for _, colName := range shared {
 		sc := srcColMap[colName]
 		dc := dstColMap[colName]
@@ -429,10 +431,11 @@ func applyExpandColumns(ctx context.Context, conn *sql.Conn, table string, srcCo
 		}
 		alterSQL := fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` %s %s", table, colName, widenedType, nullClause)
 		if _, err := conn.ExecContext(ctx, alterSQL); err != nil {
-			return fmt.Errorf("failed to expand column %s to %s: %w", colName, widenedType, err)
+			return false, fmt.Errorf("failed to expand column %s to %s: %w", colName, widenedType, err)
 		}
+		expanded = true
 	}
-	return nil
+	return expanded, nil
 }
 
 // CrossCopyRows copies selected rows from source DB/branch to dest DB/branch.
@@ -506,9 +509,29 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 		dstColMap[c.Name] = c
 	}
 
-	// Auto-expand dest string columns that are narrower than source (DDL before transaction)
-	if err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMap, shared); err != nil {
+	// Auto-expand dest string columns that are narrower than source (DDL before transaction).
+	// Apply to work branch first, then mirror the same DDL to main so both branches share the
+	// same schema — otherwise Dolt reports all rows as diff (schema_A vs schema_B).
+	expanded, err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMap, shared)
+	if err != nil {
 		return nil, fmt.Errorf("failed to expand columns: %w", err)
+	}
+	if expanded {
+		mainWriteConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, "main")
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to main for DDL: %w", err)
+		}
+		if _, merr := applyExpandColumns(ctx, mainWriteConn, req.SourceTable, srcColMap, dstColMap, shared); merr != nil {
+			mainWriteConn.Close()
+			return nil, fmt.Errorf("failed to expand columns on main: %w", merr)
+		}
+		schemaMsg := fmt.Sprintf("schema: %s カラム型を拡張（クロスコピー前）", req.SourceTable)
+		mainWriteConn.ExecContext(ctx, "CALL DOLT_ADD('.')") //nolint:errcheck
+		if _, cerr := mainWriteConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", schemaMsg); cerr != nil {
+			mainWriteConn.Close()
+			return nil, fmt.Errorf("failed to commit DDL to main: %w", cerr)
+		}
+		mainWriteConn.Close()
 	}
 
 	// Fetch source rows
@@ -678,6 +701,38 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "共有カラムがありません"}
 	}
 
+	// Build column maps for expansion check (used in DDL phase and later)
+	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
+	for _, c := range srcCols {
+		srcColMap[c.Name] = c
+	}
+	dstColMapTable := make(map[string]model.ColumnSchema, len(dstCols))
+	for _, c := range dstCols {
+		dstColMapTable[c.Name] = c
+	}
+
+	// DDL先行コミット: Apply schema expansion to main BEFORE creating the work branch.
+	// This ensures the work branch inherits the updated schema, so the diff only shows
+	// data changes (not spurious "all rows changed" due to schema mismatch).
+	mainWriteConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, "main")
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to main for DDL: %w", err)
+	}
+	expanded, err := applyExpandColumns(ctx, mainWriteConn, req.SourceTable, srcColMap, dstColMapTable, shared)
+	if err != nil {
+		mainWriteConn.Close()
+		return nil, fmt.Errorf("failed to expand columns on main: %w", err)
+	}
+	if expanded {
+		schemaMsg := fmt.Sprintf("schema: %s カラム型を拡張（クロスコピー前）", req.SourceTable)
+		mainWriteConn.ExecContext(ctx, "CALL DOLT_ADD('.')") //nolint:errcheck
+		if _, cerr := mainWriteConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", schemaMsg); cerr != nil {
+			mainWriteConn.Close()
+			return nil, fmt.Errorf("failed to commit DDL to main: %w", cerr)
+		}
+	}
+	mainWriteConn.Close()
+
 	// Determine next branch name: wi/import-{table}/NN
 	dstConnDB, err := s.repo.ConnDB(ctx, req.TargetID, req.DestDB)
 	if err != nil {
@@ -723,21 +778,6 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		return nil, fmt.Errorf("failed to connect to new branch: %w", err)
 	}
 	defer dstConn.Close()
-
-	// Build column maps for expansion check
-	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
-	for _, c := range srcCols {
-		srcColMap[c.Name] = c
-	}
-	dstColMapTable := make(map[string]model.ColumnSchema, len(dstCols))
-	for _, c := range dstCols {
-		dstColMapTable[c.Name] = c
-	}
-
-	// Auto-expand dest string columns that are narrower than source (DDL before transaction)
-	if err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMapTable, shared); err != nil {
-		return nil, fmt.Errorf("failed to expand columns: %w", err)
-	}
 
 	// START TRANSACTION
 	if _, err := dstConn.ExecContext(ctx, "START TRANSACTION"); err != nil {
