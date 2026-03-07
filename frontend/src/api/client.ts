@@ -83,7 +83,8 @@ export const getTableRows = (
   page = 1,
   pageSize = 50,
   filter = "",
-  sort = ""
+  sort = "",
+  all = false
 ) =>
   request<import("../types/api").RowsResponse>(
     `/table/rows${queryString({
@@ -95,6 +96,7 @@ export const getTableRows = (
       page_size: String(pageSize),
       filter,
       sort,
+      ...(all ? { all: "true" } : {}),
     })}`
   );
 

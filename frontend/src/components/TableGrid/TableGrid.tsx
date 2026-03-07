@@ -21,6 +21,7 @@ import * as api from "../../api/client";
 import { safeGetJSON, safeSetJSON } from "../../utils/safeStorage";
 import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
+import { BulkPKReplaceModal } from "../BulkPKReplaceModal/BulkPKReplaceModal";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -112,7 +113,9 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const effectiveBranch = previewCommitHash ?? branchName;
   const addOp = useDraftStore((s) => s.addOp);
   const draftOps = useDraftStore((s) => s.ops);
+  const bulkReplacePKInDraft = useDraftStore((s) => s.bulkReplacePKInDraft);
   const setBaseState = useUIStore((s) => s.setBaseState);
+  const setDuplicatePkCount = useUIStore((s) => s.setDuplicatePkCount);
 
   const [columns, setColumns] = useState<ColumnSchema[]>([]);
   const [rowData, setRowData] = useState<Record<string, unknown>[]>([]);
@@ -132,6 +135,8 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [selectedRows, setSelectedRows] = useState<Record<string, unknown>[]>([]);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
   const [cloning, setCloning] = useState(false);
+  const [fetchingAll, setFetchingAll] = useState(false);
+  const [showPKReplaceModal, setShowPKReplaceModal] = useState(false);
   const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
 
@@ -259,6 +264,32 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return index;
   }, [draftOps, tableName, pkCols]);
 
+
+  // Feature 3: INSERT rows whose PK collides with an existing (non-draft) DB row
+  const duplicatePkIds = useMemo(() => {
+    if (pkCols.length === 0) return new Set<string>();
+    const dbRowPkIds = new Set(
+      rowData.filter((r) => r._draftId == null).map((r) => rowPkId(r))
+    );
+    const dups = new Set<string>();
+    for (const row of rowData) {
+      if (row._draftId == null) continue;
+      const id = rowPkId(row);
+      if (dbRowPkIds.has(id)) dups.add(id);
+    }
+    return dups;
+  }, [rowData, pkCols, rowPkId]);
+
+  // Keep UIStore in sync so CommitDialog can read the count
+  useEffect(() => {
+    setDuplicatePkCount(duplicatePkIds.size);
+  }, [duplicatePkIds.size, setDuplicatePkCount]);
+
+  // Feature 1: selected rows that are INSERT (draft) rows
+  const selectedInsertRows = useMemo(
+    () => selectedRows.filter((r) => r._draftId != null),
+    [selectedRows]
+  );
 
   // Load schema
   useEffect(() => {
@@ -421,6 +452,52 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   }, [pkCols, tableName, addOp, setBaseState]);
 
 
+  // Feature 1: Apply PK bulk-replace to both draft ops and rowData simultaneously
+  const handleBulkPKReplace = useCallback(
+    (pkColumn: string, search: string, replace: string) => {
+      const targetOldPkValues = new Set(
+        selectedRows
+          .filter((r) => r._draftId != null)
+          .map((r) => String(r[pkColumn] ?? ""))
+          .filter((v) => v.includes(search))
+      );
+      if (targetOldPkValues.size === 0) return;
+      // Update draft ops (INSERT op values)
+      bulkReplacePKInDraft(tableName, pkColumn, search, replace, targetOldPkValues);
+      // Update rowData display simultaneously
+      setRowData((prev) =>
+        prev.map((row) => {
+          if (row._draftId == null) return row;
+          const oldVal = String(row[pkColumn] ?? "");
+          if (!targetOldPkValues.has(oldVal)) return row;
+          return { ...row, [pkColumn]: oldVal.replaceAll(search, replace) };
+        })
+      );
+    },
+    [selectedRows, tableName, bulkReplacePKInDraft]
+  );
+
+  // Feature 2: Clone all rows matching the current server filter (up to 1000)
+  const handleCloneAllFiltered = useCallback(async () => {
+    const msg =
+      totalCount > 1000
+        ? `フィルタ結果は ${totalCount.toLocaleString()} 件ですが、最大 1,000 件のみコピーします。続けますか？`
+        : `フィルタ結果の ${totalCount.toLocaleString()} 件をすべてコピーします。続けますか？`;
+    if (!window.confirm(msg)) return;
+    setFetchingAll(true);
+    try {
+      const res = await api.getTableRows(
+        targetId, dbName, effectiveBranch, tableName, 1, 50, serverFilter, serverSort, true
+      );
+      await handleCloneRows(res.rows || []);
+    } catch (err: unknown) {
+      const errMsg = err instanceof ApiError ? err.message : "";
+      useUIStore.getState().setError("全件コピーに失敗しました" + (errMsg ? ": " + errMsg : ""));
+    } finally {
+      setFetchingAll(false);
+    }
+  }, [totalCount, targetId, dbName, effectiveBranch, tableName, serverFilter, serverSort, handleCloneRows]);
+
   // Toggle column visibility
   const handleColumnToggle = useCallback((colName: string) => {
     setHiddenColumns((prev) => {
@@ -561,6 +638,10 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
 
         // Row-level draft markers
         if (draft.type === "insert") {
+          // Feature 3: orange when PK collides with an existing DB row (not yet replaced)
+          if (duplicatePkIds.has(rowId)) {
+            return { ...base, backgroundColor: "#ffedd5", ...(col === visibleCols[0] ? { borderLeft: "3px solid #ea580c" } : {}) };
+          }
           return { ...base, backgroundColor: "#dcfce7", ...(col === visibleCols[0] ? { borderLeft: "3px solid #16a34a" } : {}) };
         }
         if (draft.type === "delete") {
@@ -594,7 +675,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         return base;
       },
     }));
-  }, [columns, hiddenColumns, editingBlocked, draftIndex, commentCells, pkCols, rowPkId]);
+  }, [columns, hiddenColumns, editingBlocked, draftIndex, duplicatePkIds, commentCells, pkCols, rowPkId]);
 
 
   // Auto-size columns to fit content on first data render
@@ -665,6 +746,16 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
                 {cloning ? "コピー中..." : `コピー${selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}`}
               </button>
             )}
+            {/* Feature 1: PK bulk-replace — only when INSERT rows are selected */}
+            {!isProtected && selectedInsertRows.length > 0 && pkCols.length > 0 && (
+              <button
+                onClick={() => setShowPKReplaceModal(true)}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
+                title="選択した INSERT 行の PK 値を一括置換"
+              >
+                PK置換 ({selectedInsertRows.length})
+              </button>
+            )}
             {onCrossCopyRows && (
               <button
                 onClick={() => {
@@ -696,6 +787,17 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
               </button>
             )}
           </div>
+        )}
+        {/* Feature 2: Clone all filtered rows — shown when a filter is active */}
+        {!isProtected && !editingBlocked && serverFilter !== "" && pkCols.length > 0 && (
+          <button
+            onClick={handleCloneAllFiltered}
+            disabled={fetchingAll || cloning || totalCount === 0}
+            style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: fetchingAll || cloning ? "not-allowed" : "pointer" }}
+            title={`フィルタ結果の全件をコピー（最大 1,000 件）`}
+          >
+            {fetchingAll ? "取得中..." : `全件コピー (${Math.min(totalCount, 1000).toLocaleString()})`}
+          </button>
         )}
 
         {/* 履歴ボタン (読み取り専用 — 保護ブランチ・編集ブロック中でも表示) */}
@@ -757,6 +859,15 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         </div>
       )}
 
+      {/* Feature 1: PK bulk-replace modal */}
+      {showPKReplaceModal && (
+        <BulkPKReplaceModal
+          pkCols={pkCols}
+          selectedInsertRows={selectedInsertRows}
+          onApply={handleBulkPKReplace}
+          onClose={() => setShowPKReplaceModal(false)}
+        />
+      )}
     </div>
   );
 }

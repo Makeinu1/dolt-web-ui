@@ -8,8 +8,8 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-04
-**最終コミット**: fix: 大規模DB対応 — ブランチ削除バグ修正 + リトライ強化 + WriteTimeout延長
+**最終更新**: 2026-03-07
+**最終コミット**: feat: 同テーブルコピーフロー UX改善（PK一括置換 / フィルタ全件コピー / 重複PKハイライト）
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
@@ -18,7 +18,7 @@
 
 ### 次のタスク: なし
 
-2026-03-04 の本番障害修正（Fix A+B+C）完了。次に対処すべき構造的問題は以下に記録（スコープ外）。
+2026-03-07 の UX 改善3機能実装完了。次に対処すべき構造的問題は以下に記録（スコープ外）。
 
 ---
 
@@ -66,6 +66,9 @@
 | **⑩ 文字型カラム自動拡張** | CrossCopyPreview/Rows/Table で VARCHAR/TEXT 幅不足時に ALTER TABLE MODIFY COLUMN を自動実行 | 本コミット |
 | **⑫ CSVバルク更新** | `POST /csv/preview` + `/csv/apply` + CSVImportModal（最大1000行、INSERT/UPDATE/skip） | 本コミット |
 | **⑧ 全テーブル横断検索** | `GET /search` — 全テーブル + メモ検索（LIKE クエリ）+ SearchModal | 本コミット |
+| **F1 PK 一括置換** | `BulkPKReplaceModal` + `draft.ts:bulkReplacePKInDraft` — 選択 INSERT 行の PK を一括検索/置換（プレビュー付き） | 本コミット |
+| **F2 フィルタ全件コピー** | `table.go` pageSize 上限 1000 + `all=true` 対応 / ツールバー「全件コピー」ボタン（フィルタ有効時） | 本コミット |
+| **F3 重複 PK ハイライト** | INSERT 行の PK が既存 DB 行と衝突する場合に橙ハイライト + CommitDialog に警告バナー | 本コミット |
 
 ---
 
@@ -80,6 +83,45 @@
 | F | Search: 全テーブル×全カラムのLIKE走査 | `search.go:49-115` | 分単位 |
 | G | ExportDiffZip: 全diffをメモリにバッファ | `diff.go:313-423` | OOMリスク |
 | H | ConnMaxIdleTime未設定 | `dolt.go:39` | MySQL側タイムアウトでstale接続 |
+
+---
+
+## 同テーブルコピーフロー UX改善 実装詳細（2026-03-07）
+
+### F1: PK 一括置換モーダル
+
+**対象ユースケース**: フィルタでコピーした100件の行の PK 文字列を一括置換（例: `_2024` → `_2025`）
+
+| ファイル | 変更内容 |
+|---|---|
+| `frontend/src/components/BulkPKReplaceModal/BulkPKReplaceModal.tsx` | **新規**: PK カラム選択(複合PK時) + 検索/置換入力 + リアルタイムプレビュー + 適用 |
+| `frontend/src/store/draft.ts` | `bulkReplacePKInDraft(table, pkColumn, search, replace, targetOldPkValues)` 追加 |
+| `frontend/src/components/TableGrid/TableGrid.tsx` | `handleBulkPKReplace` (draft+rowData同時更新) + ツールバー「PK置換 (N)」ボタン |
+
+**重要設計**:
+- `handleBulkPKReplace` は `bulkReplacePKInDraft` と `setRowData` を必ずセットで呼ぶ（二重更新バグ防止）
+- `targetOldPkValues` = 選択 INSERT 行のうち `search` を含む旧 PK 値の Set → 両側で同一フィルタを適用
+- `getRowId` は INSERT 行で `_draftId` ベースなので PK 変更後も AG Grid の行 ID は不変
+
+### F2: フィルタ全件コピー
+
+| ファイル | 変更内容 |
+|---|---|
+| `backend/internal/handler/table.go` | `pageSize` 上限 500 → 1000 / `all=true` で `page=1, pageSize=1000` にオーバーライド |
+| `frontend/src/api/client.ts` | `getTableRows()` に `all = false` オプション追加 |
+| `frontend/src/components/TableGrid/TableGrid.tsx` | `handleCloneAllFiltered` + ツールバー「全件コピー (N)」ボタン（`serverFilter !== ""` 時のみ表示） |
+
+**仕様**: `totalCount > 1000` 時は「最大 1,000 件のみコピー」旨の確認ダイアログ
+
+### F3: 重複 PK リアルタイム警告
+
+| ファイル | 変更内容 |
+|---|---|
+| `frontend/src/store/ui.ts` | `duplicatePkCount: number` + `setDuplicatePkCount` 追加 |
+| `frontend/src/components/TableGrid/TableGrid.tsx` | `duplicatePkIds` (useMemo) + UIStore 同期 + `cellStyle` 橙ハイライト |
+| `frontend/src/components/common/CommitDialog.tsx` | `duplicatePkCount > 0` 時に橙警告バナー表示 |
+
+**動作**: コピー直後は全 INSERT 行が橙（PK 未変更）→ PK 置換後に緑に変わる = 置換完了の視覚的確認
 
 ---
 

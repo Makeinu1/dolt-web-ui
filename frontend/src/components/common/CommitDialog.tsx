@@ -24,7 +24,7 @@ export function CommitDialog({
 }: CommitDialogProps) {
   const { targetId, dbName, branchName } = useContextStore();
   const { ops, clearDraft, removeOp } = useDraftStore();
-  const { setBaseState, setError } = useUIStore();
+  const { setBaseState, setError, duplicatePkCount } = useUIStore();
   const [submitting, setSubmitting] = useState(false);
 
   const handleCommit = async () => {
@@ -104,6 +104,23 @@ export function CommitDialog({
         <p style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
           <strong>{branchName}</strong> ブランチへの {ops.length} 件の操作
         </p>
+
+        {/* Feature 3: Duplicate PK warning */}
+        {duplicatePkCount > 0 && (
+          <div
+            style={{
+              padding: "6px 10px",
+              background: "#ffedd5",
+              color: "#9a3412",
+              fontSize: 12,
+              borderRadius: 4,
+              marginBottom: 12,
+              border: "1px solid #fed7aa",
+            }}
+          >
+            ⚠ PK が元の行と重複している INSERT 行が {duplicatePkCount} 件あります。コピー後に PK を変更してください。
+          </div>
+        )}
 
         {/* Change preview */}
         <div

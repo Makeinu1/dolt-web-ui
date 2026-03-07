@@ -62,9 +62,13 @@ func (h *Handler) GetTableRows(w http.ResponseWriter, r *http.Request) {
 	}
 	pageSize := 50
 	if ps := r.URL.Query().Get("page_size"); ps != "" {
-		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 500 {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 1000 {
 			pageSize = v
 		}
+	}
+	if r.URL.Query().Get("all") == "true" {
+		page = 1
+		pageSize = 1000
 	}
 
 	filter := r.URL.Query().Get("filter")
