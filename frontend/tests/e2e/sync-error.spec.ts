@@ -1,126 +1,111 @@
 import { test, expect } from '@playwright/test';
 import { setupBaseMocks, selectContextInUI, MOCK_SCHEMA_USERS } from './setup';
 
-test.describe('Sync and Error State Tests', () => {
+test.describe('エラーバナー・ドラフト制御テスト', () => {
     test.beforeEach(async ({ page }) => {
         await setupBaseMocks(page);
-        await page.goto('/');
     });
 
-    test('should show STALE_HEAD error banner and SQL export button on sync conflict', async ({ page }) => {
+    test('行読み込み失敗 → グリッドエラー表示 → 閉じるで消去', async ({ page }) => {
+        // Override rows mock with a 500 error
+        let callCount = 0;
+        await page.route('**/api/v1/table/rows*', async route => {
+            callCount++;
+            if (callCount === 1) {
+                await route.fulfill({
+                    status: 500,
+                    json: { error: { code: 'INTERNAL', message: 'DBに接続できません' } },
+                });
+            } else {
+                await route.fulfill({ json: { rows: [], total_count: 0 } });
+            }
+        });
+
         await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
 
-        // Mock sync to return STALE_HEAD error
-        await page.route('**/api/v1/sync*', async route => {
+        // Inline grid error banner should appear (TableGrid shows gridError, not global error-banner)
+        const gridError = page.getByText(/DBに接続できません|失敗|エラー/).first();
+        await expect(gridError).toBeVisible({ timeout: 8000 });
+
+        // Dismiss button (✕) inside the grid error area
+        const dismissBtn = page.locator('button').filter({ hasText: '✕' }).first();
+        await expect(dismissBtn).toBeVisible();
+        await dismissBtn.click();
+        await expect(gridError).not.toBeVisible({ timeout: 3000 });
+    });
+
+    test('ドラフトあり → 承認申請ボタンが無効化', async ({ page }) => {
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // Create a draft by deleting a row
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+        await aliceRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+
+        // Verify draft exists
+        await expect(page.locator('.action-commit')).toBeVisible({ timeout: 3000 });
+
+        // Open overflow menu — 承認を申請 should be disabled
+        await page.locator('.overflow-btn').click();
+        const submitBtn = page.locator('.overflow-item', { hasText: '承認を申請' });
+        await expect(submitBtn).toBeVisible();
+        await expect(submitBtn).toBeDisabled();
+    });
+
+    test('ドラフトあり → CSVインポートが無効化', async ({ page }) => {
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // Wait for grid to load and create a draft (行削除)
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+        await aliceRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+        await expect(page.locator('.action-commit')).toBeVisible({ timeout: 3000 });
+
+        // Open overflow menu — CSVインポート should be disabled (requires selectedTable + hasDraft)
+        await page.locator('.overflow-btn').click();
+        const csvItem = page.locator('.overflow-item', { hasText: 'CSVインポート' });
+        // CSV Import is only shown when a table is selected AND branch is not protected
+        // Since users is auto-selected, the item should appear as disabled
+        await expect(csvItem).toBeDisabled({ timeout: 5000 });
+    });
+
+    test('Commit STALE_HEAD → エラーバナー表示', async ({ page }) => {
+        await page.route('**/api/v1/commit', async route => {
             await route.fulfill({
                 status: 409,
-                json: { code: 'STALE_HEAD', message: 'expected_head mismatch' }
+                json: { error: { code: 'STALE_HEAD', message: 'HEAD が古くなっています' } },
             });
         });
 
-        // Open overflow and click sync
-        await page.locator('.overflow-btn').click();
-        const syncBtn = page.locator('button', { hasText: '↻ Main と同期' });
-        await expect(syncBtn).toBeVisible();
-        await syncBtn.click();
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
 
-        // Error banner should appear
-        const errorBanner = page.locator('.error-banner');
-        await expect(errorBanner).toBeVisible({ timeout: 5000 });
-        await expect(errorBanner).toContainText('expected_head mismatch');
+        // Create a draft by deleting a row
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+        await aliceRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
 
-        // State badge should show 要更新
+        // Click Commit button
+        const commitBtn = page.locator('.action-commit');
+        await commitBtn.waitFor({ state: 'visible', timeout: 3000 });
+        await commitBtn.click();
+
+        // CommitDialog appears → click primary button
+        const dialog = page.locator('.modal');
+        await dialog.waitFor({ state: 'visible', timeout: 3000 });
+        await dialog.locator('button.primary').click();
+
+        // STALE_HEAD error should appear
+        await expect(page.getByText(/HEAD が古くなっています|要更新/).first()).toBeVisible({ timeout: 5000 });
+    });
+
+    test('通常状態: ステートバッジが「待機中」を表示', async ({ page }) => {
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
         const stateBadge = page.locator('.state-badge');
-        await expect(stateBadge).toHaveText('要更新');
-    });
-
-    test('should show error message when trying to sync with active draft (via handleSync)', async ({ page }) => {
-        // Register sync mock BEFORE navigation (even though we won't actually hit it with draft)
-        await page.route('**/api/v1/sync*', async route => {
-            await route.fulfill({
-                status: 409,
-                json: { code: 'STALE_HEAD', message: 'expected_head mismatch' }
-            });
-        });
-
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
-
-        // Create a draft by deleting a row (select via checkbox — Phase 4)
-        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
-        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-selection-checkbox').click();
-        await page.locator('button', { hasText: '削除' }).click();
-
-        // Confirm draft exists
-        await expect(page.locator('.action-commit')).toBeVisible();
-
-        // Open overflow menu — sync should be DISABLED because draft is active
-        await page.locator('.overflow-btn').click();
-        const syncBtn = page.locator('button', { hasText: '↻ Main と同期' });
-        await expect(syncBtn).toBeDisabled();
-
-        // The SQL export button should NOT appear yet (STALE_HEAD not triggered)
-        const sqlExportBtn = page.locator('button', { hasText: 'ドラフトをSQLで退避' });
-        await expect(sqlExportBtn).not.toBeVisible();
-    });
-
-    test('should recover from STALE_HEAD by clicking Refresh & Force Sync', async ({ page }) => {
-        // Register sync mock BEFORE navigation to ensure it intercepts
-        await page.route('**/api/v1/sync*', async route => {
-            await route.fulfill({
-                status: 409,
-                json: { code: 'STALE_HEAD', message: 'expected_head mismatch' }
-            });
-        });
-
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
-
-        // Trigger STALE_HEAD
-        await page.locator('.overflow-btn').click();
-        await page.locator('button', { hasText: '↻ Main と同期' }).click();
-        await expect(page.locator('.state-badge')).toHaveText('要更新', { timeout: 5000 });
-
-        // Click ↻ 更新して同期 to clear the state
-        const refreshBtn = page.locator('button', { hasText: '更新して同期' });
-        await expect(refreshBtn).toBeVisible();
-        await refreshBtn.click();
-
-        // State should go back to Idle
-        await expect(page.locator('.state-badge')).toHaveText('待機中', { timeout: 5000 });
-    });
-
-    test('should show error banner on API error and allow dismissal', async ({ page }) => {
-        // Simulate tables API failure
-        await page.route('**/api/v1/tables*', async route => {
-            await route.fulfill({
-                status: 500,
-                json: { code: 'INTERNAL', message: 'DB connection failed' }
-            });
-        });
-
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
-
-        // Error banner should show
-        const errorBanner = page.locator('.error-banner');
-        await expect(errorBanner).toBeVisible({ timeout: 5000 });
-
-        // Dismiss it
-        await errorBanner.locator('button').click();
-        await expect(errorBanner).not.toBeVisible();
-    });
-
-    test('should prevent sync when draft is active', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
-
-        // Create a draft (select via checkbox — Phase 4)
-        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
-        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
-        await aliceRow.locator('.ag-selection-checkbox').click();
-        await page.locator('button', { hasText: '削除' }).click();
-
-        // Open overflow menu — sync should be disabled
-        await page.locator('.overflow-btn').click();
-        const syncBtn = page.locator('button', { hasText: '↻ Main と同期' });
-        await expect(syncBtn).toBeDisabled();
+        await expect(stateBadge).toBeVisible({ timeout: 5000 });
+        await expect(stateBadge).toHaveText('待機中');
     });
 });

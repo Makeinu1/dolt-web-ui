@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -112,7 +113,12 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   // 2c: Use commit hash as branch reference for past-version read-only viewing
   const effectiveBranch = previewCommitHash ?? branchName;
   const addOp = useDraftStore((s) => s.addOp);
-  const draftOps = useDraftStore((s) => s.ops);
+  // Subscribe only to ops for this table (and its memo table) to prevent re-renders
+  // when other tables' ops change. useShallow ensures element-level comparison.
+  const memoTable = `_memo_${tableName}`;
+  const draftOps = useDraftStore(
+    useShallow((s) => s.ops.filter((op) => op.table === tableName || op.table === memoTable))
+  );
   const bulkReplacePKInDraft = useDraftStore((s) => s.bulkReplacePKInDraft);
   const setBaseState = useUIStore((s) => s.setBaseState);
   const setDuplicatePkCount = useUIStore((s) => s.setDuplicatePkCount);
@@ -139,6 +145,8 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [showPKReplaceModal, setShowPKReplaceModal] = useState(false);
   const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
+  const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sortDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persist column visibility to localStorage
   useEffect(() => {
@@ -350,7 +358,6 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   // Effect 2: merge draft ops locally (no API call, runs on draftOps change).
   useEffect(() => {
     if (!tableName) return;
-    const memoTable = `_memo_${tableName}`;
     const cells = new Set(baseMemoMap);
     for (const op of draftOps) {
       if (op.table !== memoTable) continue;
@@ -399,8 +406,12 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     cloningRef.current = true;
     setCloning(true);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
+
     try {
       for (const row of rows) {
+        if (controller.signal.aborted) break;
         try {
           const result = await api.previewClone({
             target_id: targetId,
@@ -408,7 +419,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             branch_name: branchName,
             table: tableName,
             template_pk: Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])),
-          });
+          }, controller.signal);
           if (result.errors?.length > 0) {
             useUIStore.getState().setError(result.errors[0].message);
             break;
@@ -426,12 +437,17 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             }
           }
         } catch (err: unknown) {
-          const msg = err instanceof ApiError ? err.message : "";
-          useUIStore.getState().setError("コピーに失敗しました" + (msg ? ": " + msg : ""));
+          if (err instanceof Error && err.name === "AbortError") {
+            useUIStore.getState().setError("コピーがタイムアウトしました（30秒）");
+          } else {
+            const msg = err instanceof ApiError ? err.message : "";
+            useUIStore.getState().setError("コピーに失敗しました" + (msg ? ": " + msg : ""));
+          }
           break;
         }
       }
     } finally {
+      clearTimeout(timeoutId);
       cloningRef.current = false;
       setCloning(false);
     }
@@ -567,7 +583,8 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, tableName]
   );
 
-  // Convert AG Grid filter model to backend FilterCondition[] JSON
+  // Convert AG Grid filter model to backend FilterCondition[] JSON.
+  // Debounced 300ms to avoid excessive API calls during rapid filter typing.
   const onFilterChanged = useCallback((event: FilterChangedEvent) => {
     const model = event.api.getFilterModel();
     const conditions: { column: string; op: string; value?: unknown }[] = [];
@@ -591,11 +608,17 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       if (value !== undefined) cond.value = value;
       conditions.push(cond);
     }
-    setServerFilter(conditions.length > 0 ? JSON.stringify(conditions) : "");
-    setPage(1);
+    const newFilter = conditions.length > 0 ? JSON.stringify(conditions) : "";
+    if (filterDebounceRef.current !== null) clearTimeout(filterDebounceRef.current);
+    filterDebounceRef.current = setTimeout(() => {
+      setServerFilter(newFilter);
+      setPage(1);
+      filterDebounceRef.current = null;
+    }, 300);
   }, []);
 
-  // Convert AG Grid sort model to backend sort string
+  // Convert AG Grid sort model to backend sort string.
+  // Debounced 300ms to batch rapid multi-column sort changes.
   const onSortChanged = useCallback((event: SortChangedEvent) => {
     const sortModel = event.api.getColumnState()
       .filter((c) => c.sort)
@@ -603,8 +626,13 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     const parts = sortModel.map((c) =>
       c.sort === "desc" ? `-${c.colId}` : c.colId
     );
-    setServerSort(parts.join(","));
-    setPage(1);
+    const newSort = parts.join(",");
+    if (sortDebounceRef.current !== null) clearTimeout(sortDebounceRef.current);
+    sortDebounceRef.current = setTimeout(() => {
+      setServerSort(newSort);
+      setPage(1);
+      sortDebounceRef.current = null;
+    }, 300);
   }, []);
 
   // Column definitions for AG Grid with draft visualization

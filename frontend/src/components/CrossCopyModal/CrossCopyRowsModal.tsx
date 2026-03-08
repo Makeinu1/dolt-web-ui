@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
+import { useDraftStore } from "../../store/draft";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type {
@@ -118,11 +119,12 @@ export function CrossCopyRowsModal({
   };
 
   const handleSwitchContext = () => {
+    if (useDraftStore.getState().hasDraft()) {
+      if (!window.confirm("未保存の変更があります。破棄して切り替えますか？")) return;
+    }
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
-    setTimeout(() => {
-      useContextStore.getState().setBranch(destBranch);
-    }, 100);
+    useContextStore.getState().setBranch(destBranch);
     onClose();
   };
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
+import { useDraftStore } from "../../store/draft";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { Database, CrossCopyTableResponse } from "../../types/api";
@@ -56,6 +57,9 @@ export function CrossCopyTableModal({
 
   const handleSwitchContext = () => {
     if (!result) return;
+    if (useDraftStore.getState().hasDraft()) {
+      if (!window.confirm("未保存の変更があります。破棄して切り替えますか？")) return;
+    }
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
     // Branch is verified queryable by backend before returning, so direct switch is safe.

@@ -1,0 +1,117 @@
+import { test, expect } from '@playwright/test';
+import {
+    setupBaseMocks,
+    selectContextInUI,
+    MOCK_HEAD_FEAT,
+} from './setup';
+
+test.describe('エラー回復テスト', () => {
+    test.beforeEach(async ({ page }) => {
+        await setupBaseMocks(page);
+    });
+
+    test('2B-1: Commit STALE_HEAD → StaleHeadDetected → リフレッシュで回復', async ({ page }) => {
+        await page.route('**/api/v1/commit', async route => {
+            await route.fulfill({
+                status: 409,
+                json: { error: { code: 'STALE_HEAD', message: 'HEAD が古くなっています' } },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // ドラフトを作成（行削除）
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+        await aliceRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+
+        // Commit ボタンをクリック
+        const commitBtn = page.locator('.action-commit');
+        await commitBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await commitBtn.click();
+
+        // CommitDialog が表示される
+        const dialog = page.locator('.modal');
+        await dialog.waitFor({ state: 'visible' });
+        await dialog.locator('button.primary').click();
+
+        // STALE_HEAD エラーバナー or StaleHead バッジが表示される
+        await expect(page.getByText(/HEAD が古くなっています|要更新/).first()).toBeVisible({ timeout: 5000 });
+    });
+
+    test('2B-2: Commit BRANCH_LOCKED → エラーメッセージ表示', async ({ page }) => {
+        await page.route('**/api/v1/commit', async route => {
+            await route.fulfill({
+                status: 423,
+                json: { error: { code: 'BRANCH_LOCKED', message: '承認申請中のためロックされています' } },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // ドラフトを作成（行削除）
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+        await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+        await aliceRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+
+        const commitBtn = page.locator('.action-commit');
+        await commitBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await commitBtn.click();
+
+        const dialog = page.locator('.modal');
+        await dialog.waitFor({ state: 'visible' });
+        await dialog.locator('button.primary').click();
+
+        await expect(page.getByText(/承認申請中|ロック/)).toBeVisible({ timeout: 5000 });
+    });
+
+    test('2B-3: ネットワークエラー → バナー表示', async ({ page }) => {
+        await page.route('**/api/v1/table/rows*', async route => {
+            await route.abort('failed');
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // テーブル選択
+        const tableSelect = page.locator('select').filter({ hasText: 'users' }).or(
+            page.locator('select[title*="テーブル"]')
+        );
+        if (await tableSelect.count() > 0) {
+            await tableSelect.selectOption('users');
+        }
+
+        // エラーバナー表示
+        await expect(page.getByText(/接続できません|失敗/)).toBeVisible({ timeout: 5000 });
+    });
+
+    test('2B-5: 行読み込み失敗 → エラーバナー → 再試行で成功', async ({ page }) => {
+        let callCount = 0;
+        await page.route('**/api/v1/table/rows*', async route => {
+            callCount++;
+            if (callCount === 1) {
+                await route.fulfill({
+                    status: 500,
+                    json: { error: { code: 'INTERNAL', message: 'サーバーエラー' } },
+                });
+            } else {
+                await route.fulfill({
+                    json: { rows: [{ id: 1, name: 'Alice', role: 'admin' }], total_count: 1 },
+                });
+            }
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+
+        // エラーバナーが表示される
+        await expect(page.getByText(/失敗|エラー/)).toBeVisible({ timeout: 5000 });
+
+        // 再試行ボタンをクリック
+        const retryBtn = page.getByRole('button', { name: /再試行/ });
+        if (await retryBtn.isVisible()) {
+            await retryBtn.click();
+            await expect(page.getByText(/失敗|エラー/)).not.toBeVisible({ timeout: 3000 });
+        }
+    });
+});

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, memo } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
@@ -604,8 +604,10 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
 
 // ─── InlineDiff ───────────────────────────────────────────────────────────────
 // Compact cell-level diff for a single table within MergeLog.
+// Wrapped in memo to prevent re-renders when parent MergeLog state changes
+// (e.g. another commit expanded) while this diff's props remain the same.
 
-function InlineDiff({
+const InlineDiff = memo(function InlineDiff({
     targetId,
     dbName,
     branchName,
@@ -695,4 +697,4 @@ function InlineDiff({
             </table>
         </div>
     );
-}
+});

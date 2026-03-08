@@ -95,6 +95,18 @@ function App() {
     loadDraft();
   }, [loadDraft]);
 
+  // Page leave warning: warn user if there are unsaved draft ops
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (ops.length > 0) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [ops.length]);
+
   // Load tables when context changes
   useEffect(() => {
     if (!isContextReady) {
@@ -322,9 +334,12 @@ function App() {
 
     // CSV Import (non-protected branch + table selected)
     if (!isProtected && selectedTable) {
+      const csvDraftConflict = hasDraft();
       items.push({
         label: "📥 CSVインポート",
         onClick: () => { setShowCSVImport(true); setShowOverflow(false); },
+        disabled: csvDraftConflict,
+        disabledReason: csvDraftConflict ? "先にドラフトを保存してください" : undefined,
       });
     }
 
@@ -601,6 +616,7 @@ function App() {
           expectedHead={expectedHead}
           onClose={() => setShowCSVImport(false)}
           onApplied={(newHash) => {
+            api.invalidateSchemaCache(targetId, dbName);
             onCommitSuccess(newHash);
             setShowCSVImport(false);
           }}

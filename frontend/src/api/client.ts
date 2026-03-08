@@ -65,15 +65,34 @@ export const getTables = (targetId: string, dbName: string, branchName: string) 
     `/tables${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName })}`
   );
 
+// Schema cache: keyed by (targetId, dbName, table) — branch is omitted because
+// work branches inherit schema from main and schema changes are rare.
+const _schemaCache = new Map<string, import("../types/api").SchemaResponse>();
+
 export const getTableSchema = (
   targetId: string,
   dbName: string,
   branchName: string,
   table: string
-) =>
-  request<import("../types/api").SchemaResponse>(
+): Promise<import("../types/api").SchemaResponse> => {
+  const key = `${targetId}|${dbName}|${table}`;
+  const cached = _schemaCache.get(key);
+  if (cached) return Promise.resolve(cached);
+  return request<import("../types/api").SchemaResponse>(
     `/table/schema${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, table })}`
-  );
+  ).then((schema) => {
+    _schemaCache.set(key, schema);
+    return schema;
+  });
+};
+
+/** Invalidate cached schemas for a DB (call after CREATE/DROP TABLE). */
+export const invalidateSchemaCache = (targetId: string, dbName: string) => {
+  const prefix = `${targetId}|${dbName}|`;
+  for (const key of _schemaCache.keys()) {
+    if (key.startsWith(prefix)) _schemaCache.delete(key);
+  }
+};
 
 export const getTableRows = (
   targetId: string,
@@ -112,10 +131,14 @@ export const getTableRow = (
   );
 
 // Preview operations
-export const previewClone = (body: import("../types/api").PreviewCloneRequest) =>
+export const previewClone = (
+  body: import("../types/api").PreviewCloneRequest,
+  signal?: AbortSignal
+) =>
   request<import("../types/api").PreviewResponse>("/preview/clone", {
     method: "POST",
     body: JSON.stringify(body),
+    signal,
   });
 
 // Write operations

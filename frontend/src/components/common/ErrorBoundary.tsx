@@ -1,73 +1,56 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 
 interface Props {
-  children: ReactNode;
-  fallback?: (error: Error, reset: () => void) => ReactNode;
+    children: ReactNode;
 }
 
 interface State {
-  error: Error | null;
+    hasError: boolean;
+    error: Error | null;
 }
 
-/**
- * ErrorBoundary — DiffGrid などの AG Grid コンポーネントで発生する
- * 予期せぬ JS エラー（null 参照など）をキャッチし、ホワイトアウトを防ぐ。
- */
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
-
-  static getDerivedStateFromError(error: Error): State {
-    return { error };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[ErrorBoundary] Caught error:", error, info.componentStack);
-  }
-
-  reset = () => {
-    this.setState({ error: null });
-  };
-
-  render() {
-    const { error } = this.state;
-    const { children, fallback } = this.props;
-
-    if (error) {
-      if (fallback) return fallback(error, this.reset);
-      return (
-        <div
-          style={{
-            padding: "16px",
-            background: "#fee2e2",
-            border: "1px solid #fca5a5",
-            borderRadius: 6,
-            fontSize: 13,
-            color: "#991b1b",
-          }}
-        >
-          <strong>表示エラーが発生しました</strong>
-          <div style={{ marginTop: 8, fontSize: 11, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-            {error.message}
-          </div>
-          <button
-            onClick={this.reset}
-            style={{
-              marginTop: 10,
-              padding: "4px 12px",
-              background: "#991b1b",
-              color: "#fff",
-              border: "none",
-              borderRadius: 4,
-              cursor: "pointer",
-              fontSize: 12,
-            }}
-          >
-            再読み込み
-          </button>
-        </div>
-      );
+    constructor(props: Props) {
+        super(props);
+        this.state = { hasError: false, error: null };
     }
 
-    return children;
-  }
+    static getDerivedStateFromError(error: Error): State {
+        return { hasError: true, error };
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        console.error("ErrorBoundary caught:", error, info.componentStack);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100vh",
+                    gap: 16,
+                    fontFamily: "sans-serif",
+                    color: "#1e293b",
+                }}>
+                    <div style={{ fontSize: 32 }}>⚠</div>
+                    <h2 style={{ margin: 0, fontSize: 18 }}>予期しないエラーが発生しました</h2>
+                    <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
+                        {this.state.error?.message ?? "不明なエラー"}
+                    </p>
+                    <button
+                        onClick={() => window.location.reload()}
+                        style={{ fontSize: 13, padding: "6px 20px", cursor: "pointer" }}
+                    >
+                        ページを再読み込み
+                    </button>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
 }
