@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -38,7 +40,9 @@ func (h *Handler) CrossCopyRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.CrossCopyRows(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.CrossCopyRows(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -58,7 +62,9 @@ func (h *Handler) CrossCopyTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.CrossCopyTable(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.CrossCopyTable(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return

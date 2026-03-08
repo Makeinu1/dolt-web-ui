@@ -99,6 +99,20 @@ func decodeJSON(r *http.Request, v interface{}) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
+// parseQueryContext extracts target_id, db_name, and branch_name from query params.
+// Returns ok=false (and writes a 400 error) if any required param is missing.
+func parseQueryContext(w http.ResponseWriter, r *http.Request) (targetID, dbName, branchName string, ok bool) {
+	targetID = r.URL.Query().Get("target_id")
+	dbName = r.URL.Query().Get("db_name")
+	branchName = r.URL.Query().Get("branch_name")
+	if targetID == "" || dbName == "" || branchName == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
+			"target_id, db_name, and branch_name are required")
+		return "", "", "", false
+	}
+	return targetID, dbName, branchName, true
+}
+
 // mainGuard returns true (and writes 403) if branchName is protected.
 // Per v6f spec: main and audit branches are read-only for all write operations.
 func mainGuard(w http.ResponseWriter, branchName string) bool {

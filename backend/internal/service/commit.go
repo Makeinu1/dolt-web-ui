@@ -93,11 +93,11 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 	// BUG-B fix: moved from pre-TX position.
 	var currentHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 	if currentHead != req.ExpectedHead {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, &model.APIError{
 			Status:  409,
 			Code:    model.CodeStaleHead,
@@ -109,50 +109,50 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 	// Step 2: Apply ops
 	for i, op := range req.Ops {
 		if err := validation.ValidateIdentifier("table", op.Table); err != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK")
+			safeRollback(conn)
 			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("ops[%d]: invalid table name", i)}
 		}
 
 		switch op.Type {
 		case "insert":
 			if err := applyInsert(ctx, conn, op); err != nil {
-				conn.ExecContext(context.Background(), "ROLLBACK")
+				safeRollback(conn)
 				return nil, err
 			}
 		case "update":
 			if err := applyUpdate(ctx, conn, op); err != nil {
-				conn.ExecContext(context.Background(), "ROLLBACK")
+				safeRollback(conn)
 				return nil, err
 			}
 		case "delete":
 			if err := applyDelete(ctx, conn, op); err != nil {
-				conn.ExecContext(context.Background(), "ROLLBACK")
+				safeRollback(conn)
 				return nil, err
 			}
 		default:
-			conn.ExecContext(context.Background(), "ROLLBACK")
+			safeRollback(conn)
 			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("ops[%d]: unknown operation type %q", i, op.Type)}
 		}
 	}
 
 	// Step 3: DOLT_VERIFY_CONSTRAINTS
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_VERIFY_CONSTRAINTS()"); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to verify constraints: %w", err)
 	}
 	var violationCount int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_constraint_violations").Scan(&violationCount); err == nil && violationCount > 0 {
-		conn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(conn)
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "constraint violations detected"}
 	}
 
 	// Step 4: DOLT_ADD + DOLT_COMMIT
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_ADD('.')"); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to add: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", req.CommitMessage); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 

@@ -74,7 +74,7 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 	// Preview: block on schema conflicts, collect data-conflicted table names.
 	dataConflictTables, previewErr := s.previewMergeInfo(ctx, conn, req.BranchName)
 	if previewErr != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, previewErr
 	}
 
@@ -84,7 +84,7 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").
 		Scan(&syncHash, &syncFF, &syncConflicts, &syncMsg)
 	if err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		// "up to date" is not an error
 		if !strings.Contains(err.Error(), "up to date") {
 			return nil, fmt.Errorf("failed to auto-sync main: %w", err)
@@ -97,12 +97,12 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		var resolveErr error
 		overwrittenTables, resolveErr = s.resolveDataConflicts(ctx, conn, dataConflictTables)
 		if resolveErr != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+			safeRollback(conn)
 			return nil, resolveErr
 		}
 		// Commit the resolved merge
 		if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '--all', '-m', '承認申請前の自動同期: コンフリクト解決 (main優先)')"); err != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+			safeRollback(conn)
 			return nil, fmt.Errorf("failed to commit resolved merge: %w", err)
 		}
 	}
@@ -178,7 +178,8 @@ func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]
 		// Parse message JSON to extract metadata
 		var meta map[string]string
 		if jsonErr := json.Unmarshal([]byte(message), &meta); jsonErr != nil {
-			meta = map[string]string{} // BUG-C: log and use empty map on parse failure
+			log.Printf("WARN: failed to parse tag message for %s: %v", tagName, jsonErr)
+			meta = map[string]string{}
 		}
 
 		workBranch := "wi/" + strings.TrimPrefix(tagName, "req/")
@@ -216,7 +217,8 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 
 	var meta map[string]string
 	if jsonErr := json.Unmarshal([]byte(message), &meta); jsonErr != nil {
-		meta = map[string]string{} // BUG-C: use empty map on parse failure
+		log.Printf("WARN: failed to parse tag message for request %s: %v", requestID, jsonErr)
+		meta = map[string]string{}
 	}
 
 	workBranch := "wi/" + strings.TrimPrefix(requestID, "req/")

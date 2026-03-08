@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -22,7 +24,9 @@ func (h *Handler) Commit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.Commit(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.Commit(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -48,7 +52,9 @@ func (h *Handler) MergeAbort(w http.ResponseWriter, r *http.Request) {
 	if mainGuard(w, req.BranchName) {
 		return
 	}
-	if err := h.svc.AbortMerge(r.Context(), req.TargetID, req.DBName, req.BranchName); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if err := h.svc.AbortMerge(ctx, req.TargetID, req.DBName, req.BranchName); err != nil {
 		handleServiceError(w, err)
 		return
 	}

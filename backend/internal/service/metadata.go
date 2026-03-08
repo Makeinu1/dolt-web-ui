@@ -20,7 +20,7 @@ func (s *Service) ListTargets() []model.TargetResponse {
 
 func (s *Service) ListDatabases(targetID string) ([]model.DatabaseResponse, error) {
 	if _, err := s.cfg.FindTarget(targetID); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
 
 	dbs := s.cfg.FindDatabases(targetID)

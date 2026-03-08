@@ -9,15 +9,16 @@ import (
 )
 
 func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
 	table := r.URL.Query().Get("table")
 	fromRef := r.URL.Query().Get("from_ref")
 	toRef := r.URL.Query().Get("to_ref")
-	if targetID == "" || dbName == "" || branchName == "" || table == "" || fromRef == "" || toRef == "" {
+	if table == "" || fromRef == "" || toRef == "" {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, branch_name, table, from_ref, and to_ref are required")
+			"table, from_ref, and to_ref are required")
 		return
 	}
 
@@ -47,12 +48,8 @@ func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
-	if targetID == "" || dbName == "" || branchName == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, and branch_name are required")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
 		return
 	}
 
@@ -78,14 +75,15 @@ func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
 	fromRef := r.URL.Query().Get("from_ref")
 	toRef := r.URL.Query().Get("to_ref")
-	if targetID == "" || dbName == "" || branchName == "" || fromRef == "" || toRef == "" {
+	if fromRef == "" || toRef == "" {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, branch_name, from_ref, and to_ref are required")
+			"from_ref and to_ref are required")
 		return
 	}
 
@@ -114,14 +112,15 @@ func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HistoryRow(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
 	table := r.URL.Query().Get("table")
 	pk := r.URL.Query().Get("pk")
-	if targetID == "" || dbName == "" || branchName == "" || table == "" || pk == "" {
+	if table == "" || pk == "" {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, branch_name, table, and pk are required")
+			"table and pk are required")
 		return
 	}
 
@@ -141,12 +140,8 @@ func (h *Handler) HistoryRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
-	if targetID == "" || dbName == "" || branchName == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"target_id, db_name, and branch_name are required")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
 		return
 	}
 

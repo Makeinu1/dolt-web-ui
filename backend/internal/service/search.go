@@ -43,6 +43,44 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		return nil, fmt.Errorf("failed to iterate tables: %w", err)
 	}
 
+	if len(tableNames) == 0 {
+		return &model.SearchResponse{Results: make([]model.SearchResult, 0), Total: 0}, nil
+	}
+
+	// 2. Batch-fetch all column info for all user tables in ONE query (eliminates N+1).
+	// Use DATABASE() so it scopes to the current revision DB (e.g. "Test/main").
+	type colInfo struct {
+		name string
+		isPK bool
+	}
+	tableCols := make(map[string][]colInfo, len(tableNames))
+
+	tblPlaceholders := make([]string, len(tableNames))
+	tblArgs := make([]interface{}, len(tableNames))
+	for i, t := range tableNames {
+		tblPlaceholders[i] = "?"
+		tblArgs[i] = t
+	}
+	colQuery := fmt.Sprintf(
+		"SELECT TABLE_NAME, COLUMN_NAME, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME, ORDINAL_POSITION",
+		strings.Join(tblPlaceholders, ", "),
+	)
+	colRows, err := conn.QueryContext(ctx, colQuery, tblArgs...)
+	if err == nil {
+		for colRows.Next() {
+			var tblName, colName, colKey string
+			if err := colRows.Scan(&tblName, &colName, &colKey); err != nil {
+				colRows.Close()
+				break
+			}
+			tableCols[tblName] = append(tableCols[tblName], colInfo{name: colName, isPK: colKey == "PRI"})
+		}
+		colRows.Close()
+	}
+	// If INFORMATION_SCHEMA returned no columns (e.g. revision-DB TABLE_SCHEMA mismatch),
+	// fall back to per-table SHOW COLUMNS for each table that has no entry yet.
+	// This keeps the feature correct even if the batch query cannot scope to the right DB.
+
 	results := make([]model.SearchResult, 0)
 	// BUG-L: escape LIKE special characters to prevent wildcard injection.
 	escapedKw := strings.ReplaceAll(strings.ReplaceAll(keyword, "\\", "\\\\"), "%", "\\%")
@@ -54,28 +92,24 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			break
 		}
 
-		// 2. Get columns for this table
-		colRows, err := conn.QueryContext(ctx, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
-		if err != nil {
-			// Table may have been dropped or renamed; skip it
-			continue
-		}
-
-		type colInfo struct {
-			name string
-			isPK bool
-		}
-		var cols []colInfo
-		for colRows.Next() {
-			var field, colType, null, key string
-			var defaultVal, extra interface{}
-			if err := colRows.Scan(&field, &colType, &null, &key, &defaultVal, &extra); err != nil {
-				colRows.Close()
+		// Use batch-fetched columns; fall back to SHOW COLUMNS if not available.
+		cols := tableCols[tableName]
+		if len(cols) == 0 {
+			colRows2, err := conn.QueryContext(ctx, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+			if err != nil {
 				continue
 			}
-			cols = append(cols, colInfo{name: field, isPK: key == "PRI"})
+			for colRows2.Next() {
+				var field, colType, null, key string
+				var defaultVal, extra interface{}
+				if err := colRows2.Scan(&field, &colType, &null, &key, &defaultVal, &extra); err != nil {
+					colRows2.Close()
+					break
+				}
+				cols = append(cols, colInfo{name: field, isPK: key == "PRI"})
+			}
+			colRows2.Close()
 		}
-		colRows.Close()
 
 		if len(cols) == 0 {
 			continue

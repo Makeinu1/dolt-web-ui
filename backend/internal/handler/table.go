@@ -10,11 +10,8 @@ import (
 )
 
 func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
-	if targetID == "" || dbName == "" || branchName == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, db_name, and branch_name are required")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
 		return
 	}
 
@@ -27,12 +24,13 @@ func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetTableSchema(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
 	table := r.URL.Query().Get("table")
-	if targetID == "" || dbName == "" || branchName == "" || table == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, db_name, branch_name, and table are required")
+	if table == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "table is required")
 		return
 	}
 
@@ -45,12 +43,13 @@ func (h *Handler) GetTableSchema(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetTableRows(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
 	table := r.URL.Query().Get("table")
-	if targetID == "" || dbName == "" || branchName == "" || table == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, db_name, branch_name, and table are required")
+	if table == "" {
+		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "table is required")
 		return
 	}
 

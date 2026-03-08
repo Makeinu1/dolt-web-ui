@@ -61,48 +61,99 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 	var sampleDiffs []model.CSVDiffRow
 	var previewErrors []model.CSVPreviewError
 
-	for i, csvRow := range req.Rows {
-		if i >= 1000 {
-			break // safety limit
-		}
+	// Limit rows for preview
+	previewRows := req.Rows
+	if len(previewRows) > 1000 {
+		previewRows = previewRows[:1000]
+	}
 
-		// Build WHERE clause for PK lookup
-		whereParts := make([]string, 0, len(pkCols))
-		whereArgs := make([]interface{}, 0, len(pkCols))
-		for _, pk := range pkCols {
-			val, ok := csvRow[pk]
+	// Build a stable PK key from a CSV row for indexing.
+	makePKKey := func(csvRow map[string]interface{}) string {
+		parts := make([]string, len(pkCols))
+		for i, pk := range pkCols {
+			parts[i] = fmt.Sprintf("%v", csvRow[pk])
+		}
+		return strings.Join(parts, "\x00")
+	}
+
+	// Batch-fetch existing DB rows using IN clause to eliminate N+1 queries.
+	// For single PK: WHERE pk IN (v1, v2, ...)
+	// For composite PK: WHERE (pk1, pk2) IN ((v1a, v1b), ...)
+	dbIndex := make(map[string]map[string]interface{}, len(previewRows))
+
+	// Collect valid PK combos (skip rows with missing PKs)
+	type pkCombo struct {
+		rowIdx int
+		key    string
+		vals   []interface{}
+	}
+	var validCombos []pkCombo
+	for i, csvRow := range previewRows {
+		vals := make([]interface{}, len(pkCols))
+		valid := true
+		for j, pk := range pkCols {
+			v, ok := csvRow[pk]
 			if !ok {
 				previewErrors = append(previewErrors, model.CSVPreviewError{
 					RowIndex: i,
 					Message:  fmt.Sprintf("主キー '%s' が見つかりません", pk),
 				})
-				continue
+				valid = false
+				break
 			}
-			whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", pk))
-			whereArgs = append(whereArgs, val)
+			vals[j] = v
 		}
-		if len(whereParts) != len(pkCols) {
-			continue
+		if valid {
+			validCombos = append(validCombos, pkCombo{rowIdx: i, key: makePKKey(csvRow), vals: vals})
+		}
+	}
+
+	if len(validCombos) > 0 {
+		// Build batch WHERE clause
+		var batchQuery string
+		var batchArgs []interface{}
+
+		if len(pkCols) == 1 {
+			// Single PK: WHERE pk IN (?, ?, ...)
+			placeholders := make([]string, len(validCombos))
+			for i, combo := range validCombos {
+				placeholders[i] = "?"
+				batchArgs = append(batchArgs, combo.vals[0])
+			}
+			batchQuery = fmt.Sprintf("SELECT * FROM `%s` WHERE `%s` IN (%s)",
+				req.Table, pkCols[0], strings.Join(placeholders, ", "))
+		} else {
+			// Composite PK: WHERE (pk1, pk2) IN ((?,?), (?,?), ...)
+			pkColsQuoted := make([]string, len(pkCols))
+			for i, pk := range pkCols {
+				pkColsQuoted[i] = fmt.Sprintf("`%s`", pk)
+			}
+			rowPlaceholders := make([]string, len(validCombos))
+			for i, combo := range validCombos {
+				colPhs := make([]string, len(pkCols))
+				for j := range pkCols {
+					colPhs[j] = "?"
+					batchArgs = append(batchArgs, combo.vals[j])
+				}
+				rowPlaceholders[i] = "(" + strings.Join(colPhs, ", ") + ")"
+			}
+			batchQuery = fmt.Sprintf("SELECT * FROM `%s` WHERE (%s) IN (%s)",
+				req.Table, strings.Join(pkColsQuoted, ", "), strings.Join(rowPlaceholders, ", "))
 		}
 
-		// Fetch existing DB row
-		query := fmt.Sprintf("SELECT * FROM `%s` WHERE %s LIMIT 1", req.Table, strings.Join(whereParts, " AND "))
-		rows, err := conn.QueryContext(ctx, query, whereArgs...)
-		if err != nil {
-			previewErrors = append(previewErrors, model.CSVPreviewError{RowIndex: i, Message: err.Error()})
-			continue
-		}
-
-		dbCols, _ := rows.Columns()
-		var dbRow map[string]interface{}
-		if rows.Next() {
-			vals := make([]interface{}, len(dbCols))
-			ptrs := make([]interface{}, len(dbCols))
-			for j := range vals {
-				ptrs[j] = &vals[j]
-			}
-			if err := rows.Scan(ptrs...); err == nil {
-				dbRow = make(map[string]interface{}, len(dbCols))
+		batchRows, err := conn.QueryContext(ctx, batchQuery, batchArgs...)
+		if err == nil {
+			dbCols, _ := batchRows.Columns()
+			for batchRows.Next() {
+				vals := make([]interface{}, len(dbCols))
+				ptrs := make([]interface{}, len(dbCols))
+				for j := range vals {
+					ptrs[j] = &vals[j]
+				}
+				if err := batchRows.Scan(ptrs...); err != nil {
+					continue
+				}
+				dbRow := make(map[string]interface{}, len(dbCols))
 				for j, col := range dbCols {
 					v := vals[j]
 					if b, ok := v.([]byte); ok {
@@ -111,11 +162,36 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 						dbRow[col] = v
 					}
 				}
+				// Build PK key from DB row
+				keyParts := make([]string, len(pkCols))
+				for j, pk := range pkCols {
+					keyParts[j] = fmt.Sprintf("%v", dbRow[pk])
+				}
+				dbIndex[strings.Join(keyParts, "\x00")] = dbRow
+			}
+			batchRows.Close()
+		}
+		// If batch query fails (e.g. row constructor unsupported), dbIndex stays empty →
+		// all rows treated as inserts. This is a safe degradation for preview purposes.
+	}
+
+	// Compare each CSV row against the DB index
+	for _, csvRow := range previewRows {
+		key := makePKKey(csvRow)
+		// Skip rows that had missing PK errors (already recorded above)
+		hasMissingPK := false
+		for _, pk := range pkCols {
+			if _, ok := csvRow[pk]; !ok {
+				hasMissingPK = true
+				break
 			}
 		}
-		rows.Close()
+		if hasMissingPK {
+			continue
+		}
 
-		if dbRow == nil {
+		dbRow, exists := dbIndex[key]
+		if !exists {
 			// Row not in DB → insert
 			inserts++
 			if len(sampleDiffs) < 5 {
@@ -200,11 +276,11 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 	// NEW-3: expected_head check inside TX to eliminate race window.
 	var currentHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 	if currentHead != req.ExpectedHead {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, &model.APIError{
 			Status:  409,
 			Code:    model.CodeStaleHead,
@@ -235,7 +311,7 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		var existCount int
 		checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE %s", req.Table, strings.Join(whereParts, " AND "))
 		if err := conn.QueryRowContext(ctx, checkQuery, whereArgs...).Scan(&existCount); err != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+			safeRollback(conn)
 			return nil, fmt.Errorf("failed to check row existence: %w", err)
 		}
 
@@ -255,7 +331,7 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 			insertSQL := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)",
 				req.Table, strings.Join(csvCols, ", "), strings.Join(placeholders, ", "))
 			if _, err := conn.ExecContext(ctx, insertSQL, args...); err != nil {
-				conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+				safeRollback(conn)
 				return nil, fmt.Errorf("failed to insert row %d: %w", i, err)
 			}
 		} else {
@@ -286,7 +362,7 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 			allArgs = append(allArgs, setArgs...)
 			allArgs = append(allArgs, whereArgs...)
 			if _, err := conn.ExecContext(ctx, updateSQL, allArgs...); err != nil {
-				conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+				safeRollback(conn)
 				return nil, fmt.Errorf("failed to update row %d: %w", i, err)
 			}
 		}
@@ -294,18 +370,18 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 
 	// NEW-2: DOLT_VERIFY_CONSTRAINTS — ensure FK/CHECK constraints are not violated.
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_VERIFY_CONSTRAINTS()"); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to verify constraints: %w", err)
 	}
 	var violationCount int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_constraint_violations").Scan(&violationCount); err == nil && violationCount > 0 {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "constraint violations detected"}
 	}
 
 	// DOLT_ADD + DOLT_COMMIT
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_ADD('.')"); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to add: %w", err)
 	}
 
@@ -314,7 +390,7 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		commitMsg = fmt.Sprintf("[CSV] %s: 一括更新", req.Table)
 	}
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", commitMsg); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 

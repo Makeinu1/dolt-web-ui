@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -40,7 +42,9 @@ func (h *Handler) CSVApply(w http.ResponseWriter, r *http.Request) {
 	if mainGuard(w, req.BranchName) {
 		return
 	}
-	result, err := h.svc.CSVApply(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.CSVApply(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return

@@ -36,6 +36,7 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id and db_name are required")
 		return
 	}
+	// Note: ListBranches intentionally does not require branch_name (it lists all branches).
 
 	branches, err := h.svc.ListBranches(r.Context(), targetID, dbName)
 	if err != nil {
@@ -98,11 +99,8 @@ func (h *Handler) DeleteBranch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetHead(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
-	dbName := r.URL.Query().Get("db_name")
-	branchName := r.URL.Query().Get("branch_name")
-	if targetID == "" || dbName == "" || branchName == "" {
-		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument, "target_id, db_name, and branch_name are required")
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
 		return
 	}
 

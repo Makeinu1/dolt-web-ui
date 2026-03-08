@@ -48,11 +48,11 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 	// NEW-4: expected_head check inside TX to eliminate race window.
 	var currentHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentHead); err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 	if currentHead != req.ExpectedHead {
-		conn.ExecContext(context.Background(), "ROLLBACK") //nolint:errcheck
+		safeRollback(conn)
 		return nil, &model.APIError{
 			Status:  409,
 			Code:    model.CodeStaleHead,
@@ -66,7 +66,7 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 	var mergeMessage string
 	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE('main')").Scan(&mergeHash, &fastForward, &mergeConflicts, &mergeMessage)
 	if err != nil {
-		conn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(conn)
 		return nil, fmt.Errorf("failed to merge: %w", err)
 	}
 
@@ -74,13 +74,13 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 		// Auto-resolve: main priority (--theirs) for all data-conflicted tables
 		overwritten, resolveErr := s.resolveDataConflicts(ctx, conn, dataConflictTables)
 		if resolveErr != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK")
+			safeRollback(conn)
 			return nil, resolveErr
 		}
 
 		// Commit the resolved merge
 		if _, err := conn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '--all', '-m', 'Sync: auto-resolved conflicts (main priority)')"); err != nil {
-			conn.ExecContext(context.Background(), "ROLLBACK")
+			safeRollback(conn)
 			return nil, fmt.Errorf("failed to commit resolved merge: %w", err)
 		}
 

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -23,7 +25,9 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.SubmitRequest(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.SubmitRequest(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -79,7 +83,9 @@ func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.ApproveRequest(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := h.svc.ApproveRequest(ctx, req)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -100,7 +106,9 @@ func (h *Handler) RejectRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RejectRequest(r.Context(), req); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if err := h.svc.RejectRequest(ctx, req); err != nil {
 		handleServiceError(w, err)
 		return
 	}
