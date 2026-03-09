@@ -24,11 +24,13 @@ export function CrossCopyRowsModal({
   selectedPKs,
   onClose,
 }: CrossCopyRowsModalProps) {
-  const { targetId, dbName, branchName } = useContextStore();
+  const { targetId, dbName } = useContextStore();
 
   const [step, setStep] = useState<Step>("select");
   const [databases, setDatabases] = useState<Database[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [sourceBranches, setSourceBranches] = useState<Branch[]>([]);
+  const [sourceBranch, setSourceBranch] = useState("main");
   const [destDB, setDestDB] = useState("");
   const [destBranch, setDestBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -39,6 +41,27 @@ export function CrossCopyRowsModal({
 
   // Result data
   const [result, setResult] = useState<CrossCopyRowsResponse | null>(null);
+
+  // Load source branches on mount
+  useEffect(() => {
+    api
+      .getBranches(targetId, dbName)
+      .then((brs) => {
+        // Sort: protected branches first, then alphabetically
+        const sorted = [...brs].sort((a, b) => {
+          const aProtected = a.name === "main" || a.name === "audit";
+          const bProtected = b.name === "main" || b.name === "audit";
+          if (aProtected && !bProtected) return -1;
+          if (!aProtected && bProtected) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setSourceBranches(sorted);
+        // Default to main if available, else current branch
+        const hasMain = sorted.some((b) => b.name === "main");
+        if (!hasMain && sorted.length > 0) setSourceBranch(sorted[0].name);
+      })
+      .catch(() => {});
+  }, [targetId, dbName]);
 
   // Load databases on mount
   useEffect(() => {
@@ -77,7 +100,7 @@ export function CrossCopyRowsModal({
       const res = await api.crossCopyPreview({
         target_id: targetId,
         source_db: dbName,
-        source_branch: branchName,
+        source_branch: sourceBranch,
         source_table: tableName,
         source_pks: selectedPKs,
         dest_db: destDB,
@@ -101,7 +124,7 @@ export function CrossCopyRowsModal({
       const res = await api.crossCopyRows({
         target_id: targetId,
         source_db: dbName,
-        source_branch: branchName,
+        source_branch: sourceBranch,
         source_table: tableName,
         source_pks: selectedPKs,
         dest_db: destDB,
@@ -168,7 +191,7 @@ export function CrossCopyRowsModal({
             borderRadius: 4,
           }}
         >
-          コピー元: {dbName} / {branchName} / {tableName} ({selectedPKs.length}
+          コピー元: {dbName} / {sourceBranch} / {tableName} ({selectedPKs.length}
           件)
         </div>
 
@@ -190,6 +213,30 @@ export function CrossCopyRowsModal({
         {/* Step 1: Select destination */}
         {step === "select" && (
           <div>
+            <div style={{ marginBottom: 12 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  marginBottom: 4,
+                }}
+              >
+                コピー元ブランチ
+              </label>
+              <select
+                value={sourceBranch}
+                onChange={(e) => setSourceBranch(e.target.value)}
+                style={{ width: "100%", padding: "4px 8px", fontSize: 13 }}
+              >
+                {sourceBranches.map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div style={{ marginBottom: 12 }}>
               <label
                 style={{

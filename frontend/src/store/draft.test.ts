@@ -101,22 +101,3 @@ describe("hasDraft", () => {
   });
 });
 
-describe("bulkReplacePKInDraft", () => {
-  it("replaces PK value in targeted INSERT ops only", () => {
-    useDraftStore.getState().addOp({ type: "insert", table: "T1", values: { id: "abc-001", name: "x" } });
-    useDraftStore.getState().addOp({ type: "insert", table: "T1", values: { id: "def-002", name: "y" } });
-    useDraftStore.getState().bulkReplacePKInDraft("T1", "id", "abc", "xyz", new Set(["abc-001"]));
-    const ops = useDraftStore.getState().ops;
-    expect(ops[0].values.id).toBe("xyz-001");
-    expect(ops[1].values.id).toBe("def-002"); // untouched
-  });
-
-  it("does not touch UPDATE ops or other tables", () => {
-    useDraftStore.getState().addOp({ type: "update", table: "T1", pk: { id: "abc-001" }, values: { name: "a" } });
-    useDraftStore.getState().addOp({ type: "insert", table: "T2", values: { id: "abc-001" } });
-    useDraftStore.getState().bulkReplacePKInDraft("T1", "id", "abc", "xyz", new Set(["abc-001"]));
-    const ops = useDraftStore.getState().ops;
-    expect(ops[0].pk?.id).toBe("abc-001"); // UPDATE pk unchanged
-    expect(ops[1].values.id).toBe("abc-001"); // different table unchanged
-  });
-});

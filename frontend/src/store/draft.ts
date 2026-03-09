@@ -11,18 +11,6 @@ interface DraftState {
   clearDraft: () => void;
   loadDraft: () => void;
   hasDraft: () => boolean;
-  /**
-   * Replace a substring in the PK column of INSERT ops for a given table.
-   * Only ops whose current pkColumn value is in targetOldPkValues are updated.
-   * Must be called together with a rowData update in the component.
-   */
-  bulkReplacePKInDraft: (
-    table: string,
-    pkColumn: string,
-    search: string,
-    replace: string,
-    targetOldPkValues: Set<string>
-  ) => void;
 }
 
 // Debounced sessionStorage writes to avoid excessive serialization on rapid cell edits.
@@ -135,15 +123,4 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     if (ops.length > 0) set({ ops });
   },
   hasDraft: () => get().ops.length > 0,
-  bulkReplacePKInDraft: (table, pkColumn, search, replace, targetOldPkValues) => {
-    const nextOps = get().ops.map((op) => {
-      if (op.type !== "insert" || op.table !== table) return op;
-      const oldVal = String(op.values[pkColumn] ?? "");
-      if (!targetOldPkValues.has(oldVal)) return op;
-      const newVal = oldVal.replaceAll(search, replace);
-      return { ...op, values: { ...op.values, [pkColumn]: newVal } };
-    });
-    saveDraftImmediate(nextOps);
-    set({ ops: nextOps });
-  },
 }));

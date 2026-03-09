@@ -22,7 +22,7 @@ import * as api from "../../api/client";
 import { safeGetJSON, safeSetJSON } from "../../utils/safeStorage";
 import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
-import { BulkPKReplaceModal } from "../BulkPKReplaceModal/BulkPKReplaceModal";
+import { BulkEditModal } from "../BulkPKReplaceModal/BulkEditModal";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -119,7 +119,6 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const draftOps = useDraftStore(
     useShallow((s) => s.ops.filter((op) => op.table === tableName || op.table === memoTable))
   );
-  const bulkReplacePKInDraft = useDraftStore((s) => s.bulkReplacePKInDraft);
   const setBaseState = useUIStore((s) => s.setBaseState);
   const setDuplicatePkCount = useUIStore((s) => s.setDuplicatePkCount);
 
@@ -139,10 +138,11 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return new Set<string>(saved);
   });
   const [selectedRows, setSelectedRows] = useState<Record<string, unknown>[]>([]);
+  const [showDraftOnly, setShowDraftOnly] = useState(false);
   const [commentCells, setCommentCells] = useState<Set<string>>(new Set());
   const [cloning, setCloning] = useState(false);
   const [fetchingAll, setFetchingAll] = useState(false);
-  const [showPKReplaceModal, setShowPKReplaceModal] = useState(false);
+  const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -293,11 +293,15 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     setDuplicatePkCount(duplicatePkIds.size);
   }, [duplicatePkIds.size, setDuplicatePkCount]);
 
-  // Feature 1: selected rows that are INSERT (draft) rows
-  const selectedInsertRows = useMemo(
-    () => selectedRows.filter((r) => r._draftId != null),
-    [selectedRows]
-  );
+  // P2: Filter rowData to show only draft rows when showDraftOnly is active
+  const displayRows = useMemo(() => {
+    if (!showDraftOnly) return rowData;
+    return rowData.filter((row) => {
+      if (row._draftId != null) return true;
+      if (pkCols.length === 0) return false;
+      return draftIndex.has(rowPkId(row));
+    });
+  }, [rowData, showDraftOnly, draftIndex, pkCols, rowPkId]);
 
   // Load schema
   useEffect(() => {
@@ -307,6 +311,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     setServerFilter("");          // フィルタリセット
     setServerSort("");            // ソートリセット
     setPage(1);                   // ページリセット
+    setShowDraftOnly(false);      // ドラフトフィルタリセット
     gridRef.current?.api?.setFilterModel({});
     gridRef.current?.api?.applyColumnState({ defaultState: { sort: null } });
     api
@@ -344,6 +349,25 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   useEffect(() => {
     loadRows();
   }, [loadRows]);
+
+  // P1: refreshKey専用useEffect — コミット成功後のグリッドリロード（schemaTableガードをスキップ）
+  useEffect(() => {
+    if (!refreshKey || !tableName) return;
+    setLoading(true);
+    setGridError(null);
+    api
+      .getTableRows(targetId, dbName, effectiveBranch, tableName, page, pageSize, serverFilter, serverSort)
+      .then((res: RowsResponse) => {
+        setRowData(res.rows || []);
+        setTotalCount(res.total_count);
+      })
+      .catch((err) => {
+        const msg = err instanceof ApiError ? err.message : "データの読み込みに失敗しました";
+        setGridError(msg);
+      })
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   // BUG-I: split getMemoMap into two effects to avoid API call on every draftOps change.
   // Effect 1: fetch base memo map from API (only on tableName/branch change).
@@ -468,29 +492,42 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   }, [pkCols, tableName, addOp, setBaseState]);
 
 
-  // Feature 1: Apply PK bulk-replace to both draft ops and rowData simultaneously
-  const handleBulkPKReplace = useCallback(
-    (pkColumn: string, search: string, replace: string) => {
-      const targetOldPkValues = new Set(
-        selectedRows
-          .filter((r) => r._draftId != null)
-          .map((r) => String(r[pkColumn] ?? ""))
-          .filter((v) => v.includes(search))
+  // P5: 一括編集 — 選択行の任意カラムを一括置換・空欄埋め
+  const handleBulkEdit = useCallback(
+    (column: string, value: string, mode: "replace" | "fill-empty") => {
+      if (pkCols.length === 0) return;
+      const selectedSet = new Set(
+        selectedRows.map((r) =>
+          r._draftId != null ? `draft:${r._draftId}` : rowPkId(r)
+        )
       );
-      if (targetOldPkValues.size === 0) return;
-      // Update draft ops (INSERT op values)
-      bulkReplacePKInDraft(tableName, pkColumn, search, replace, targetOldPkValues);
-      // Update rowData display simultaneously
+      for (const row of selectedRows) {
+        const currentVal = row[column];
+        const currentStr =
+          currentVal === null || currentVal === undefined ? "" : String(currentVal);
+        if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
+          continue;
+        }
+        const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
+        addOp({ type: "update", table: tableName, values: { [column]: value }, pk });
+      }
+      // Update rowData for immediate visual feedback
       setRowData((prev) =>
         prev.map((row) => {
-          if (row._draftId == null) return row;
-          const oldVal = String(row[pkColumn] ?? "");
-          if (!targetOldPkValues.has(oldVal)) return row;
-          return { ...row, [pkColumn]: oldVal.replaceAll(search, replace) };
+          const rowKey = row._draftId != null ? `draft:${row._draftId}` : rowPkId(row);
+          if (!selectedSet.has(rowKey)) return row;
+          const currentVal = row[column];
+          const currentStr =
+            currentVal === null || currentVal === undefined ? "" : String(currentVal);
+          if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
+            return row;
+          }
+          return { ...row, [column]: value };
         })
       );
+      setBaseState("DraftEditing");
     },
-    [selectedRows, tableName, bulkReplacePKInDraft]
+    [selectedRows, tableName, pkCols, addOp, setBaseState, rowPkId]
   );
 
   // Feature 2: Clone all rows matching the current server filter (up to 1000)
@@ -761,27 +798,39 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           {totalCount.toLocaleString()} rows {loading && "• Loading..."}
         </span>
 
+        {/* P2: Draft-only toggle — visible when draft ops exist */}
+        {!editingBlocked && draftIndex.size > 0 && (
+          <button
+            onClick={() => setShowDraftOnly((v) => !v)}
+            style={{ fontSize: 11, padding: "2px 8px", background: showDraftOnly ? "#fef9c3" : "#f3f4f6", color: showDraftOnly ? "#713f12" : "#4b5563", border: `1px solid ${showDraftOnly ? "#fde68a" : "#d1d5db"}`, borderRadius: 4, cursor: "pointer" }}
+            title="ドラフト行のみ表示"
+          >
+            📝 ドラフトのみ
+          </button>
+        )}
+
         {/* Row action buttons (visible when 1+ rows are selected and not blocked) */}
         {selectedRows.length > 0 && !editingBlocked && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
-            {!isProtected && (
+            {/* P3: Unified copy button — selected rows take priority over filter */}
+            {!isProtected && pkCols.length > 0 && (
               <button
                 onClick={() => handleCloneRows(selectedRows)}
-                disabled={pkCols.length === 0 || cloning}
-                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: cloning ? "not-allowed" : "pointer" }}
+                disabled={cloning || fetchingAll}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: (cloning || fetchingAll) ? "not-allowed" : "pointer" }}
                 title="行をコピー（同一ブランチ内）"
               >
-                {cloning ? "コピー中..." : `コピー${selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}`}
+                {(cloning || fetchingAll) ? "コピー中..." : `コピー (${selectedRows.length})`}
               </button>
             )}
-            {/* Feature 1: PK bulk-replace — only when INSERT rows are selected */}
-            {!isProtected && selectedInsertRows.length > 0 && pkCols.length > 0 && (
+            {/* P5: 一括編集 — all selected rows */}
+            {!isProtected && pkCols.length > 0 && (
               <button
-                onClick={() => setShowPKReplaceModal(true)}
+                onClick={() => setShowBulkEditModal(true)}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
-                title="選択した INSERT 行の PK 値を一括置換"
+                title="選択行のカラム値を一括編集"
               >
-                PK置換 ({selectedInsertRows.length})
+                一括編集 ({selectedRows.length})
               </button>
             )}
             {onCrossCopyRows && (
@@ -811,13 +860,13 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
                 style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#4b5563", border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
                 title="この行の最新の編集を取り消す"
               >
-                ⟲ 元に戻す
+                ⟲ Undo
               </button>
             )}
           </div>
         )}
-        {/* Feature 2: Clone all filtered rows — shown when a filter is active */}
-        {!isProtected && !editingBlocked && serverFilter !== "" && pkCols.length > 0 && (
+        {/* P3: Full-copy button — shown when no rows selected but filter is active */}
+        {!isProtected && !editingBlocked && selectedRows.length === 0 && serverFilter !== "" && pkCols.length > 0 && (
           <button
             onClick={handleCloneAllFiltered}
             disabled={fetchingAll || cloning || totalCount === 0}
@@ -851,7 +900,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       <div style={{ flex: 1, minHeight: 0 }}>
         <AgGridReact
           ref={gridRef}
-          rowData={rowData}
+          rowData={displayRows}
           columnDefs={colDefs}
           defaultColDef={{
             minWidth: 80,
@@ -887,13 +936,13 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         </div>
       )}
 
-      {/* Feature 1: PK bulk-replace modal */}
-      {showPKReplaceModal && (
-        <BulkPKReplaceModal
-          pkCols={pkCols}
-          selectedInsertRows={selectedInsertRows}
-          onApply={handleBulkPKReplace}
-          onClose={() => setShowPKReplaceModal(false)}
+      {/* P5: Bulk edit modal */}
+      {showBulkEditModal && (
+        <BulkEditModal
+          columns={columns}
+          selectedRows={selectedRows}
+          onApply={handleBulkEdit}
+          onClose={() => setShowBulkEditModal(false)}
         />
       )}
     </div>

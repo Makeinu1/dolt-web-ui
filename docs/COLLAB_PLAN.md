@@ -8,8 +8,8 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-07
-**最終コミット**: feat: 同テーブルコピーフロー UX改善（PK一括置換 / フィルタ全件コピー / 重複PKハイライト）
+**最終更新**: 2026-03-09
+**最終コミット**: feat: ユーザ不満5件対応 UX改善（リフレッシュ修正/ドラフトフィルタ/コピーボタン統合/ソースブランチ選択/一括編集拡張）
 **ブランチ**: `master`（直接プッシュ運用）
 
 ---
@@ -18,7 +18,7 @@
 
 ### 次のタスク: なし
 
-2026-03-07 の UX 改善3機能実装完了。次に対処すべき構造的問題は以下に記録（スコープ外）。
+2026-03-09 のユーザ不満5件対応完了。次に対処すべき構造的問題は以下に記録（スコープ外）。
 
 ---
 
@@ -66,9 +66,14 @@
 | **⑩ 文字型カラム自動拡張** | CrossCopyPreview/Rows/Table で VARCHAR/TEXT 幅不足時に ALTER TABLE MODIFY COLUMN を自動実行 | 本コミット |
 | **⑫ CSVバルク更新** | `POST /csv/preview` + `/csv/apply` + CSVImportModal（最大1000行、INSERT/UPDATE/skip） | 本コミット |
 | **⑧ 全テーブル横断検索** | `GET /search` — 全テーブル + メモ検索（LIKE クエリ）+ SearchModal | 本コミット |
-| **F1 PK 一括置換** | `BulkPKReplaceModal` + `draft.ts:bulkReplacePKInDraft` — 選択 INSERT 行の PK を一括検索/置換（プレビュー付き） | 本コミット |
-| **F2 フィルタ全件コピー** | `table.go` pageSize 上限 1000 + `all=true` 対応 / ツールバー「全件コピー」ボタン（フィルタ有効時） | 本コミット |
-| **F3 重複 PK ハイライト** | INSERT 行の PK が既存 DB 行と衝突する場合に橙ハイライト + CommitDialog に警告バナー | 本コミット |
+| **F1 PK 一括置換** | `BulkPKReplaceModal` + `draft.ts:bulkReplacePKInDraft` — 選択 INSERT 行の PK を一括検索/置換（プレビュー付き） | `bfb387e` |
+| **F2 フィルタ全件コピー** | `table.go` pageSize 上限 1000 + `all=true` 対応 / ツールバー「全件コピー」ボタン（フィルタ有効時） | `bfb387e` |
+| **F3 重複 PK ハイライト** | INSERT 行の PK が既存 DB 行と衝突する場合に橙ハイライト + CommitDialog に警告バナー | `bfb387e` |
+| **P1 コミット後リフレッシュ修正** | `refreshKey` 専用 useEffect 追加 — schemaTable ガードをスキップして無条件リロード | 本コミット |
+| **P2 ドラフト行フィルタ** | 「📝 ドラフトのみ」トグルボタン + `displayRows` useMemo — INSERT/UPDATE/DELETE 行のみ表示 | 本コミット |
+| **P3 コピーボタン統合** | 選択行あり→「コピー (N)」、選択なし+フィルタ→「全件コピー (N)」、両方なし→非表示 | 本コミット |
+| **P4 クロスDB ソースブランチ選択** | CrossCopyRowsModal/CrossCopyTableModal に「コピー元ブランチ」ドロップダウン追加（デフォルト main） | 本コミット |
+| **P5 一括編集拡張** | `BulkEditModal` — 全カラム対象 +「すべて置換」/「空欄のみ埋める」モード + 全選択行（INSERT/UPDATE/既存行）対応 | 本コミット |
 
 ---
 
@@ -86,22 +91,52 @@
 
 ---
 
-## 同テーブルコピーフロー UX改善 実装詳細（2026-03-07）
+## ユーザ不満5件対応 UX改善 実装詳細（2026-03-09）
 
-### F1: PK 一括置換モーダル
+### P1: コミット後グリッドリロード修正
 
-**対象ユースケース**: フィルタでコピーした100件の行の PK 文字列を一括置換（例: `_2024` → `_2025`）
+`TableGrid.tsx` の `loadRows` useCallback が `schemaTable !== tableName` ガードで `refreshKey` 変更後のリロードをスキップする競合を修正。`refreshKey` 専用の useEffect を追加（eslint-disable コメント付き）。
+
+### P2: ドラフト行フィルタ
 
 | ファイル | 変更内容 |
 |---|---|
-| `frontend/src/components/BulkPKReplaceModal/BulkPKReplaceModal.tsx` | **新規**: PK カラム選択(複合PK時) + 検索/置換入力 + リアルタイムプレビュー + 適用 |
-| `frontend/src/store/draft.ts` | `bulkReplacePKInDraft(table, pkColumn, search, replace, targetOldPkValues)` 追加 |
-| `frontend/src/components/TableGrid/TableGrid.tsx` | `handleBulkPKReplace` (draft+rowData同時更新) + ツールバー「PK置換 (N)」ボタン |
+| `frontend/src/components/TableGrid/TableGrid.tsx` | `showDraftOnly` state + `displayRows` useMemo（`draftIndex.has` または `_draftId != null` でフィルタ）+ ツールバー「📝 ドラフトのみ」トグルボタン |
+
+AG Grid の `rowData` prop を `displayRows` に変更。テーブル切替時に `setShowDraftOnly(false)` でリセット。
+
+### P3: コピーボタン統合
+
+選択行あり → 「コピー (N)」（selectedRows ブロック内）、選択なし + フィルタあり → 「全件コピー (N)」（外側）の2ボタン体制に整理。見た目は1ボタンずつ条件表示。
+
+### P4: クロスDB ソースブランチ選択
+
+| ファイル | 変更内容 |
+|---|---|
+| `frontend/src/components/CrossCopyModal/CrossCopyRowsModal.tsx` | `sourceBranch` state（デフォルト `"main"`）+ `sourceBranches` ロード + UI ドロップダウン + API 呼び出し変更 |
+| `frontend/src/components/CrossCopyModal/CrossCopyTableModal.tsx` | 同上。`branchName` 参照を削除し `sourceBranch` に統一 |
+
+ソートは保護ブランチ（main/audit）を上位に表示。
+
+### P5: 一括編集拡張（BulkEditModal）
+
+| ファイル | 変更内容 |
+|---|---|
+| `frontend/src/components/BulkPKReplaceModal/BulkEditModal.tsx` | **新規**: 全カラム対象 + モード選択（すべて置換/空欄のみ埋める）+ プレビュー付き |
+| `frontend/src/store/draft.ts` | `bulkReplacePKInDraft` 削除（`addOp` 直接呼び出しに置換） |
+| `frontend/src/store/draft.test.ts` | `bulkReplacePKInDraft` テスト削除（13テスト → 11テスト） |
+| `frontend/src/components/TableGrid/TableGrid.tsx` | `handleBulkEdit` 追加（`addOp` で UPDATE op、INSERT rows は自動吸収）+ rowData 即時更新 + ボタン条件を `selectedRows.length > 0` に緩和 |
 
 **重要設計**:
-- `handleBulkPKReplace` は `bulkReplacePKInDraft` と `setRowData` を必ずセットで呼ぶ（二重更新バグ防止）
-- `targetOldPkValues` = 選択 INSERT 行のうち `search` を含む旧 PK 値の Set → 両側で同一フィルタを適用
-- `getRowId` は INSERT 行で `_draftId` ベースなので PK 変更後も AG Grid の行 ID は不変
+- INSERT 行への update は `draft.ts:addOp` の INSERT 吸収ロジック（`insertIdx` 探索）で自動マージ
+- `"fill-empty"` モード: 空文字・`"null"`・`"NULL"` のセルのみ書き込み
+- Undo ボタン表記: 「⟲ 元に戻す」 → 「⟲ Undo」
+
+## 同テーブルコピーフロー UX改善 実装詳細（2026-03-07）
+
+### F1: PK 一括置換モーダル（廃止 → BulkEditModal に統合済み）
+
+旧 `BulkPKReplaceModal` の機能は P5 `BulkEditModal` に包含。`draft.ts:bulkReplacePKInDraft` は削除済み。
 
 ### F2: フィルタ全件コピー
 
