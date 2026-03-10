@@ -158,7 +158,6 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	filter := r.URL.Query().Get("filter")           // "all" | "merges_only" | "exclude_auto_merge"
 	keyword := r.URL.Query().Get("keyword")         // substring match on message
 	fromDate := r.URL.Query().Get("from_date")      // YYYY-MM-DD
 	toDate := r.URL.Query().Get("to_date")          // YYYY-MM-DD
@@ -166,7 +165,7 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	filterTable := r.URL.Query().Get("filter_table") // table name for record-level filter
 	filterPk := r.URL.Query().Get("filter_pk")       // JSON-encoded PK for record-level filter
 
-	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, filter, keyword, fromDate, toDate, searchField, filterTable, filterPk)
+	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, keyword, fromDate, toDate, searchField, filterTable, filterPk)
 	if err != nil {
 		handleServiceError(w, err)
 		return

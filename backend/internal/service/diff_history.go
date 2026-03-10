@@ -4,16 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
-
-// workBranchExtractRe extracts a work branch name (wi/xxx/xx) from a commit message.
-var workBranchExtractRe = regexp.MustCompile(`wi/[A-Za-z0-9._-]+/[0-9]{1,3}`)
 
 // parsePK parses a URL-encoded JSON PK map and returns it as-is.
 // Supports both single and composite primary keys.
@@ -28,14 +24,13 @@ func parsePK(pkJSON string) (map[string]interface{}, error) {
 	return pkMap, nil
 }
 
-// HistoryCommits returns the commit log for a branch.
-// filter: "all" (default), "merges_only" (main: merge commits only),
-// "exclude_auto_merge" (work branch: exclude auto-sync merges).
-// keyword: substring match on message (empty = no filter).
+// HistoryCommits returns the merge history by querying dolt_tags (merged/* tags).
+// Each merged/* tag is created during ApproveRequest with the merge commit hash and message.
+// keyword: substring match on message or tag_name (empty = no filter).
 // fromDate/toDate: ISO date "YYYY-MM-DD" inclusive range (empty = no filter).
 // searchField: "message" (default) | "branch" — controls keyword matching target.
 // filterTable/filterPk: if both set, further filter to commits that changed the specific record.
-func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, filter, keyword, fromDate, toDate, searchField, filterTable, filterPk string) ([]model.HistoryCommit, error) {
+func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, keyword, fromDate, toDate, searchField, filterTable, filterPk string) ([]model.HistoryCommit, error) {
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -44,73 +39,39 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	offset := (page - 1) * pageSize
 
-	// Build base FROM clause based on filter
-	var baseFrom string
+	// Build WHERE conditions for dolt_tags query
+	var conditions []string
 	var args []interface{}
 
-	switch filter {
-	case "merges_only":
-		// Show merge commits on main: 2+ parents in dolt_commit_ancestors (standard Dolt merge)
-		// OR message contains wi/xxx/xx branch pattern (our custom Approve merge commit).
-		// LEFT JOIN ensures commits with our custom messages are not filtered out when
-		// dolt_commit_ancestors doesn't yet reflect the merge topology.
-		baseFrom = `dolt_log AS l
-			LEFT JOIN (
-				SELECT commit_hash FROM dolt_commit_ancestors
-				GROUP BY commit_hash HAVING COUNT(*) > 1
-			) AS m ON l.commit_hash = m.commit_hash`
+	conditions = append(conditions, "tag_name LIKE 'merged/%'")
 
-	case "exclude_auto_merge":
-		// For work branches: exclude auto-generated merge commits
-		baseFrom = `dolt_log AS l`
-	case "exclude_comments":
-		baseFrom = `dolt_log AS l`
-	case "exclude_auto_merge_and_comments":
-		baseFrom = `dolt_log AS l`
-	default:
-		baseFrom = `dolt_log AS l`
-	}
-
-	// Build WHERE conditions
-	var conditions []string
-
-	switch filter {
-	case "merges_only":
-		// Keep only commits that are either standard merge commits (2+ parents via LEFT JOIN)
-		// OR contain our wi/xxx/xx branch name pattern (custom Approve merge message).
-		conditions = append(conditions, "(m.commit_hash IS NOT NULL OR l.message REGEXP 'wi/[A-Za-z0-9._-]+/[0-9]+')")
-	case "exclude_auto_merge":
-		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'")
-	case "exclude_comments":
-		conditions = append(conditions, "l.message NOT LIKE '[comment]%'")
-	case "exclude_auto_merge_and_comments":
-		conditions = append(conditions, "l.message NOT LIKE 'Merge branch%'", "l.message != 'Merge main with conflict resolution'", "l.message NOT LIKE '[comment]%'")
-	}
-
-	// Optional keyword filter — use | as ESCAPE character to avoid Dolt parser issues with backslash.
+	// Optional keyword filter
 	if keyword != "" {
 		escapedKw := strings.ReplaceAll(keyword, "|", "||")
 		escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
 		escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
-		conditions = append(conditions, "l.message LIKE ? ESCAPE '|'")
 		if searchField == "branch" {
-			args = append(args, "%wi/"+escapedKw+"%")
+			// Search by branch name: merged/{keyword}%
+			conditions = append(conditions, "tag_name LIKE ? ESCAPE '|'")
+			args = append(args, "merged/"+escapedKw+"%")
 		} else {
+			// Search by message
+			conditions = append(conditions, "message LIKE ? ESCAPE '|'")
 			args = append(args, "%"+escapedKw+"%")
 		}
 	}
 
 	// Optional date range filters
 	if fromDate != "" {
-		conditions = append(conditions, "l.date >= ?")
+		conditions = append(conditions, "date >= ?")
 		args = append(args, fromDate)
 	}
 	if toDate != "" {
-		conditions = append(conditions, "l.date <= ?")
+		conditions = append(conditions, "date <= ?")
 		args = append(args, toDate+" 23:59:59")
 	}
 
-	// Assemble query. When filtering by record, fetch a larger batch (paginate after filtering).
+	// When filtering by record, fetch a larger batch (paginate after filtering).
 	fetchLimit := pageSize
 	fetchOffset := offset
 	if filterTable != "" && filterPk != "" {
@@ -118,31 +79,32 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		fetchOffset = 0
 	}
 
-	query := fmt.Sprintf("SELECT l.commit_hash, l.committer, l.message, l.date FROM %s", baseFrom)
+	query := "SELECT tag_name, tag_hash, tagger, message, date FROM dolt_tags"
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += " ORDER BY l.date DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY date DESC LIMIT ? OFFSET ?"
 	args = append(args, fetchLimit, fetchOffset)
 
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query history: %w", err)
+		return nil, fmt.Errorf("failed to query merge tags: %w", err)
 	}
 
-	// Collect commits — must close rows explicitly before any potential Step 2 query.
+	// Collect commits — must close rows explicitly before any potential record filter query.
 	commits := make([]model.HistoryCommit, 0)
 	for rows.Next() {
-		var c model.HistoryCommit
-		if err := rows.Scan(&c.Hash, &c.Author, &c.Message, &c.Timestamp); err != nil {
+		var tagName, tagHash, tagger, message, date string
+		if err := rows.Scan(&tagName, &tagHash, &tagger, &message, &date); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("failed to scan commit: %w", err)
+			return nil, fmt.Errorf("failed to scan tag: %w", err)
 		}
-		// 2a: Extract work branch name from merge commit message
-		if filter == "merges_only" {
-			if m := workBranchExtractRe.FindString(c.Message); m != "" {
-				c.MergeBranch = m
-			}
+		c := model.HistoryCommit{
+			Hash:        tagHash,
+			Author:      tagger,
+			Message:     message,
+			Timestamp:   date,
+			MergeBranch: "wi/" + strings.TrimPrefix(tagName, "merged/"),
 		}
 		commits = append(commits, c)
 	}
@@ -150,7 +112,7 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		rows.Close()
 		return nil, err
 	}
-	rows.Close() // Explicit close BEFORE potential Step 2 query on same connection.
+	rows.Close() // Explicit close BEFORE potential record filter query on same connection.
 
 	// If no record filter, return with pagination already applied by the query.
 	if filterTable == "" || filterPk == "" {
