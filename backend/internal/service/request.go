@@ -340,9 +340,18 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	bgCtx := context.Background()
 
 	// Audit tag: merged/<WorkItem>/<Round>
+	// This tag is the sole source for MergeLog, so retry on failure.
 	mergedTag := "merged/" + strings.TrimPrefix(req.RequestID, "req/")
-	if _, err := conn.ExecContext(bgCtx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag); err != nil {
-		log.Printf("ERROR: audit tag creation failed for %s: %v", mergedTag, err)
+	var tagCreateErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, tagCreateErr = conn.ExecContext(bgCtx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", req.MergeMessageJa, mergedTag); tagCreateErr == nil {
+			break
+		}
+		log.Printf("WARN: audit tag creation attempt %d failed for %s: %v", attempt+1, mergedTag, tagCreateErr)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if tagCreateErr != nil {
+		log.Printf("CRITICAL: audit tag creation failed after 3 retries for %s: %v", mergedTag, tagCreateErr)
 	}
 
 	// Delete request tag (critical: if this fails, branch stays locked)
