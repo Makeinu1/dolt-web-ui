@@ -383,6 +383,7 @@ export function HistoryTab() {
   const [diffGridTable, setDiffGridTable] = useState<string | null>(null);
   const [exportingZip, setExportingZip] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
 
   // Load branches
   useEffect(() => {
@@ -417,14 +418,18 @@ export function HistoryTab() {
   const handleExportZip = async () => {
     setExportingZip(true);
     setExportError(null);
+    setExportWarning(null);
     try {
-      const { blob, filename } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
+      const { blob, filename, warning } = await api.exportDiffZip(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+      if (warning) {
+        setExportWarning(warning);
+      }
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "ZIPエクスポートに失敗しました";
       setExportError(msg);
@@ -485,6 +490,11 @@ export function HistoryTab() {
               {loadingSummary ? "比較中..." : "比較する"}
             </button>
           </div>
+          {exportWarning && (
+            <div style={{ marginTop: 8, padding: "6px 10px", background: "#fef3c7", color: "#92400e", fontSize: 12, borderRadius: 4 }}>
+              {exportWarning}
+            </div>
+          )}
         </div>
 
         {summaryError && (

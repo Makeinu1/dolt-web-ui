@@ -240,22 +240,24 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 // ExportDiffZip generates a ZIP archive containing per-table, per-diff-type CSV files.
 // Files are named {table}_insert.csv / {table}_update.csv / {table}_delete.csv.
 // Update rows contain new values only (no old_ columns).
-func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchName, fromRef, toRef, mode string) ([]byte, string, error) {
+func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchName, fromRef, toRef, mode string) ([]byte, string, string, error) {
 	if err := validateRef("from", fromRef); err != nil {
-		return nil, "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+		return nil, "", "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
 	if err := validateRef("to", toRef); err != nil {
-		return nil, "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+		return nil, "", "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
 
 	// Get diff summary to know which tables have changes
 	entries, err := s.DiffSummary(ctx, targetID, dbName, branchName, fromRef, toRef, mode)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to get diff summary: %w", err)
+		return nil, "", "", fmt.Errorf("failed to get diff summary: %w", err)
 	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+	truncatedTables := make([]string, 0)
+	truncatedTableSet := make(map[string]bool)
 
 	for _, entry := range entries {
 		diffTypes := []struct {
@@ -285,6 +287,10 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 			rowLimit := count + 100
 			if rowLimit > 10000 {
 				rowLimit = 10000
+				if !truncatedTableSet[entry.Table] {
+					truncatedTableSet[entry.Table] = true
+					truncatedTables = append(truncatedTables, entry.Table)
+				}
 			}
 			// Fetch all rows for this table/diffType (no pagination)
 			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, 1, rowLimit)
@@ -350,9 +356,13 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 	}
 
 	if err := zw.Close(); err != nil {
-		return nil, "", fmt.Errorf("failed to close zip: %w", err)
+		return nil, "", "", fmt.Errorf("failed to close zip: %w", err)
 	}
 
 	zipName := fmt.Sprintf("diff-%s-%s.zip", fromRef, toRef)
-	return buf.Bytes(), zipName, nil
+	warning := ""
+	if len(truncatedTables) > 0 {
+		warning = fmt.Sprintf("一部のCSVは1テーブルあたり10000行で打ち切られています: %s", strings.Join(truncatedTables, ", "))
+	}
+	return buf.Bytes(), zipName, warning, nil
 }

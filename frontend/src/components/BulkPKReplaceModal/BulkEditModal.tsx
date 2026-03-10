@@ -4,7 +4,7 @@ import type { ColumnSchema } from "../../types/api";
 interface BulkEditModalProps {
   columns: ColumnSchema[];
   selectedRows: Record<string, unknown>[];
-  onApply: (column: string, value: string, mode: "replace" | "fill-empty") => void;
+  onApply: (column: string, value: string, mode: "replace" | "fill-empty" | "find-replace", searchValue?: string) => void;
   onClose: () => void;
 }
 
@@ -15,8 +15,9 @@ export function BulkEditModal({
   onClose,
 }: BulkEditModalProps) {
   const [targetColumn, setTargetColumn] = useState(columns[0]?.name ?? "");
-  const [mode, setMode] = useState<"replace" | "fill-empty">("replace");
+  const [mode, setMode] = useState<"replace" | "fill-empty" | "find-replace">("replace");
   const [value, setValue] = useState("");
+  const [searchValue, setSearchValue] = useState("");
 
   const preview = useMemo(() => {
     if (!targetColumn) return [];
@@ -24,21 +25,28 @@ export function BulkEditModal({
       const oldVal = row[targetColumn];
       const oldStr =
         oldVal === null || oldVal === undefined ? "" : String(oldVal);
-      const willChange =
-        mode === "replace" ||
-        oldStr === "" ||
-        oldStr === "null" ||
-        oldStr === "NULL";
-      const newStr = willChange ? value : oldStr;
+      let willChange: boolean;
+      let newStr: string;
+      if (mode === "find-replace") {
+        willChange = searchValue !== "" && oldStr.includes(searchValue);
+        newStr = willChange ? oldStr.replaceAll(searchValue, value) : oldStr;
+      } else {
+        willChange =
+          mode === "replace" ||
+          oldStr === "" ||
+          oldStr === "null" ||
+          oldStr === "NULL";
+        newStr = willChange ? value : oldStr;
+      }
       return { oldStr, newStr, willChange };
     });
-  }, [selectedRows, targetColumn, value, mode]);
+  }, [selectedRows, targetColumn, value, searchValue, mode]);
 
   const changeCount = preview.filter((p) => p.willChange).length;
 
   const handleApply = () => {
     if (!targetColumn || changeCount === 0) return;
-    onApply(targetColumn, value, mode);
+    onApply(targetColumn, value, mode, mode === "find-replace" ? searchValue : undefined);
     onClose();
   };
 
@@ -129,28 +137,88 @@ export function BulkEditModal({
               />
               空欄のみ埋める
             </label>
-          </div>
-
-          {/* Value input */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, minWidth: 120 }}>
-              値
-            </label>
-            <input
-              type="text"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="設定する値"
+            <label
               style={{
                 fontSize: 12,
-                padding: "3px 8px",
-                border: "1px solid #d1d5db",
-                borderRadius: 4,
-                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                cursor: "pointer",
               }}
-              autoFocus
-            />
+            >
+              <input
+                type="radio"
+                name="bulk-edit-mode"
+                value="find-replace"
+                checked={mode === "find-replace"}
+                onChange={() => setMode("find-replace")}
+              />
+              文字を置換
+            </label>
           </div>
+
+          {/* Value input(s) */}
+          {mode === "find-replace" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, minWidth: 120 }}>
+                  検索文字列
+                </label>
+                <input
+                  type="text"
+                  value={searchValue}
+                  onChange={(e) => setSearchValue(e.target.value)}
+                  placeholder="置換対象の文字列"
+                  style={{
+                    fontSize: 12,
+                    padding: "3px 8px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    flex: 1,
+                  }}
+                  autoFocus
+                />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, minWidth: 120 }}>
+                  置換文字列
+                </label>
+                <input
+                  type="text"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="置換後の文字列"
+                  style={{
+                    fontSize: 12,
+                    padding: "3px 8px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    flex: 1,
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, minWidth: 120 }}>
+                値
+              </label>
+              <input
+                type="text"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="設定する値"
+                style={{
+                  fontSize: 12,
+                  padding: "3px 8px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 4,
+                  flex: 1,
+                }}
+                autoFocus
+              />
+            </div>
+          )}
         </div>
 
         {/* Preview */}
@@ -216,7 +284,7 @@ export function BulkEditModal({
                       fontStyle: "italic",
                     }}
                   >
-                    スキップ（空欄以外）
+                    {mode === "find-replace" ? "スキップ（検索文字列なし）" : "スキップ（空欄以外）"}
                   </span>
                 )}
               </div>

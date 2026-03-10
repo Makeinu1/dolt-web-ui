@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { CommitOp } from "../types/api";
 import { safeGetJSON, safeSetJSON } from "../utils/safeStorage";
+import { stablePkJson } from "../utils/stablePk";
 
 const STORAGE_KEY = "dolt-web-ui-draft";
 
@@ -56,12 +57,15 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     // the new op must be folded into the INSERT rather than sent separately —
     // otherwise the backend would try to INSERT a duplicate PK first and fail.
     if ((op.type === "update" || op.type === "delete") && op.pk) {
+      const opPk = op.pk;
+      const opPkKey = stablePkJson(opPk);
       const insertIdx = currentOps.findIndex(
         (o) =>
           o.type === "insert" &&
           o.table === op.table &&
-          op.pk != null &&
-          Object.entries(op.pk).every(([k, v]) => String(o.values[k]) === String(v))
+          stablePkJson(
+            Object.fromEntries(Object.keys(opPk).map((k) => [k, o.values[k]]))
+          ) === opPkKey
       );
       if (insertIdx !== -1) {
         if (op.type === "delete") {
@@ -84,8 +88,13 @@ export const useDraftStore = create<DraftState>((set, get) => ({
 
     // Merge consecutive UPDATEs to the same row into a single op.
     if (op.type === "update") {
+      const opPkKey = op.pk ? stablePkJson(op.pk) : "";
       const existingIdx = currentOps.findIndex(
-        (o) => o.type === "update" && o.table === op.table && JSON.stringify(o.pk) === JSON.stringify(op.pk)
+        (o) =>
+          o.type === "update" &&
+          o.table === op.table &&
+          o.pk != null &&
+          stablePkJson(o.pk) === opPkKey
       );
 
       if (existingIdx !== -1) {

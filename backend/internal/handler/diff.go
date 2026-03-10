@@ -92,7 +92,7 @@ func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
 		mode = "three_dot"
 	}
 
-	data, zipName, err := h.svc.ExportDiffZip(r.Context(), targetID, dbName, branchName, fromRef, toRef, mode)
+	data, zipName, warning, err := h.svc.ExportDiffZip(r.Context(), targetID, dbName, branchName, fromRef, toRef, mode)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -107,6 +107,9 @@ func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
 		return r
 	}, zipName)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+safeZipName+`"`)
+	if warning != "" {
+		w.Header().Set("X-Diff-Warning", warning)
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(data) //nolint:errcheck
 }
@@ -158,9 +161,9 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	keyword := r.URL.Query().Get("keyword")         // substring match on message
-	fromDate := r.URL.Query().Get("from_date")      // YYYY-MM-DD
-	toDate := r.URL.Query().Get("to_date")          // YYYY-MM-DD
+	keyword := r.URL.Query().Get("keyword")          // substring match on message
+	fromDate := r.URL.Query().Get("from_date")       // YYYY-MM-DD
+	toDate := r.URL.Query().Get("to_date")           // YYYY-MM-DD
 	searchField := r.URL.Query().Get("search_field") // "message" (default) | "branch"
 	filterTable := r.URL.Query().Get("filter_table") // table name for record-level filter
 	filterPk := r.URL.Query().Get("filter_pk")       // JSON-encoded PK for record-level filter

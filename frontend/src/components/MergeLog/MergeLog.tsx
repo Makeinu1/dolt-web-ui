@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, memo } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
@@ -27,6 +27,9 @@ interface CommitDiff {
     error: string | null;
 }
 
+const VISIBLE_PRELOAD_COUNT = 5;
+const PRELOAD_CONCURRENCY = 2;
+
 function formatTimestamp(ts: string): string {
     if (!ts) return "—";
     const d = new Date(ts);
@@ -48,14 +51,16 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
     const [page, setPage] = useState(1);
     const pageSize = 30;
 
-    // Expanded commit → per-table diff summary
-    const [expandedHash, setExpandedHash] = useState<string | null>(null);
+    // DiffSummary per commit (auto-loaded)
     const [diffMap, setDiffMap] = useState<Record<string, CommitDiff>>({});
+    const diffStatusRef = useRef<Record<string, "loading" | "loaded">>({});
+    const searchVersionRef = useRef(0);
 
     // Expanded table (within a commit)
     const [expandedTableKey, setExpandedTableKey] = useState<string | null>(null);
     const [exportingZip, setExportingZip] = useState(false);
     const [zipError, setZipError] = useState<string | null>(null);
+    const [zipWarning, setZipWarning] = useState<string | null>(null);
 
     // 2b: cross-merge comparison — up to 2 selected hashes
     const [compareHashes, setCompareHashes] = useState<string[]>([]);
@@ -64,13 +69,68 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
     const [compareError, setCompareError] = useState<string | null>(null);
     const [compareTableKey, setCompareTableKey] = useState<string | null>(null);
 
+    const loadDiffSummary = useCallback(async (hash: string, version = searchVersionRef.current) => {
+        if (searchVersionRef.current !== version) return;
+
+        const status = diffStatusRef.current[hash];
+        if (status === "loading" || status === "loaded") return;
+
+        diffStatusRef.current[hash] = "loading";
+        setDiffMap((prev) => ({
+            ...prev,
+            [hash]: { entries: prev[hash]?.entries || [], loading: true, error: null },
+        }));
+
+        try {
+            const res = await api.getDiffSummary(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
+            if (searchVersionRef.current !== version) return;
+            diffStatusRef.current[hash] = "loaded";
+            setDiffMap((prev) => ({
+                ...prev,
+                [hash]: { entries: res.entries || [], loading: false, error: null },
+            }));
+        } catch {
+            if (searchVersionRef.current !== version) return;
+            delete diffStatusRef.current[hash];
+            setDiffMap((prev) => ({
+                ...prev,
+                [hash]: { entries: [], loading: false, error: "差分の読み込みに失敗しました" },
+            }));
+        }
+    }, [targetId, dbName]);
+
+    const preloadVisibleDiffs = useCallback(async (hashes: string[], version: number) => {
+        if (hashes.length === 0) return;
+
+        let nextIndex = 0;
+        const workerCount = Math.min(PRELOAD_CONCURRENCY, hashes.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (searchVersionRef.current === version) {
+                const currentIndex = nextIndex;
+                nextIndex += 1;
+                if (currentIndex >= hashes.length) return;
+                await loadDiffSummary(hashes[currentIndex], version);
+            }
+        });
+
+        await Promise.all(workers);
+    }, [loadDiffSummary]);
+
     const handleSearch = useCallback(async (p = 1) => {
         if (!targetId || !dbName) return;
+        const version = searchVersionRef.current + 1;
+        searchVersionRef.current = version;
+        diffStatusRef.current = {};
         setLoading(true);
         setSearched(false);
         setSearchError(null);
-        setExpandedHash(null);
+        setZipWarning(null);
+        setDiffMap({});
         setExpandedTableKey(null);
+        setCompareHashes([]);
+        setCompareResult(null);
+        setCompareError(null);
+        setCompareTableKey(null);
         try {
             const result = await api.getHistoryCommits(
                 targetId,
@@ -85,18 +145,26 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                 filterTable ?? "",
                 filterPk ?? ""
             );
+            if (searchVersionRef.current !== version) return;
             setCommits(result || []);
             setPage(p);
             setSearched(true);
+            void preloadVisibleDiffs(
+                (result || []).slice(0, VISIBLE_PRELOAD_COUNT).map((c) => c.hash),
+                version
+            );
         } catch (err) {
+            if (searchVersionRef.current !== version) return;
             const msg = err instanceof ApiError ? err.message : "マージログの読み込みに失敗しました";
             setCommits([]);
             setSearchError(msg);
             setSearched(true);
         } finally {
-            setLoading(false);
+            if (searchVersionRef.current === version) {
+                setLoading(false);
+            }
         }
-    }, [targetId, dbName, keyword, fromDate, toDate, searchField, filterTable, filterPk]);
+    }, [targetId, dbName, keyword, fromDate, toDate, searchField, filterTable, filterPk, preloadVisibleDiffs]);
 
     // Auto-load on open
     useEffect(() => {
@@ -104,45 +172,28 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleToggleCommit = async (hash: string) => {
-        if (expandedHash === hash) {
-            setExpandedHash(null);
-            return;
-        }
-        setExpandedHash(hash);
-        setExpandedTableKey(null);
-
-        if (diffMap[hash]) return; // already loaded
-
-        setDiffMap((prev) => ({
-            ...prev,
-            [hash]: { entries: [], loading: true, error: null },
-        }));
-        try {
-            const res = await api.getDiffSummary(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
-            setDiffMap((prev) => ({
-                ...prev,
-                [hash]: { entries: res.entries || [], loading: false, error: null },
-            }));
-        } catch {
-            setDiffMap((prev) => ({
-                ...prev,
-                [hash]: { entries: [], loading: false, error: "差分の読み込みに失敗しました" },
-            }));
-        }
+    // Toggle InlineDiff visibility (DiffSummary is always shown)
+    const handleToggleInlineDiff = async (hash: string, table: string) => {
+        await loadDiffSummary(hash);
+        const tableKey = `${hash}::${table}`;
+        setExpandedTableKey((prev) => prev === tableKey ? null : tableKey);
     };
 
     const handleExportZip = async (hash: string) => {
         setExportingZip(true);
         setZipError(null);
+        setZipWarning(null);
         try {
-            const { blob, filename } = await api.exportDiffZip(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
+            const { blob, filename, warning } = await api.exportDiffZip(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
             a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
+            if (warning) {
+                setZipWarning(warning);
+            }
         } catch {
             setZipError("ZIPのエクスポートに失敗しました");
         } finally {
@@ -210,6 +261,11 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                 {zipError && (
                     <div style={{ padding: "4px 10px", background: "#fee2e2", color: "#991b1b", fontSize: 12, borderRadius: 4, marginBottom: 8 }}>
                         {zipError}
+                    </div>
+                )}
+                {zipWarning && (
+                    <div style={{ padding: "4px 10px", background: "#fef3c7", color: "#92400e", fontSize: 12, borderRadius: 4, marginBottom: 8 }}>
+                        {zipWarning}
                     </div>
                 )}
 
@@ -395,9 +451,9 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                         </div>
                     )}
 
-                    {commits.map((c) => {
-                        const isExpanded = expandedHash === c.hash;
+                    {commits.map((c, index) => {
                         const diff = diffMap[c.hash];
+                        const isVisiblePreload = index < VISIBLE_PRELOAD_COUNT;
                         const msgLines = c.message.split("\n");
                         const firstLine = msgLines[0];
                         const isChecked = compareHashes.includes(c.hash);
@@ -409,7 +465,7 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                     border: `1px solid ${isChecked ? "#4361ee" : "#e2e8f0"}`,
                                     borderRadius: 6,
                                     marginBottom: 8,
-                                    background: isChecked ? "#f0f4ff" : isExpanded ? "#f0f9ff" : "#fff",
+                                    background: isChecked ? "#f0f4ff" : "#fff",
                                 }}
                             >
                                 {/* コミットヘッダ */}
@@ -429,10 +485,7 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                         title="比較対象として選択"
                                         style={{ marginRight: 8, marginTop: 3, flexShrink: 0, cursor: "pointer" }}
                                     />
-                                    <div
-                                        style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
-                                        onClick={() => handleToggleCommit(c.hash)}
-                                    >
+                                    <div style={{ flex: 1, minWidth: 0 }}>
                                         {/* 2a: branch name badge */}
                                         {c.merge_branch && (
                                             <span style={{
@@ -451,6 +504,11 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                         )}
                                         <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 2 }}>
                                             {firstLine}
+                                            {diff && !diff.loading && diff.entries.length > 0 && (
+                                                <span style={{ fontSize: 11, color: "#888", fontWeight: 400, marginLeft: 8 }}>
+                                                    ({diff.entries.length} テーブル)
+                                                </span>
+                                            )}
                                         </div>
                                         <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
                                             📅 {formatTimestamp(c.timestamp)}
@@ -475,102 +533,117 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                                 📋 閲覧
                                             </button>
                                         )}
-                                        <span
-                                            style={{ fontSize: 12, color: "#3b82f6", cursor: "pointer" }}
-                                            onClick={() => handleToggleCommit(c.hash)}
-                                        >
-                                            {isExpanded ? "▲ 閉じる" : "▶ 差分"}
-                                        </span>
                                     </div>
                                 </div>
 
-                                {/* 差分サマリー展開 */}
-                                {isExpanded && (
-                                    <div style={{
-                                        borderTop: "1px solid #e2e8f0",
-                                        padding: "8px 12px",
-                                        background: "#f8fafc",
-                                    }}>
-                                        {diff?.loading && (
-                                            <div style={{ fontSize: 12, color: "#888" }}>差分を読み込み中...</div>
-                                        )}
-                                        {diff?.error && (
+                                {/* 差分サマリー（常時表示） */}
+                                <div style={{
+                                    borderTop: "1px solid #e2e8f0",
+                                    padding: "8px 12px",
+                                    background: "#f8fafc",
+                                }}>
+                                    {diff?.loading && (
+                                        <div style={{ fontSize: 12, color: "#888" }}>差分を読み込み中...</div>
+                                    )}
+                                    {diff?.error && (
+                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                                             <div style={{ fontSize: 12, color: "#991b1b" }}>{diff.error}</div>
-                                        )}
-                                        {diff && !diff.loading && !diff.error && diff.entries.length === 0 && (
-                                            <div style={{ fontSize: 12, color: "#888" }}>テーブル変更なし</div>
-                                        )}
-                                        {diff && !diff.loading && diff.entries.length > 0 && (
-                                            <>
-                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                                                    <span style={{ fontSize: 11, color: "#666" }}>テーブル別変更数（クリックで詳細）</span>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleExportZip(c.hash); }}
-                                                        disabled={exportingZip}
-                                                        style={{ fontSize: 11, padding: "2px 8px", background: "#f0f4ff", border: "1px solid #4361ee", borderRadius: 4, color: "#4361ee", cursor: "pointer" }}
-                                                    >
-                                                        {exportingZip ? "生成中..." : "📥 ZIP"}
-                                                    </button>
-                                                </div>
-                                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                                                    <thead>
-                                                        <tr style={{ borderBottom: "1px solid #d0d0d8", color: "#666" }}>
-                                                            <th style={{ textAlign: "left", padding: "3px 8px" }}>テーブル</th>
-                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>+追加</th>
-                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>~変更</th>
-                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>-削除</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {diff.entries.map((e) => {
-                                                            const tableKey = `${c.hash}::${e.table}`;
-                                                            const isTableExpanded = expandedTableKey === tableKey;
-                                                            return (
-                                                                <tr
-                                                                    key={e.table}
-                                                                    style={{
-                                                                        borderBottom: "1px solid #f0f0f5",
-                                                                        cursor: "pointer",
-                                                                        background: isTableExpanded ? "#e0e7ff" : undefined,
-                                                                    }}
-                                                                    onClick={(ev) => {
-                                                                        ev.stopPropagation();
-                                                                        setExpandedTableKey(isTableExpanded ? null : tableKey);
-                                                                    }}
-                                                                >
-                                                                    <td style={{ padding: "3px 8px", fontFamily: "monospace", fontWeight: 500 }}>
-                                                                        {e.table}
-                                                                    </td>
-                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>
-                                                                        {e.added > 0 ? `+${e.added}` : "—"}
-                                                                    </td>
-                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>
-                                                                        {e.modified > 0 ? `~${e.modified}` : "—"}
-                                                                    </td>
-                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>
-                                                                        {e.removed > 0 ? `-${e.removed}` : "—"}
-                                                                    </td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); void loadDiffSummary(c.hash); }}
+                                                style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer", color: "#334155" }}
+                                            >
+                                                再試行
+                                            </button>
+                                        </div>
+                                    )}
+                                    {diff && !diff.loading && !diff.error && diff.entries.length === 0 && (
+                                        <div style={{ fontSize: 12, color: "#888" }}>テーブル変更なし</div>
+                                    )}
+                                    {diff && !diff.loading && diff.entries.length > 0 && (
+                                        <>
+                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                                <span style={{ fontSize: 11, color: "#666" }}>テーブル別変更数（クリックで詳細）</span>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleExportZip(c.hash); }}
+                                                    disabled={exportingZip}
+                                                    style={{ fontSize: 11, padding: "2px 8px", background: "#f0f4ff", border: "1px solid #4361ee", borderRadius: 4, color: "#4361ee", cursor: "pointer" }}
+                                                >
+                                                    {exportingZip ? "生成中..." : "📥 ZIP"}
+                                                </button>
+                                            </div>
+                                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                                <thead>
+                                                    <tr style={{ borderBottom: "1px solid #d0d0d8", color: "#666" }}>
+                                                        <th style={{ textAlign: "left", padding: "3px 8px" }}>テーブル</th>
+                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>+追加</th>
+                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>~変更</th>
+                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>-削除</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {diff.entries.map((e) => {
+                                                        const tableKey = `${c.hash}::${e.table}`;
+                                                        const isTableExpanded = expandedTableKey === tableKey;
+                                                        return (
+                                                            <tr
+                                                                key={e.table}
+                                                                style={{
+                                                                    borderBottom: "1px solid #f0f0f5",
+                                                                    cursor: "pointer",
+                                                                    background: isTableExpanded ? "#e0e7ff" : undefined,
+                                                                }}
+                                                                onClick={(ev) => {
+                                                                    ev.stopPropagation();
+                                                                    handleToggleInlineDiff(c.hash, e.table);
+                                                                }}
+                                                            >
+                                                                <td style={{ padding: "3px 8px", fontFamily: "monospace", fontWeight: 500 }}>
+                                                                    {e.table}{isTableExpanded ? " ▲" : " ▶"}
+                                                                </td>
+                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>
+                                                                    {e.added > 0 ? `+${e.added}` : "—"}
+                                                                </td>
+                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>
+                                                                    {e.modified > 0 ? `~${e.modified}` : "—"}
+                                                                </td>
+                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>
+                                                                    {e.removed > 0 ? `-${e.removed}` : "—"}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
 
-                                                {/* Inline DiffTableDetail for expanded table */}
-                                                {expandedTableKey && expandedTableKey.startsWith(`${c.hash}::`) && (
-                                                    <InlineDiff
-                                                        targetId={targetId}
-                                                        dbName={dbName}
-                                                        branchName="main"
-                                                        table={expandedTableKey.split("::")[1]}
-                                                        fromRef={`${c.hash}^`}
-                                                        toRef={c.hash}
-                                                    />
-                                                )}
-                                            </>
-                                        )}
-                                    </div>
-                                )}
+                                            {/* Inline DiffTableDetail for expanded table */}
+                                            {expandedTableKey && expandedTableKey.startsWith(`${c.hash}::`) && (
+                                                <InlineDiff
+                                                    targetId={targetId}
+                                                    dbName={dbName}
+                                                    branchName="main"
+                                                    table={expandedTableKey.split("::")[1]}
+                                                    fromRef={`${c.hash}^`}
+                                                    toRef={c.hash}
+                                                />
+                                            )}
+                                        </>
+                                    )}
+                                    {!diff && (
+                                        isVisiblePreload ? (
+                                            <div style={{ fontSize: 12, color: "#888" }}>差分を読み込み中...</div>
+                                        ) : (
+                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                                                <div style={{ fontSize: 12, color: "#888" }}>差分サマリーは必要時に読み込みます</div>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); void loadDiffSummary(c.hash); }}
+                                                    style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer", color: "#334155" }}
+                                                >
+                                                    差分を表示
+                                                </button>
+                                            </div>
+                                        )
+                                    )}
+                                </div>
                             </div>
                         );
                     })}

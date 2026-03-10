@@ -69,6 +69,25 @@ describe("addOp — UPDATE merge", () => {
     useDraftStore.getState().addOp({ type: "update", table: "T1", pk: { id: "2" }, values: { name: "b" } });
     expect(useDraftStore.getState().ops).toHaveLength(2);
   });
+
+  it("merges composite PK updates even when key order differs", () => {
+    useDraftStore.getState().addOp({
+      type: "update",
+      table: "T1",
+      pk: { id: "1", sub_id: "2" },
+      values: { name: "first" },
+    });
+    useDraftStore.getState().addOp({
+      type: "update",
+      table: "T1",
+      pk: { sub_id: "2", id: "1" },
+      values: { value: 42 },
+    });
+
+    const ops = useDraftStore.getState().ops;
+    expect(ops).toHaveLength(1);
+    expect(ops[0].values).toEqual({ name: "first", value: 42 });
+  });
 });
 
 describe("removeOp", () => {
@@ -100,4 +119,3 @@ describe("hasDraft", () => {
     expect(useDraftStore.getState().hasDraft()).toBe(true);
   });
 });
-

@@ -13,6 +13,52 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
+func buildStableOrderByClause(sortStr string, allowedCols map[string]bool, pkCols []string) (string, *model.APIError) {
+	if sortStr == "" {
+		pkOrderParts := make([]string, len(pkCols))
+		for i, pk := range pkCols {
+			pkOrderParts[i] = fmt.Sprintf("`%s` ASC", pk)
+		}
+		return "ORDER BY " + strings.Join(pkOrderParts, ", "), nil
+	}
+
+	orderParts := make([]string, 0)
+	seenPKs := make(map[string]bool, len(pkCols))
+	tokens := strings.Split(sortStr, ",")
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+
+		dir := "ASC"
+		col := token
+		if strings.HasPrefix(token, "-") {
+			dir = "DESC"
+			col = token[1:]
+		}
+		if !allowedCols[col] {
+			return "", &model.APIError{
+				Status: 400,
+				Code:   model.CodeInvalidArgument,
+				Msg:    fmt.Sprintf("unknown column in sort: %s", col),
+			}
+		}
+
+		orderParts = append(orderParts, fmt.Sprintf("`%s` %s", col, dir))
+		seenPKs[col] = true
+	}
+
+	for _, pk := range pkCols {
+		if seenPKs[pk] {
+			continue
+		}
+		orderParts = append(orderParts, fmt.Sprintf("`%s` ASC", pk))
+	}
+
+	return "ORDER BY " + strings.Join(orderParts, ", "), nil
+}
+
 func (s *Service) ListTables(ctx context.Context, targetID, dbName, branchName string) ([]model.TableResponse, error) {
 	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
@@ -95,13 +141,11 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 	}
 
 	allowedCols := make(map[string]bool)
-	pkColSet := make(map[string]bool) // for hasPK detection
 	var pkCols []string
 	for _, col := range schema.Columns {
 		allowedCols[col.Name] = true
 		if col.PrimaryKey {
 			pkCols = append(pkCols, col.Name)
-			pkColSet[col.Name] = true
 		}
 	}
 
@@ -169,45 +213,9 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 		whereClause = "WHERE " + strings.Join(whereParts, " AND ")
 	}
 
-	// Build ORDER BY clause from sort
-	orderByClause := ""
-	if sortStr != "" {
-		var orderParts []string
-		tokens := strings.Split(sortStr, ",")
-		hasPK := false
-		for _, token := range tokens {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				continue
-			}
-			dir := "ASC"
-			col := token
-			if strings.HasPrefix(token, "-") {
-				dir = "DESC"
-				col = token[1:]
-			}
-			if !allowedCols[col] {
-				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in sort: %s", col)}
-			}
-			orderParts = append(orderParts, fmt.Sprintf("`%s` %s", col, dir))
-			if pkColSet[col] {
-				hasPK = true
-			}
-		}
-		// Per v6f spec: append all PK cols ASC for stable paging if not covered
-		if !hasPK {
-			for _, pk := range pkCols {
-				orderParts = append(orderParts, fmt.Sprintf("`%s` ASC", pk))
-			}
-		}
-		orderByClause = "ORDER BY " + strings.Join(orderParts, ", ")
-	} else {
-		// Default: order by all PK cols
-		pkOrderParts := make([]string, len(pkCols))
-		for i, pk := range pkCols {
-			pkOrderParts[i] = fmt.Sprintf("`%s` ASC", pk)
-		}
-		orderByClause = "ORDER BY " + strings.Join(pkOrderParts, ", ")
+	orderByClause, apiErr := buildStableOrderByClause(sortStr, allowedCols, pkCols)
+	if apiErr != nil {
+		return apiErr
 	}
 
 	// Count total

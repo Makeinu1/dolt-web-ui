@@ -65,8 +65,8 @@ export const getTables = (targetId: string, dbName: string, branchName: string) 
     `/tables${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName })}`
   );
 
-// Schema cache: keyed by (targetId, dbName, table) — branch is omitted because
-// work branches inherit schema from main and schema changes are rare.
+// Schema cache is keyed by ref so past-commit browsing and branch-specific schema changes
+// do not reuse stale columns from another revision.
 const _schemaCache = new Map<string, import("../types/api").SchemaResponse>();
 
 export const getTableSchema = (
@@ -75,7 +75,7 @@ export const getTableSchema = (
   branchName: string,
   table: string
 ): Promise<import("../types/api").SchemaResponse> => {
-  const key = `${targetId}|${dbName}|${table}`;
+  const key = `${targetId}|${dbName}|${branchName}|${table}`;
   const cached = _schemaCache.get(key);
   if (cached) return Promise.resolve(cached);
   return request<import("../types/api").SchemaResponse>(
@@ -363,7 +363,7 @@ export const exportDiffZip = async (
   fromRef: string,
   toRef: string,
   mode = "three_dot"
-): Promise<{ blob: Blob; filename: string }> => {
+): Promise<{ blob: Blob; filename: string; warning?: string }> => {
   const qs = queryString({ target_id: targetId, db_name: dbName, branch_name: branchName, from_ref: fromRef, to_ref: toRef, mode });
   const res = await fetch(`${API_BASE}/diff/export-zip${qs}`);
   if (!res.ok) {
@@ -373,8 +373,9 @@ export const exportDiffZip = async (
   const cd = res.headers.get("Content-Disposition") ?? "";
   const match = cd.match(/filename="([^"]+)"/);
   const filename = match ? match[1] : "diff-export.zip";
+  const warning = res.headers.get("X-Diff-Warning") ?? undefined;
   const blob = await res.blob();
-  return { blob, filename };
+  return { blob, filename, warning };
 };
 
 // L3-2: Abort stuck merge state

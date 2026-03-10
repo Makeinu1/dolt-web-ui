@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
+
+const DIFF_PREVIEW_TIMEOUT_MS = 3000;
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
 function ExpandableDiffSummary({ targetId, dbName, branchName }: {
@@ -15,29 +17,66 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadSummary = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    let timeoutId: ReturnType<typeof window.setTimeout> | undefined;
+
     setLoading(true);
     setError(null);
+    setEntries([]);
 
-    api.getDiffSummary(targetId, dbName, branchName)
-      .then((res) => {
-        if (!cancelled) setEntries(res.entries || []);
-      })
-      .catch((err) => {
-        const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
-        if (!cancelled) setError(msg);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    try {
+      const res = await Promise.race([
+        api.getDiffSummary(targetId, dbName, branchName),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            reject(new ApiError(408, { code: "TIMEOUT", message: "差分の読み込みがタイムアウトしました。再試行してください。" }));
+          }, DIFF_PREVIEW_TIMEOUT_MS);
+        }),
+      ]);
 
-    return () => { cancelled = true; };
+      if (requestIdRef.current !== requestId) return;
+      setEntries(res.entries || []);
+    } catch (err) {
+      if (requestIdRef.current !== requestId) return;
+      const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
+      setError(msg);
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      if (requestIdRef.current === requestId) {
+        setLoading(false);
+      }
+    }
   }, [targetId, dbName, branchName]);
 
+  useEffect(() => {
+    void loadSummary();
+    return () => {
+      requestIdRef.current += 1;
+    };
+  }, [loadSummary]);
+
+  const handleRetry = () => {
+    void loadSummary();
+  };
+
   if (loading) return <div style={{ fontSize: 12, color: "#888", padding: 8 }}>差分を読み込み中...</div>;
-  if (error) return <div style={{ fontSize: 12, color: "#991b1b" }}>⚠ {error}</div>;
+  if (error) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 12, color: "#991b1b" }}>⚠ {error}</div>
+        <button
+          onClick={handleRetry}
+          style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer", color: "#334155", flexShrink: 0 }}
+        >
+          再試行
+        </button>
+      </div>
+    );
+  }
   if (entries.length === 0) return <div style={{ fontSize: 12, color: "#888" }}>mainとの差分はありません。</div>;
 
   return (

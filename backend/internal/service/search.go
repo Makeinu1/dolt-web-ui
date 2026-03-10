@@ -3,11 +3,28 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
+
+const searchTimeBudget = 5 * time.Second
+
+func searchTimeoutError() *model.APIError {
+	return &model.APIError{
+		Status:  408,
+		Code:    model.CodePreconditionFailed,
+		Msg:     "検索範囲が広すぎます。キーワードや対象を絞って再試行してください。",
+		Details: map[string]string{"timeout": searchTimeBudget.String()},
+	}
+}
+
+func isSearchTimeout(err error, ctx context.Context) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+}
 
 // Search performs a full-table keyword search across all user tables and, optionally, memo tables.
 // It returns up to `limit` matching results across all tables.
@@ -16,15 +33,21 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		return &model.SearchResponse{Results: make([]model.SearchResult, 0), Total: 0}, nil
 	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	searchCtx, cancel := context.WithTimeout(ctx, searchTimeBudget)
+	defer cancel()
+
+	conn, err := s.repo.Conn(searchCtx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
 	// 1. List all user tables (exclude dolt_*, _memo_*, _cell_* tables)
-	rows, err := conn.QueryContext(ctx, "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")
+	rows, err := conn.QueryContext(searchCtx, "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")
 	if err != nil {
+		if isSearchTimeout(err, searchCtx) {
+			return nil, searchTimeoutError()
+		}
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
 	var tableNames []string
@@ -40,7 +63,13 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
+		if isSearchTimeout(err, searchCtx) {
+			return nil, searchTimeoutError()
+		}
 		return nil, fmt.Errorf("failed to iterate tables: %w", err)
+	}
+	if err := searchCtx.Err(); err != nil {
+		return nil, searchTimeoutError()
 	}
 
 	if len(tableNames) == 0 {
@@ -65,7 +94,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		"SELECT TABLE_NAME, COLUMN_NAME, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME, ORDINAL_POSITION",
 		strings.Join(tblPlaceholders, ", "),
 	)
-	colRows, err := conn.QueryContext(ctx, colQuery, tblArgs...)
+	colRows, err := conn.QueryContext(searchCtx, colQuery, tblArgs...)
 	if err == nil {
 		for colRows.Next() {
 			var tblName, colName, colKey string
@@ -76,6 +105,8 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			tableCols[tblName] = append(tableCols[tblName], colInfo{name: colName, isPK: colKey == "PRI"})
 		}
 		colRows.Close()
+	} else if isSearchTimeout(err, searchCtx) {
+		return nil, searchTimeoutError()
 	}
 	// If INFORMATION_SCHEMA returned no columns (e.g. revision-DB TABLE_SCHEMA mismatch),
 	// fall back to per-table SHOW COLUMNS for each table that has no entry yet.
@@ -88,6 +119,9 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	likePattern := "%" + escapedKw + "%"
 
 	for _, tableName := range tableNames {
+		if err := searchCtx.Err(); err != nil {
+			return nil, searchTimeoutError()
+		}
 		if len(results) >= limit {
 			break
 		}
@@ -95,8 +129,11 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		// Use batch-fetched columns; fall back to SHOW COLUMNS if not available.
 		cols := tableCols[tableName]
 		if len(cols) == 0 {
-			colRows2, err := conn.QueryContext(ctx, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+			colRows2, err := conn.QueryContext(searchCtx, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 			if err != nil {
+				if isSearchTimeout(err, searchCtx) {
+					return nil, searchTimeoutError()
+				}
 				continue
 			}
 			for colRows2.Next() {
@@ -149,8 +186,11 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			args[i] = likePattern
 		}
 
-		dataRows, err := conn.QueryContext(ctx, query, args...)
+		dataRows, err := conn.QueryContext(searchCtx, query, args...)
 		if err != nil {
+			if isSearchTimeout(err, searchCtx) {
+				return nil, searchTimeoutError()
+			}
 			// Query failed — skip table
 			continue
 		}
@@ -174,6 +214,10 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			}
 
 			if err := dataRows.Scan(scanDest...); err != nil {
+				if isSearchTimeout(err, searchCtx) {
+					dataRows.Close()
+					return nil, searchTimeoutError()
+				}
 				continue
 			}
 
@@ -212,12 +256,19 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 				}
 			}
 		}
+		if err := dataRows.Err(); err != nil {
+			dataRows.Close()
+			if isSearchTimeout(err, searchCtx) {
+				return nil, searchTimeoutError()
+			}
+			continue
+		}
 		dataRows.Close()
 
 		// 4. Optionally search memo table
 		if includeMemo && len(results) < limit {
 			memoTbl := memoTableName(tableName)
-			memoRows, err := conn.QueryContext(ctx,
+			memoRows, err := conn.QueryContext(searchCtx,
 				fmt.Sprintf(
 					"SELECT pk_value, column_name, memo_text FROM `%s` WHERE memo_text LIKE ? LIMIT %d",
 					memoTbl, limit-len(results),
@@ -241,8 +292,13 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 					}
 				}
 				memoRows.Close()
+			} else if isSearchTimeout(err, searchCtx) {
+				return nil, searchTimeoutError()
 			}
 		}
+	}
+	if err := searchCtx.Err(); err != nil {
+		return nil, searchTimeoutError()
 	}
 
 	return &model.SearchResponse{Results: results, Total: len(results)}, nil

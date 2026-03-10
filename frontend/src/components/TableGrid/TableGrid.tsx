@@ -23,6 +23,7 @@ import { safeGetJSON, safeSetJSON } from "../../utils/safeStorage";
 import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 import { BulkEditModal } from "../BulkPKReplaceModal/BulkEditModal";
+import { stablePkJson } from "../../utils/stablePk";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -111,7 +112,7 @@ interface TableGridProps {
 export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSelected, onCrossCopyRows, onShowRowHistory }: TableGridProps) {
   const { targetId, dbName, branchName } = useContextStore();
   // 2c: Use commit hash as branch reference for past-version read-only viewing
-  const effectiveBranch = previewCommitHash ?? branchName;
+  const effectiveRef = previewCommitHash ?? branchName;
   const addOp = useDraftStore((s) => s.addOp);
   // Subscribe only to ops for this table (and its memo table) to prevent re-renders
   // when other tables' ops change. useShallow ensures element-level comparison.
@@ -131,7 +132,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [gridError, setGridError] = useState<string | null>(null);
   const [serverFilter, setServerFilter] = useState("");
   const [serverSort, setServerSort] = useState("");
-  const [schemaTable, setSchemaTable] = useState<string>("");
+  const [schemaReadyKey, setSchemaReadyKey] = useState<string>("");
   const colVisibilityKey = `colVisibility/${targetId}/${dbName}/${tableName}`;
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
     const saved = safeGetJSON<string[]>(localStorage, colVisibilityKey, []);
@@ -143,6 +144,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [cloning, setCloning] = useState(false);
   const [fetchingAll, setFetchingAll] = useState(false);
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
+  const [bulkEditTargetRows, setBulkEditTargetRows] = useState<Record<string, unknown>[]>([]);
   const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -168,8 +170,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
    */
   const rowPkId = useCallback(
     (row: Record<string, unknown>) => {
-      const sorted = [...pkCols].sort((a, b) => a.name.localeCompare(b.name));
-      return JSON.stringify(Object.fromEntries(sorted.map((c) => [c.name, row[c.name]])));
+      return stablePkJson(Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]])));
     },
     [pkCols]
   );
@@ -184,13 +185,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       }
       // BUG-O: use rowIndex instead of Math.random() for stable (within-session) IDs for PK-less tables.
       if (pkCols.length === 0) return `row:${(params as { rowIndex?: number }).rowIndex ?? Math.random()}`;
-      return JSON.stringify(
-        Object.fromEntries(
-          [...pkCols]
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((c) => [c.name, params.data[c.name]])
-        )
-      );
+      return stablePkJson(Object.fromEntries(pkCols.map((c) => [c.name, params.data[c.name]])));
     },
     [pkCols]
   );
@@ -221,7 +216,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     for (let i = draftOps.length - 1; i >= 0; i--) {
       const op = draftOps[i];
       if (op.table === tableName && op.pk &&
-        JSON.stringify(op.pk) === rowId) {
+        stablePkJson(op.pk) === rowId) {
         foundIdx = i;
         break;
       }
@@ -248,7 +243,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       const pkMap = op.type === "insert"
         ? Object.fromEntries(pkCols.map((c) => [c.name, op.values[c.name]]))
         : (op.pk ?? {});
-      const rowId = JSON.stringify(pkMap);
+      const rowId = stablePkJson(pkMap);
       const existing = index.get(rowId);
       if (existing) {
         // Accumulate changed columns
@@ -306,8 +301,10 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   // Load schema
   useEffect(() => {
     if (!tableName) return;
+    let cancelled = false;
+    const currentSchemaKey = `${tableName}|${effectiveRef}`;
     setGridError(null);
-    setSchemaTable("");           // ガード ON: loadRows をブロック
+    setSchemaReadyKey("");        // ガード ON: loadRows をブロック
     setServerFilter("");          // フィルタリセット
     setServerSort("");            // ソートリセット
     setPage(1);                   // ページリセット
@@ -315,69 +312,84 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     gridRef.current?.api?.setFilterModel({});
     gridRef.current?.api?.applyColumnState({ defaultState: { sort: null } });
     api
-      .getTableSchema(targetId, dbName, branchName, tableName)
+      .getTableSchema(targetId, dbName, effectiveRef, tableName)
       .then((schema) => {
+        if (cancelled) return;
         setColumns(schema.columns);
         setHiddenColumns(new Set());
         setSelectedRows([]);
-        setSchemaTable(tableName); // ガード OFF: loadRows を解禁
+        setSchemaReadyKey(currentSchemaKey); // ガード OFF: loadRows を解禁
       })
       .catch((err) => {
+        if (cancelled) return;
         const msg = err instanceof ApiError ? err.message : "スキーマの読み込みに失敗しました";
         setGridError(msg);
       });
-  }, [targetId, dbName, branchName, tableName]);
+    return () => {
+      cancelled = true;
+    };
+  }, [targetId, dbName, effectiveRef, tableName]);
 
   // Load rows (server-side filter + sort)
+  const rowsRequestIdRef = useRef(0);
   const loadRows = useCallback(() => {
-    if (!tableName || schemaTable !== tableName) return; // スキーマ未ロードならスキップ
+    if (!tableName || schemaReadyKey !== `${tableName}|${effectiveRef}`) return; // スキーマ未ロードならスキップ
+    const requestId = ++rowsRequestIdRef.current;
     setLoading(true);
     setGridError(null);
     api
-      .getTableRows(targetId, dbName, effectiveBranch, tableName, page, pageSize, serverFilter, serverSort)
+      .getTableRows(targetId, dbName, effectiveRef, tableName, page, pageSize, serverFilter, serverSort)
       .then((res: RowsResponse) => {
+        if (rowsRequestIdRef.current !== requestId) return;
         setRowData(res.rows || []);
         setTotalCount(res.total_count);
       })
       .catch((err) => {
+        if (rowsRequestIdRef.current !== requestId) return;
         const msg = err instanceof ApiError ? err.message : "データの読み込みに失敗しました";
         setGridError(msg);
       })
-      .finally(() => setLoading(false));
-  }, [targetId, dbName, branchName, tableName, page, pageSize, serverFilter, serverSort, refreshKey, schemaTable]);
+      .finally(() => {
+        if (rowsRequestIdRef.current === requestId) {
+          setLoading(false);
+        }
+      });
+  }, [targetId, dbName, effectiveRef, tableName, page, pageSize, serverFilter, serverSort, schemaReadyKey]);
+
+  const loadRowsRef = useRef(loadRows);
+  useEffect(() => {
+    loadRowsRef.current = loadRows;
+  }, [loadRows]);
 
   useEffect(() => {
     loadRows();
   }, [loadRows]);
 
-  // P1: refreshKey専用useEffect — コミット成功後のグリッドリロード（schemaTableガードをスキップ）
+  // P1: refreshKey専用useEffect — コミット成功後のグリッドリロード
+  const lastRefreshKeyRef = useRef(refreshKey);
   useEffect(() => {
-    if (!refreshKey || !tableName) return;
-    setLoading(true);
-    setGridError(null);
-    api
-      .getTableRows(targetId, dbName, effectiveBranch, tableName, page, pageSize, serverFilter, serverSort)
-      .then((res: RowsResponse) => {
-        setRowData(res.rows || []);
-        setTotalCount(res.total_count);
-      })
-      .catch((err) => {
-        const msg = err instanceof ApiError ? err.message : "データの読み込みに失敗しました";
-        setGridError(msg);
-      })
-      .finally(() => setLoading(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (refreshKey == null || refreshKey === lastRefreshKeyRef.current) return;
+    lastRefreshKeyRef.current = refreshKey;
+    loadRowsRef.current();
   }, [refreshKey]);
 
   // BUG-I: split getMemoMap into two effects to avoid API call on every draftOps change.
   // Effect 1: fetch base memo map from API (only on tableName/branch change).
   const [baseMemoMap, setBaseMemoMap] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (!tableName || !targetId || !dbName || !branchName) return;
-    api.getMemoMap(targetId, dbName, effectiveBranch, tableName)
-      .then((res) => setBaseMemoMap(new Set(res.cells)))
-      .catch(() => setBaseMemoMap(new Set()));
-  }, [targetId, dbName, branchName, tableName]);
+    if (!tableName || !targetId || !dbName || !effectiveRef) return;
+    let cancelled = false;
+    api.getMemoMap(targetId, dbName, effectiveRef, tableName)
+      .then((res) => {
+        if (!cancelled) setBaseMemoMap(new Set(res.cells));
+      })
+      .catch(() => {
+        if (!cancelled) setBaseMemoMap(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetId, dbName, effectiveRef, tableName]);
 
   // Effect 2: merge draft ops locally (no API call, runs on draftOps change).
   useEffect(() => {
@@ -492,20 +504,28 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   }, [pkCols, tableName, addOp, setBaseState]);
 
 
-  // P5: 一括編集 — 選択行の任意カラムを一括置換・空欄埋め
+  // P5: 一括編集 — 選択行の任意カラムを一括置換・空欄埋め・文字を置換
   const handleBulkEdit = useCallback(
-    (column: string, value: string, mode: "replace" | "fill-empty") => {
+    (column: string, value: string, mode: "replace" | "fill-empty" | "find-replace", searchValue?: string) => {
       if (pkCols.length === 0) return;
-      const selectedSet = new Set(
-        selectedRows.map((r) =>
+      const targetRows = bulkEditTargetRows;
+      const targetSet = new Set(
+        targetRows.map((r) =>
           r._draftId != null ? `draft:${r._draftId}` : rowPkId(r)
         )
       );
-      for (const row of selectedRows) {
+      for (const row of targetRows) {
         const currentVal = row[column];
         const currentStr =
           currentVal === null || currentVal === undefined ? "" : String(currentVal);
         if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
+          continue;
+        }
+        if (mode === "find-replace") {
+          if (!searchValue || !currentStr.includes(searchValue)) continue;
+          const newVal = currentStr.replaceAll(searchValue, value);
+          const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
+          addOp({ type: "update", table: tableName, values: { [column]: newVal }, pk });
           continue;
         }
         const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
@@ -515,41 +535,78 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       setRowData((prev) =>
         prev.map((row) => {
           const rowKey = row._draftId != null ? `draft:${row._draftId}` : rowPkId(row);
-          if (!selectedSet.has(rowKey)) return row;
+          if (!targetSet.has(rowKey)) return row;
           const currentVal = row[column];
           const currentStr =
             currentVal === null || currentVal === undefined ? "" : String(currentVal);
           if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
             return row;
           }
+          if (mode === "find-replace") {
+            if (!searchValue || !currentStr.includes(searchValue)) return row;
+            return { ...row, [column]: currentStr.replaceAll(searchValue, value) };
+          }
           return { ...row, [column]: value };
         })
       );
       setBaseState("DraftEditing");
     },
-    [selectedRows, tableName, pkCols, addOp, setBaseState, rowPkId]
+    [bulkEditTargetRows, tableName, pkCols, addOp, setBaseState, rowPkId]
   );
 
-  // Feature 2: Clone all rows matching the current server filter (up to 1000)
-  const handleCloneAllFiltered = useCallback(async () => {
+  // Shared helper: fetch all rows matching the current server filter (up to 1000)
+  const fetchAllFilteredRows = useCallback(async (): Promise<Record<string, unknown>[] | null> => {
     const msg =
       totalCount > 1000
-        ? `フィルタ結果は ${totalCount.toLocaleString()} 件ですが、最大 1,000 件のみコピーします。続けますか？`
-        : `フィルタ結果の ${totalCount.toLocaleString()} 件をすべてコピーします。続けますか？`;
-    if (!window.confirm(msg)) return;
+        ? `フィルタ結果は ${totalCount.toLocaleString()} 件ですが、最大 1,000 件のみ対象です。続けますか？`
+        : `フィルタ結果の ${totalCount.toLocaleString()} 件を対象にします。続けますか？`;
+    if (!window.confirm(msg)) return null;
     setFetchingAll(true);
     try {
       const res = await api.getTableRows(
-        targetId, dbName, effectiveBranch, tableName, 1, 50, serverFilter, serverSort, true
+        targetId, dbName, effectiveRef, tableName, 1, 50, serverFilter, serverSort, true
       );
-      await handleCloneRows(res.rows || []);
+      return res.rows || [];
     } catch (err: unknown) {
       const errMsg = err instanceof ApiError ? err.message : "";
-      useUIStore.getState().setError("全件コピーに失敗しました" + (errMsg ? ": " + errMsg : ""));
+      useUIStore.getState().setError("全件取得に失敗しました" + (errMsg ? ": " + errMsg : ""));
+      return null;
     } finally {
       setFetchingAll(false);
     }
-  }, [totalCount, targetId, dbName, effectiveBranch, tableName, serverFilter, serverSort, handleCloneRows]);
+  }, [totalCount, targetId, dbName, effectiveRef, tableName, serverFilter, serverSort]);
+
+  // Feature 2: Clone all rows matching the current server filter (up to 1000)
+  const handleCloneAllFiltered = useCallback(async () => {
+    const rows = await fetchAllFilteredRows();
+    if (!rows) return;
+    await handleCloneRows(rows);
+  }, [fetchAllFilteredRows, handleCloneRows]);
+
+  // U2: Bulk edit all filtered rows
+  const handleBulkEditAllFiltered = useCallback(async () => {
+    const rows = await fetchAllFilteredRows();
+    if (!rows) return;
+    setBulkEditTargetRows(rows);
+    setShowBulkEditModal(true);
+  }, [fetchAllFilteredRows]);
+
+  // U2: Delete all filtered rows
+  const handleDeleteAllFiltered = useCallback(async () => {
+    const rows = await fetchAllFilteredRows();
+    if (!rows) return;
+    if (!window.confirm(`${rows.length} 件を削除します。この操作は取り消せません。続けますか？`)) return;
+    handleDeleteRows(rows);
+  }, [fetchAllFilteredRows, handleDeleteRows]);
+
+  // U2: Cross-copy all filtered rows
+  const handleCrossCopyAllFiltered = useCallback(async () => {
+    if (!onCrossCopyRows) return;
+    const rows = await fetchAllFilteredRows();
+    if (!rows) return;
+    const pks = rows.map((r) => rowPkId(r));
+    onCrossCopyRows(pks);
+  }, [fetchAllFilteredRows, onCrossCopyRows, rowPkId]);
 
   // Toggle column visibility
   const handleColumnToggle = useCallback((colName: string) => {
@@ -826,7 +883,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             {/* P5: 一括編集 — all selected rows */}
             {!isProtected && pkCols.length > 0 && (
               <button
-                onClick={() => setShowBulkEditModal(true)}
+                onClick={() => { setBulkEditTargetRows(selectedRows); setShowBulkEditModal(true); }}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
                 title="選択行のカラム値を一括編集"
               >
@@ -865,16 +922,44 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             )}
           </div>
         )}
-        {/* P3: Full-copy button — shown when no rows selected but filter is active */}
+        {/* P3/U2: Full-operation buttons — shown when no rows selected but filter is active */}
         {!isProtected && !editingBlocked && selectedRows.length === 0 && serverFilter !== "" && pkCols.length > 0 && (
-          <button
-            onClick={handleCloneAllFiltered}
-            disabled={fetchingAll || cloning || totalCount === 0}
-            style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: fetchingAll || cloning ? "not-allowed" : "pointer" }}
-            title={`フィルタ結果の全件をコピー（最大 1,000 件）`}
-          >
-            {fetchingAll ? "取得中..." : `全件コピー (${Math.min(totalCount, 1000).toLocaleString()})`}
-          </button>
+          <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+            <button
+              onClick={handleCloneAllFiltered}
+              disabled={fetchingAll || cloning || totalCount === 0}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: fetchingAll || cloning ? "not-allowed" : "pointer" }}
+              title="フィルタ結果の全件をコピー（最大 1,000 件）"
+            >
+              {fetchingAll ? "取得中..." : `全件コピー (${Math.min(totalCount, 1000).toLocaleString()})`}
+            </button>
+            <button
+              onClick={handleBulkEditAllFiltered}
+              disabled={fetchingAll || totalCount === 0}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
+              title="フィルタ結果の全件を一括編集（最大 1,000 件）"
+            >
+              全件一括編集 ({Math.min(totalCount, 1000).toLocaleString()})
+            </button>
+            {onCrossCopyRows && (
+              <button
+                onClick={handleCrossCopyAllFiltered}
+                disabled={fetchingAll || totalCount === 0}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
+                title="フィルタ結果の全件を他DBへコピー（最大 1,000 件）"
+              >
+                全件他DBへ ({Math.min(totalCount, 1000).toLocaleString()})
+              </button>
+            )}
+            <button
+              onClick={handleDeleteAllFiltered}
+              disabled={fetchingAll || totalCount === 0}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
+              title="フィルタ結果の全件を削除（最大 1,000 件）"
+            >
+              全件削除 ({Math.min(totalCount, 1000).toLocaleString()})
+            </button>
+          </div>
         )}
 
         {/* 履歴ボタン (読み取り専用 — 保護ブランチ・編集ブロック中でも表示) */}
@@ -940,7 +1025,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       {showBulkEditModal && (
         <BulkEditModal
           columns={columns}
-          selectedRows={selectedRows}
+          selectedRows={bulkEditTargetRows}
           onApply={handleBulkEdit}
           onClose={() => setShowBulkEditModal(false)}
         />

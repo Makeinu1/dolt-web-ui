@@ -168,32 +168,71 @@ func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]
 	}
 	defer rows.Close()
 
-	result := make([]model.RequestSummary, 0)
+	type rawRequest struct {
+		tagName string
+		hash    string
+		message string
+	}
+	rawRequests := make([]rawRequest, 0)
 	for rows.Next() {
 		var tagName, hash, message string
 		if err := rows.Scan(&tagName, &hash, &message); err != nil {
 			return nil, fmt.Errorf("failed to scan request: %w", err)
 		}
+		rawRequests = append(rawRequests, rawRequest{tagName: tagName, hash: hash, message: message})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
 
+	result := make([]model.RequestSummary, 0, len(rawRequests))
+	staleRequestTags := make([]string, 0)
+	for _, rawReq := range rawRequests {
 		// Parse message JSON to extract metadata
 		var meta map[string]string
-		if jsonErr := json.Unmarshal([]byte(message), &meta); jsonErr != nil {
-			log.Printf("WARN: failed to parse tag message for %s: %v", tagName, jsonErr)
+		if jsonErr := json.Unmarshal([]byte(rawReq.message), &meta); jsonErr != nil {
+			log.Printf("WARN: failed to parse tag message for %s: %v", rawReq.tagName, jsonErr)
 			meta = map[string]string{}
 		}
+		submittedWorkHash := meta["submitted_work_hash"]
+		if submittedWorkHash == "" {
+			submittedWorkHash = rawReq.hash
+		}
+		if submittedWorkHash != "" {
+			var mergedCount int
+			if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_log WHERE commit_hash = ?", submittedWorkHash).Scan(&mergedCount); err == nil && mergedCount > 0 {
+				staleRequestTags = append(staleRequestTags, rawReq.tagName)
+				continue
+			}
+		}
 
-		workBranch := "wi/" + strings.TrimPrefix(tagName, "req/")
+		workBranch := "wi/" + strings.TrimPrefix(rawReq.tagName, "req/")
 
 		result = append(result, model.RequestSummary{
-			RequestID:         tagName,
+			RequestID:         rawReq.tagName,
 			WorkBranch:        workBranch,
 			SubmittedMainHash: meta["submitted_main_hash"],
-			SubmittedWorkHash: hash,
+			SubmittedWorkHash: submittedWorkHash,
 			SummaryJa:         meta["summary_ja"],
 			SubmittedAt:       meta["submitted_at"],
 		})
 	}
-	return result, rows.Err()
+	if len(staleRequestTags) > 0 {
+		cleanupConn, err := s.repo.ConnWrite(context.Background(), targetID, dbName, "main")
+		if err != nil {
+			log.Printf("WARN: failed to open cleanup connection for stale request tags: %v", err)
+			return result, nil
+		}
+		defer cleanupConn.Close()
+
+		for _, requestID := range staleRequestTags {
+			if _, err := cleanupConn.ExecContext(context.Background(), "CALL DOLT_TAG('-d', ?)", requestID); err != nil {
+				log.Printf("WARN: failed to cleanup stale request tag %s: %v", requestID, err)
+			}
+		}
+	}
+	return result, nil
 }
 
 // GetRequest returns details of a specific request.
@@ -222,12 +261,16 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 	}
 
 	workBranch := "wi/" + strings.TrimPrefix(requestID, "req/")
+	submittedWorkHash := meta["submitted_work_hash"]
+	if submittedWorkHash == "" {
+		submittedWorkHash = tagHash
+	}
 
 	return &model.RequestSummary{
 		RequestID:         requestID,
 		WorkBranch:        workBranch,
 		SubmittedMainHash: meta["submitted_main_hash"],
-		SubmittedWorkHash: tagHash,
+		SubmittedWorkHash: submittedWorkHash,
 		SummaryJa:         meta["summary_ja"],
 		SubmittedAt:       meta["submitted_at"],
 	}, nil
@@ -366,7 +409,6 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	}
 	if tagDeleteErr != nil {
 		log.Printf("CRITICAL: req tag deletion failed after 3 retries for %s: %v (merge succeeded but branch locked)", req.RequestID, tagDeleteErr)
-		return nil, fmt.Errorf("failed to delete request tag %s (merge succeeded but cleanup failed): %w", req.RequestID, tagDeleteErr)
 	}
 
 	// Close merge conn before branch operations: the accumulated DOLT_MERGE + DOLT_CHECKOUT
@@ -392,12 +434,14 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	// Parse: wi/ProjectA/01 → item="ProjectA", round=1
 	matches := nextRoundRe.FindStringSubmatch(workBranch)
 	if len(matches) != 3 {
-		return nil, fmt.Errorf("invalid work branch format: %s", workBranch)
+		log.Printf("ERROR: invalid work branch format after merge for %s: %s", req.RequestID, workBranch)
+		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
 	}
 	item := matches[1]
 	round, err := strconv.Atoi(matches[2])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse round number: %w", err)
+		log.Printf("ERROR: failed to parse next round for %s: %v", req.RequestID, err)
+		return &model.ApproveResponse{Hash: newHead, NextBranch: ""}, nil
 	}
 	nextBranch := fmt.Sprintf("wi/%s/%02d", item, round+1)
 
