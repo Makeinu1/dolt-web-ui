@@ -78,7 +78,6 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                 "main",
                 p,
                 pageSize,
-                "merges_only",
                 keyword,
                 fromDate,
                 toDate,
