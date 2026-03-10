@@ -26,7 +26,7 @@
 | P3 | **main/audit 書き込み保護** | ✅ | handler 層: `validation.IsProtectedBranch()` (BUG-4 修正後)。service 層: 同関数で二重ガード。`IsProtectedBranch = "main" || "audit"` |
 | P4 | **承認なしマージ防止** | ✅ | main への書き込みは `ApproveRequest` のみ。`Sync` は work→work のマージで main を変更しない |
 | P5 | **作者追跡** | ✅ | Dolt commit metadata に DB 接続 user が記録。`ActivityLog` で横断検索可能 |
-| P6 | **選択的マージ** | ✅ | `workBranchRe = ^wi/[A-Za-z0-9._-]+/[0-9]{2}$` で CreateBranch 時にパターン強制 |
+| P6 | **選択的マージ** | ✅ | `workBranchRe = ^wi/[A-Za-z0-9._-]+$` で CreateBranch 時に長寿命 work branch パターンを強制 |
 | P7 | **100万行対応** | ✅ | `GetTableRows` は LIMIT/OFFSET + streaming JSON encoding。`DiffTable` も LIMIT/OFFSET |
 | P8 | **ブランチロック** | ✅ | `checkBranchLocked` が `Commit`/`Sync`/`Revert`/`ResolveConflicts` 全経路で `req/` タグ存在確認 → HTTP 423（BUG-16修正後） |
 

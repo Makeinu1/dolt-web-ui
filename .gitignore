@@ -1,6 +1,7 @@
 # Go
 backend/dolt-web-ui
 backend/tmp/
+backend/.gocache/
 
 # Frontend
 frontend/node_modules/
@@ -11,6 +12,8 @@ config.yaml
 
 # Build artifacts
 dist/
+.tmp/
+test-results/
 
 # OS
 .DS_Store

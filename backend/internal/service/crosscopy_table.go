@@ -111,37 +111,28 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	}
 	mainWriteConn.Close()
 
-	// Determine next branch name: wi/import-{table}/NN
+	// Reuse a single long-lived import branch per source DB + table.
 	dstConnDB, err := s.repo.ConnDB(ctx, req.TargetID, req.DestDB)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to dest DB: %w", err)
 	}
-
-	branchPrefix := fmt.Sprintf("wi/import-%s/", req.SourceTable)
-	nextRound := 1
-	branchRows, err := dstConnDB.QueryContext(ctx, "SELECT name FROM dolt_branches WHERE name LIKE ?", branchPrefix+"%")
-	if err == nil {
-		for branchRows.Next() {
-			var name string
-			if err := branchRows.Scan(&name); err != nil {
-				continue
-			}
-			suffix := strings.TrimPrefix(name, branchPrefix)
-			var n int
-			if _, err := fmt.Sscanf(suffix, "%d", &n); err == nil && n >= nextRound {
-				nextRound = n + 1
-			}
-		}
-		branchRows.Close()
+	newBranchName := importWorkBranchName(req.SourceDB, req.SourceTable)
+	exists, err := branchExists(ctx, dstConnDB, newBranchName)
+	if err != nil {
+		dstConnDB.Close()
+		return nil, fmt.Errorf("failed to check branch %s: %w", newBranchName, err)
 	}
-
-	newBranchName := fmt.Sprintf("%s%02d", branchPrefix, nextRound)
+	if exists {
+		dstConnDB.Close()
+		return nil, newBranchExistsError(newBranchName)
+	}
 	shouldCleanupBranch := false
 
 	// Create new branch from main
 	if _, err := dstConnDB.ExecContext(ctx, "CALL DOLT_BRANCH(?)", newBranchName); err != nil {
+		classifiedErr := classifyBranchCreateError(ctx, dstConnDB, newBranchName, err)
 		dstConnDB.Close()
-		return nil, fmt.Errorf("failed to create branch %s: %w", newBranchName, err)
+		return nil, classifiedErr
 	}
 	shouldCleanupBranch = true
 	dstConnDB.Close()

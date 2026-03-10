@@ -135,4 +135,42 @@ test.describe('Workflow Tests', () => {
         await expect(inboxModal).toContainText('承認待ちのリクエストはありません');
         await inboxModal.locator('button', { hasText: '✕' }).click();
     });
+
+    test('should fall back to main and show warnings when approve cannot advance the work branch', async ({ page }) => {
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        const approverBadge = page.locator('.approver-badge');
+        await expect(approverBadge).toBeVisible({ timeout: 10000 });
+        await approverBadge.click();
+
+        const inboxModal = page.locator('.modal').first();
+        await expect(inboxModal).toContainText('テストリクエスト');
+
+        await page.unroute('**/api/v1/requests*');
+        let requestApproved = false;
+        await page.route('**/api/v1/requests*', async route => {
+            await route.fulfill({ json: requestApproved ? [] : MOCK_REQUESTS });
+        });
+
+        await page.route('**/api/v1/request/approve*', async route => {
+            requestApproved = true;
+            await route.fulfill({
+                status: 200,
+                json: {
+                    hash: 'hash-a',
+                    active_branch: 'wi/feat-b',
+                    active_branch_advanced: false,
+                    archive_tag: 'merged/feat-b/01',
+                    warnings: ['mainへの反映は完了しましたが、作業ブランチを進められませんでした。'],
+                },
+            });
+        });
+
+        await inboxModal.locator('button.success', { hasText: '承認' }).click();
+        const approveModal = page.locator('.modal').last();
+        await approveModal.locator('button.primary', { hasText: '承認してマージ' }).click();
+
+        await expect(page.locator('.context-bar select')).toHaveValue('main');
+        await expect(page.locator('.error-banner')).toContainText('作業ブランチを進められませんでした');
+    });
 });

@@ -402,13 +402,19 @@ dolt-web-ui/
 │   │   │   ├── draft.ts      # 未コミット操作 (sessionStorage) + 更新マージ
 │   │   │   └── ui.ts         # UI状態マシン
 │   │   └── types/            # 型定義
-│   ├── tests/                # Playwright E2Eテスト（APIモック方式）
+│   ├── tests/
+│   │   ├── e2e/             # Playwright E2Eテスト（APIモック方式）
+│   │   └── e2e-real/        # 実Dolt + 実backend の Playwright smoke/full
 │   └── package.json
 ├── docs/
 │   ├── api-reference.md
+│   ├── test-strategy.md
 │   └── manual-test-checklist.md
+├── scripts/
+│   └── testenv/             # 実Dolt test harness (seed/start/reset/stop)
 ├── config.example.yaml
 ├── config.yaml               # ローカル設定 (.gitignore)
+├── config.test.yaml          # 実Dolt test harness 用設定
 └── Makefile
 ```
 
@@ -503,29 +509,32 @@ make lint           # リンター (go vet + tsc --noEmit)
 make clean          # ビルド成果物のクリーンアップ
 ```
 
-### E2Eテスト（APIレベル）
+### Fast Suite
 
 ```bash
-# 基本 58 チェック（INSERT/UPDATE/Sync/Submit/Approve/Cell-level merge）
-bash /tmp/dolt-e2e-test.sh
-
-# 拡張 52 チェック（DELETE/DiffSummary/RowHistory/Filter/Conflict/EdgeCase）
-bash /tmp/dolt-e2e-extended.sh
+cd backend && go test -race ./...
+cd frontend && npm run test
+cd frontend && npm run test:e2e:mock
 ```
 
-### Playwright ブラウザテスト
+### Real Dolt Harness
 
 ```bash
-cd frontend && npx playwright test
+./scripts/testenv/reset
 ```
 
-APIモック方式（`page.route()`）で実行。実際のDoltサーバー不要。19テスト:
-- グリッド表示・削除・一括コピー
-- ドラフト変更クリア・行Undo
-- コミット・Submit・Approve ワークフロー
-- StaleHead・SQLエクスポート・Refresh & Force Sync
-- 履歴・Revert
-- コンテキスト設定・ブランチ作成
+### Real Integration / Real Playwright
+
+```bash
+cd backend && go test -tags=integration ./internal/service
+cd frontend && npm run test:e2e:real:smoke
+cd frontend && npm run test:e2e:real:full
+```
+
+- `frontend/tests/e2e` は API モック方式。UI 契約と branch 引数伝搬の高速回帰に使います。
+- `frontend/tests/e2e-real` は `config.test.yaml` + `scripts/testenv/*` を使う実Dolt通し試験です。
+- `@quarantine` は既知不整合の期待仕様を固定するタグで、PR smoke からは除外し nightly/full に含めます。
+- 詳細な層分けと test ID は [docs/test-strategy.md](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/docs/test-strategy.md) を参照してください。
 
 ## 配備（Linuxサーバー）
 

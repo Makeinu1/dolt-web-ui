@@ -23,6 +23,7 @@ export function CrossCopyTableModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CrossCopyTableResponse | null>(null);
+  const [existingBranchName, setExistingBranchName] = useState<string | null>(null);
 
   // Load source branches on mount
   useEffect(() => {
@@ -58,6 +59,7 @@ export function CrossCopyTableModal({
   const handleExecute = async () => {
     setLoading(true);
     setError(null);
+    setExistingBranchName(null);
     try {
       const res = await api.crossCopyTable({
         target_id: targetId,
@@ -68,6 +70,17 @@ export function CrossCopyTableModal({
       });
       setResult(res);
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
+        const details =
+          err.details && typeof err.details === "object"
+            ? (err.details as Record<string, unknown>)
+            : {};
+        const branchName =
+          typeof details.branch_name === "string" ? details.branch_name : null;
+        setExistingBranchName(branchName);
+        setError(null);
+        return;
+      }
       const msg =
         err instanceof ApiError ? err.message : "テーブルコピーに失敗しました";
       setError(msg);
@@ -77,14 +90,15 @@ export function CrossCopyTableModal({
   };
 
   const handleSwitchContext = () => {
-    if (!result) return;
+    const branchToOpen = result?.branch_name ?? existingBranchName;
+    if (!branchToOpen) return;
     if (useDraftStore.getState().hasDraft()) {
       if (!window.confirm("未保存の変更があります。破棄して切り替えますか？")) return;
     }
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
-    // Branch is verified queryable by backend before returning, so direct switch is safe.
-    ctx.setBranch(result.branch_name);
+    // The backend only offers branches that already exist and can be opened from the UI.
+    ctx.setBranch(branchToOpen);
     onClose();
   };
 
@@ -146,7 +160,7 @@ export function CrossCopyTableModal({
           </div>
         )}
 
-        {!result ? (
+        {!result && !existingBranchName ? (
           /* Input form */
           <div>
             <div style={{ marginBottom: 12 }}>
@@ -241,30 +255,38 @@ export function CrossCopyTableModal({
             </div>
           </div>
         ) : (
-          /* Result */
+          /* Result / recoverable existing branch */
           <div>
             <div
               style={{
                 padding: "12px 16px",
-                background: "#f0fdf4",
+                background: result ? "#f0fdf4" : "#eff6ff",
                 borderRadius: 4,
                 marginBottom: 12,
                 fontSize: 13,
-                color: "#166534",
+                color: result ? "#166534" : "#1d4ed8",
               }}
             >
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                コピー完了
+                {result ? "コピー完了" : "既存のインポートブランチがあります"}
               </div>
-              <div>ブランチ: {result.branch_name}</div>
-              <div>{result.row_count.toLocaleString()}行</div>
-              <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
-                共有カラム: {result.shared_columns.length}
-                {result.source_only_columns.length > 0 &&
-                  ` / コピー元のみ: ${result.source_only_columns.length}`}
-                {result.dest_only_columns.length > 0 &&
-                  ` / 宛先のみ: ${result.dest_only_columns.length}`}
-              </div>
+              <div>ブランチ: {result?.branch_name ?? existingBranchName}</div>
+              {result ? (
+                <>
+                  <div>{result.row_count.toLocaleString()}行</div>
+                  <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+                    共有カラム: {result.shared_columns.length}
+                    {result.source_only_columns.length > 0 &&
+                      ` / コピー元のみ: ${result.source_only_columns.length}`}
+                    {result.dest_only_columns.length > 0 &&
+                      ` / 宛先のみ: ${result.dest_only_columns.length}`}
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11, marginTop: 4 }}>
+                  同じコピー元に対応する作業ブランチが既にあります。既存 branch を開いて続行してください。
+                </div>
+              )}
             </div>
 
             <div
@@ -293,7 +315,7 @@ export function CrossCopyTableModal({
                 onClick={handleSwitchContext}
                 style={{ padding: "6px 16px", fontSize: 13 }}
               >
-                宛先に切り替え
+                {result ? "宛先に切り替え" : "既存ブランチを開く"}
               </button>
             </div>
           </div>

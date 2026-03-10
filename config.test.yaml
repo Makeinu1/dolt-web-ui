@@ -1,0 +1,29 @@
+targets:
+  - id: local
+    host: "127.0.0.1"
+    port: 13306
+    user: "root"
+    password: ""
+
+databases:
+  - target_id: local
+    name: test_db
+    allowed_branches:
+      - "main"
+      - "audit"
+      - "wi/*"
+  - target_id: local
+    name: dest_db
+    allowed_branches:
+      - "main"
+      - "audit"
+      - "wi/*"
+
+server:
+  port: 18080
+  cors_origin: "http://127.0.0.1:4173"
+  body_limit_mb: 10
+  timeouts:
+    read_sec: 30
+    write_sec: 300
+    idle_sec: 120

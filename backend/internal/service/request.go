@@ -262,16 +262,10 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		workBranch = fallbackBranch
 	}
 
-	workConn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, workBranch)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to work branch: %w", err)
-	}
 	var currentWorkHash string
-	if err := workConn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&currentWorkHash); err != nil {
-		workConn.Close()
+	if err := conn.QueryRowContext(ctx, "SELECT HASHOF(?)", workBranch).Scan(&currentWorkHash); err != nil {
 		return nil, fmt.Errorf("failed to get work HEAD: %w", err)
 	}
-	workConn.Close()
 	if currentWorkHash != submittedWorkHash {
 		return nil, &model.APIError{
 			Status:  412,

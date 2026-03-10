@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
+require_dolt
+ensure_dirs
+
+if is_running; then
+  if wait_for_sql; then
+    exit 0
+  fi
+fi
+
+rm -f "${PID_FILE}"
+
+dolt sql-server \
+  --host "${SQL_HOST}" \
+  --port "${SQL_PORT}" \
+  --data-dir "${DATA_DIR}" \
+  --doltcfg-dir "${CFG_DIR}" \
+  --loglevel warning \
+  >"${LOG_FILE}" 2>&1 &
+
+echo $! > "${PID_FILE}"
+
+if ! wait_for_sql; then
+  cat "${LOG_FILE}" >&2 || true
+  exit 1
+fi

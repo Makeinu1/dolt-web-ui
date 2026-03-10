@@ -18,6 +18,12 @@ jobs:
           node-version: "20"
       - name: Install
         run: cd frontend && npm ci
+      - name: Install Playwright Browser
+        run: cd frontend && npx playwright install --with-deps chromium
+      - name: Frontend Unit Tests
+        run: cd frontend && npm run test
+      - name: Mocked Playwright Tests
+        run: cd frontend && npm run test:e2e:mock
       - name: Type Check
         run: cd frontend && npx tsc --noEmit
       - name: Build

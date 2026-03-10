@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
+require_dolt
+"${TESTENV_DIR}/stop"
+
+rm -rf "${DATA_DIR}" "${CFG_DIR}"
+ensure_dirs
+
+init_repo() {
+  local name="$1"
+  mkdir -p "${DATA_DIR}/${name}"
+  (
+    cd "${DATA_DIR}/${name}"
+    dolt init --name "Dolt Web UI Test" --email "test@example.com" >/dev/null
+  )
+}
+
+seed_test_db() {
+  repo_sql test_db <<'SQL'
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(255) NOT NULL
+);
+INSERT INTO users VALUES
+  (1, 'Alice', 'admin'),
+  (2, 'Bob', 'user'),
+  (3, 'Charlie', 'user');
+CREATE TABLE settings (
+  key_name VARCHAR(64) PRIMARY KEY,
+  value VARCHAR(255) NOT NULL
+);
+INSERT INTO settings VALUES
+  ('mode', 'default'),
+  ('region', 'lab');
+CALL DOLT_ADD('.');
+CALL DOLT_COMMIT('-am', 'seed fixture: test_db main');
+SQL
+  (
+    cd "${DATA_DIR}/test_db"
+    dolt branch audit
+    dolt branch "wi/existing-item"
+  )
+}
+
+seed_dest_db() {
+  repo_sql dest_db <<'SQL'
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(255) NOT NULL
+);
+INSERT INTO users VALUES
+  (10, 'Zoe', 'guest');
+CREATE TABLE settings (
+  key_name VARCHAR(64) PRIMARY KEY,
+  value VARCHAR(255) NOT NULL
+);
+INSERT INTO settings VALUES
+  ('mode', 'dest'),
+  ('region', 'backup');
+CALL DOLT_ADD('.');
+CALL DOLT_COMMIT('-am', 'seed fixture: dest_db main');
+SQL
+  (
+    cd "${DATA_DIR}/dest_db"
+    dolt branch audit
+    dolt branch "wi/dest-users"
+  )
+}
+
+init_repo test_db
+seed_test_db
+
+init_repo dest_db
+seed_dest_db

@@ -19,7 +19,7 @@ const SOURCE_BRANCHES = [
 const DEST_BRANCHES = [
   { name: 'main', hash: 'hash-dest-main', latest_commit_message: 'init', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
   { name: 'wi/dest-users', hash: 'hash-dest-users', latest_commit_message: 'work', latest_committer: 'bob', latest_commit_date: '2025-01-04T00:00:00Z' },
-  { name: 'wi/users-copy', hash: 'hash-users-copy', latest_commit_message: 'copied', latest_committer: 'bob', latest_commit_date: '2025-01-05T00:00:00Z' },
+  { name: 'wi/import-test_db-users', hash: 'hash-users-copy', latest_commit_message: 'copied', latest_committer: 'bob', latest_commit_date: '2025-01-05T00:00:00Z' },
 ];
 
 async function setupCrossDbMocks(page: Page) {
@@ -145,7 +145,7 @@ test.describe('Branch-sensitive Features', () => {
       await route.fulfill({
         json: {
           hash: 'hash-users-copy',
-          branch_name: 'wi/users-copy',
+          branch_name: 'wi/import-test_db-users',
           row_count: 3,
           shared_columns: ['id', 'name', 'role'],
           source_only_columns: [],
@@ -167,20 +167,65 @@ test.describe('Branch-sensitive Features', () => {
     await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
 
     await expect(modal).toContainText('コピー完了');
-    await expect(modal).toContainText('ブランチ: wi/users-copy');
+    await expect(modal).toContainText('ブランチ: wi/import-test_db-users');
 
     const switchedTablesRequest = page.waitForRequest((req) =>
       req.url().includes('/api/v1/tables') &&
       req.url().includes('db_name=dest_db') &&
-      req.url().includes('branch_name=wi%2Fusers-copy')
+      req.url().includes('branch_name=wi%2Fimport-test_db-users')
     );
     await modal.locator('button.primary', { hasText: '宛先に切り替え' }).click();
     await switchedTablesRequest;
 
-    await expect(page.locator('.context-bar select')).toHaveValue('wi/users-copy');
+    await expect(page.locator('.context-bar select')).toHaveValue('wi/import-test_db-users');
     expect(copyBody).not.toBeNull();
     expect(copyBody?.source_branch).toBe('wi/feat-a');
     expect(copyBody?.dest_db).toBe('dest_db');
+  });
+
+  test('should offer opening an existing import branch when cross-copy returns BRANCH_EXISTS', async ({ page }) => {
+    await setupBaseMocks(page);
+    await setupCrossDbMocks(page);
+
+    await page.route('**/api/v1/cross-copy/table', async (route) => {
+      await route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'BRANCH_EXISTS',
+            message: 'ブランチ wi/import-test_db-users は既に存在します。既存の作業ブランチを開いて続行してください。',
+            details: {
+              branch_name: 'wi/import-test_db-users',
+              open_existing: true,
+            },
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '他DBへテーブルコピー' }).click();
+
+    const modal = page.locator('.modal');
+    await modal.locator('select').first().selectOption('wi/feat-a');
+    await modal.locator('select').nth(1).selectOption('dest_db');
+    await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
+
+    await expect(modal).toContainText('既存のインポートブランチがあります');
+    await expect(modal).toContainText('ブランチ: wi/import-test_db-users');
+
+    const switchedTablesRequest = page.waitForRequest((req) =>
+      req.url().includes('/api/v1/tables') &&
+      req.url().includes('db_name=dest_db') &&
+      req.url().includes('branch_name=wi%2Fimport-test_db-users')
+    );
+    await modal.locator('button.primary', { hasText: '既存ブランチを開く' }).click();
+    await switchedTablesRequest;
+
+    await expect(page.locator('.context-bar select')).toHaveValue('wi/import-test_db-users');
   });
 
   test('should preview and copy selected rows across DBs with explicit source and destination branches', async ({ page }) => {

@@ -10,7 +10,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:mock": "playwright test",
+    "test:e2e:real": "playwright test -c playwright.real.config.ts",
+    "test:e2e:real:smoke": "playwright test -c playwright.real.config.ts --grep @smoke-real --grep-invert @quarantine",
+    "test:e2e:real:full": "playwright test -c playwright.real.config.ts"
   },
   "dependencies": {
     "ag-grid-community": "^35.0.1",

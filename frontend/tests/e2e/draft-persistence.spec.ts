@@ -1,5 +1,21 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { setupBaseMocks, selectContextInUI } from './setup';
+
+async function clickToolbarButton(page: Page, label: string | RegExp) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const button = page.locator('button').filter({ hasText: label }).first();
+        await expect(button).toBeVisible({ timeout: 2000 });
+        try {
+            await button.click();
+            return;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!message.includes('detached from the DOM') || attempt === 2) {
+                throw error;
+            }
+        }
+    }
+}
 
 test.describe('ドラフト永続性テスト', () => {
     test.beforeEach(async ({ page }) => {
@@ -16,7 +32,7 @@ test.describe('ドラフト永続性テスト', () => {
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
         await aliceRow.locator('.ag-selection-checkbox').click();
-        await page.locator('button', { hasText: '削除' }).click();
+        await clickToolbarButton(page, '削除');
 
         // Commit ボタンにカウント表示
         await expect(page.locator('.action-commit')).toHaveText('Commit (1)', { timeout: 3000 });
@@ -34,7 +50,7 @@ test.describe('ドラフト永続性テスト', () => {
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
         await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
         await aliceRow.locator('.ag-selection-checkbox').click();
-        await page.locator('button', { hasText: '削除' }).click();
+        await clickToolbarButton(page, '削除');
 
         // Commit ボタンのカウントが1
         const commitBtn = page.locator('.action-commit');
@@ -46,7 +62,7 @@ test.describe('ドラフト永続性テスト', () => {
         const bobRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' });
         await bobRow.waitFor({ state: 'visible', timeout: 3000 });
         await bobRow.locator('.ag-selection-checkbox').click();
-        await page.locator('button', { hasText: '削除' }).click();
+        await clickToolbarButton(page, '削除');
 
         // カウントが2になる
         await expect(commitBtn).toHaveText('Commit (2)', { timeout: 3000 });
@@ -73,9 +89,9 @@ test.describe('ドラフト永続性テスト', () => {
         await row.waitFor({ state: 'visible', timeout: 5000 });
         await row.locator('.ag-selection-checkbox').click();
 
-        const copyBtn = page.locator('button').filter({ hasText: /コピー/ });
+        const copyBtn = page.locator('button').filter({ hasText: /コピー/ }).first();
         if (await copyBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-            await copyBtn.click();
+            await clickToolbarButton(page, /コピー/);
 
             // Commit カウントが1になる
             const commitBtn = page.locator('.action-commit');
@@ -89,7 +105,7 @@ test.describe('ドラフト永続性テスト', () => {
                 await draftRow.locator('.ag-selection-checkbox').click();
                 const deleteBtn = page.locator('button', { hasText: '削除' });
                 if (await deleteBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                    await deleteBtn.click();
+                    await clickToolbarButton(page, '削除');
                     // カウントが0に戻る（opsがキャンセルされた）
                     await expect(commitBtn).not.toBeVisible({ timeout: 3000 });
                 }

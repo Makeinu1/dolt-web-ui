@@ -30,6 +30,8 @@ All errors use the envelope format:
 | `MERGE_CONFLICTS_PRESENT` | 409 | Merge produced data conflicts |
 | `SCHEMA_CONFLICTS_PRESENT` | 409 | Merge produced schema conflicts |
 | `CONSTRAINT_VIOLATIONS_PRESENT` | 409 | Merge produced constraint violations |
+| `BRANCH_EXISTS` | 409 | Work branch already exists; open the existing branch instead of creating a new one |
+| `BRANCH_NOT_READY` | 409 | Branch was created but is not queryable yet; retry after a short delay |
 | `BRANCH_LOCKED` | 423 | Branch is locked (pending approval request exists) |
 | `PRECONDITION_FAILED` | 412 | Precondition check failed |
 | `INTERNAL` | 500 | Internal server error |
@@ -140,6 +142,38 @@ Create a new work branch from main. **ProtectedBranchGuard applies.**
 
 ```json
 { "branch_name": "wi/my-branch" }
+```
+
+**Recoverable errors:**
+
+- `409 BRANCH_EXISTS`
+
+```json
+{
+  "error": {
+    "code": "BRANCH_EXISTS",
+    "message": "ブランチ wi/my-branch は既に存在します。既存の作業ブランチを開いて続行してください。",
+    "details": {
+      "branch_name": "wi/my-branch",
+      "open_existing": true
+    }
+  }
+}
+```
+
+- `409 BRANCH_NOT_READY`
+
+```json
+{
+  "error": {
+    "code": "BRANCH_NOT_READY",
+    "message": "ブランチ wi/my-branch は作成されましたが、まだ接続準備が完了していません。少し待ってから開いてください。",
+    "details": {
+      "branch_name": "wi/my-branch",
+      "retry_after_ms": 2000
+    }
+  }
+}
 ```
 
 ---

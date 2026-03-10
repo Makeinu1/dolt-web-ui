@@ -81,3 +81,11 @@ func normalizeWorkItemSearchKeyword(keyword string) string {
 	trimmed = strings.TrimPrefix(trimmed, "merged/")
 	return trimmed
 }
+
+func importWorkItemName(sourceDB, tableName string) string {
+	return fmt.Sprintf("import-%s-%s", sourceDB, tableName)
+}
+
+func importWorkBranchName(sourceDB, tableName string) string {
+	return "wi/" + importWorkItemName(sourceDB, tableName)
+}

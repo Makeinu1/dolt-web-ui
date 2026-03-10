@@ -1,0 +1,62 @@
+name: Real E2E
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "scripts/testenv/**"
+      - "config.test.yaml"
+      - ".github/workflows/real-e2e.yml"
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "backend/go.mod"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Dolt
+        run: |
+          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
+      - name: Install Frontend Dependencies
+        run: cd frontend && npm ci
+      - name: Install Playwright Browser
+        run: cd frontend && npx playwright install --with-deps chromium
+      - name: Backend Integration Tests
+        run: cd backend && go test -tags=integration ./internal/service
+      - name: Real Playwright Smoke
+        run: cd frontend && npm run test:e2e:real:smoke
+
+  full:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "backend/go.mod"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Dolt
+        run: |
+          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
+      - name: Install Frontend Dependencies
+        run: cd frontend && npm ci
+      - name: Install Playwright Browser
+        run: cd frontend && npx playwright install --with-deps chromium
+      - name: Backend Integration Tests
+        run: cd backend && go test -tags=integration ./internal/service
+      - name: Real Playwright Full
+        run: cd frontend && npm run test:e2e:real:full

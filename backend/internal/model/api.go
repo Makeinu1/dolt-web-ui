@@ -31,6 +31,8 @@ const (
 	CodeConstraintViolationsPresent = "CONSTRAINT_VIOLATIONS_PRESENT"
 	CodePreconditionFailed          = "PRECONDITION_FAILED"
 	CodeBranchLocked                = "BRANCH_LOCKED"
+	CodeBranchExists                = "BRANCH_EXISTS"
+	CodeBranchNotReady              = "BRANCH_NOT_READY"
 	CodeInternal                    = "INTERNAL"
 	CodeCopyDataError               = "COPY_DATA_ERROR"
 	CodeCopyFKError                 = "COPY_FK_ERROR"

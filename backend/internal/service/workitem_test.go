@@ -54,3 +54,9 @@ func TestNormalizeWorkItemSearchKeyword(t *testing.T) {
 		}
 	}
 }
+
+func TestImportWorkBranchName(t *testing.T) {
+	if got := importWorkBranchName("test_db", "users"); got != "wi/import-test_db-users" {
+		t.Fatalf("unexpected import work branch: got %q", got)
+	}
+}

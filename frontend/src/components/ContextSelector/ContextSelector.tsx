@@ -6,6 +6,20 @@ import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { Target, Database, Branch } from "../../types/api";
 
+const branchSwitchDiscardMessage = "未コミットの変更があります。破棄して既存の作業ブランチを開きますか？";
+
+function getBranchErrorDetails(err: ApiError): { branch_name?: string; retry_after_ms?: number } {
+  if (!err.details || typeof err.details !== "object") {
+    return {};
+  }
+  const details = err.details as Record<string, unknown>;
+  return {
+    branch_name: typeof details.branch_name === "string" ? details.branch_name : undefined,
+    retry_after_ms:
+      typeof details.retry_after_ms === "number" ? details.retry_after_ms : undefined,
+  };
+}
+
 export function ContextSelector() {
   const { targetId, dbName, branchName, branchRefreshKey, setTarget, setDatabase, setBranch } =
     useContextStore();
@@ -39,10 +53,10 @@ export function ContextSelector() {
     });
   }, [targetId]);
 
-  const refreshBranches = async () => {
+  const refreshBranches = async (): Promise<Branch[]> => {
     if (!targetId || !dbName) {
       setBranches([]);
-      return;
+      return [];
     }
     setLoadingBranches(true);
     try {
@@ -53,15 +67,17 @@ export function ContextSelector() {
       if (currentBranch && !result.some((b) => b.name === currentBranch)) {
         setBranch("");
       }
+      return result;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "ブランチの読み込みに失敗しました");
+      throw err;
     } finally {
       setLoadingBranches(false);
     }
   };
 
   useEffect(() => {
-    refreshBranches();
+    refreshBranches().catch(() => undefined);
   }, [targetId, dbName, branchRefreshKey]);
 
   // コンテキスト切替時にブランチ作成フォームをリセット
@@ -79,30 +95,88 @@ export function ContextSelector() {
     workItemName.trim().length > 0 &&
     /^[A-Za-z0-9._-]+$/.test(workItemName.trim());
 
+  const openExistingBranch = async (existingBranchName: string) => {
+    const latestBranches = await refreshBranches();
+    if (!latestBranches.some((branch) => branch.name === existingBranchName)) {
+      return false;
+    }
+    if (hasDraft() && !window.confirm(branchSwitchDiscardMessage)) {
+      return true;
+    }
+    setBranch(existingBranchName);
+    setWorkItemName("");
+    setShowCreate(false);
+    setCreateError(null);
+    return true;
+  };
+
+  const waitForBranchReady = async (readyBranchName: string, retryAfterMs = 2000) => {
+    const attempts = Math.max(1, Math.ceil(retryAfterMs / 400));
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const latestBranches = await refreshBranches();
+        if (latestBranches.some((branch) => branch.name === readyBranchName)) {
+          await api.getHead(targetId, dbName, readyBranchName);
+          setBranch(readyBranchName);
+          setWorkItemName("");
+          setShowCreate(false);
+          setCreateError(null);
+          return true;
+        }
+      } catch {
+        // Keep polling until the branch becomes queryable or the timeout expires.
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
+    }
+    return false;
+  };
+
   const handleCreateBranch = async () => {
     if (!fullBranchName || !workItemValid) return;
-    if (branches.some((b) => b.name === fullBranchName)) {
-      if (hasDraft() && !window.confirm("未コミットの変更があります。破棄して既存の作業ブランチを開きますか？")) return;
-      setBranch(fullBranchName);
-      setWorkItemName("");
-      setShowCreate(false);
-      setCreateError(null);
-      return;
-    }
     setCreating(true);
     setCreateError(null);
     try {
+      if (branches.some((branch) => branch.name === fullBranchName)) {
+        const opened = await openExistingBranch(fullBranchName);
+        if (opened) {
+          return;
+        }
+      }
+
       await api.createBranch({
         target_id: targetId,
         db_name: dbName,
         branch_name: fullBranchName,
       });
-      await refreshBranches();
+      const refreshedBranches = await refreshBranches();
+      if (!refreshedBranches.some((branch) => branch.name === fullBranchName)) {
+        const ready = await waitForBranchReady(fullBranchName);
+        if (!ready) {
+          setCreateError("ブランチは作成されましたが、一覧への反映を確認できませんでした。時間をおいて再度開いてください。");
+        }
+        return;
+      }
       setBranch(fullBranchName);
       setWorkItemName("");
       setShowCreate(false);
     } catch (err: unknown) {
-      setCreateError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
+      if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
+        const details = getBranchErrorDetails(err);
+        const branchToOpen = details.branch_name ?? fullBranchName;
+        const opened = await openExistingBranch(branchToOpen);
+        if (!opened) {
+          setCreateError(err.message);
+        }
+      } else if (err instanceof ApiError && err.code === "BRANCH_NOT_READY") {
+        const details = getBranchErrorDetails(err);
+        const branchToOpen = details.branch_name ?? fullBranchName;
+        const ready = await waitForBranchReady(branchToOpen, details.retry_after_ms);
+        if (!ready) {
+          setCreateError(err.message);
+        }
+      } else {
+        setCreateError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
+      }
     } finally {
       setCreating(false);
     }

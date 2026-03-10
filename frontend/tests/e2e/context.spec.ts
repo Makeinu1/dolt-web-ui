@@ -37,6 +37,18 @@ test.describe('ContextSelector Tests', () => {
         await page.goto('/');
         await selectContextInUI(page, 'local', 'test_db', 'main');
 
+        let branchCreated = false;
+        await page.unroute('**/api/v1/branches*');
+        await page.route('**/api/v1/branches*', async route => {
+            await route.fulfill({
+                json: [
+                    { name: 'main', hash: 'hash-main' },
+                    { name: 'wi/feat-a', hash: 'hash-feat-a' },
+                    ...(branchCreated ? [{ name: 'wi/test-feature', hash: 'hash-test-feature' }] : []),
+                ],
+            });
+        });
+
         const contextBar = page.locator('.context-bar');
 
         // Check branch select has "main" and "wi/feat-a" (from mocks)
@@ -54,7 +66,8 @@ test.describe('ContextSelector Tests', () => {
         // Create branch (mock API response)
         await page.route('**/api/v1/branches/create*', async route => {
             if (route.request().method() === 'POST') {
-                await route.fulfill({ status: 200, json: {} });
+                branchCreated = true;
+                await route.fulfill({ status: 201, json: { branch_name: 'wi/test-feature' } });
             } else {
                 await route.continue();
             }
@@ -63,7 +76,84 @@ test.describe('ContextSelector Tests', () => {
         const createBtn = contextBar.locator('button', { hasText: '作成' }).first();
         await createBtn.click();
 
-        // Verify creation process closed input
+        await expect(branchSelect).toHaveValue('wi/test-feature');
         await expect(branchInput).not.toBeVisible();
+    });
+
+    test('should reopen an existing work branch without calling create again', async ({ page }) => {
+        await page.goto('/');
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        let createCalls = 0;
+        await page.route('**/api/v1/branches/create*', async route => {
+            if (route.request().method() === 'POST') {
+                createCalls += 1;
+                await route.fulfill({ status: 201, json: { branch_name: 'wi/feat-a' } });
+                return;
+            }
+            await route.continue();
+        });
+
+        const contextBar = page.locator('.context-bar');
+        const branchSelect = contextBar.locator('select');
+
+        await contextBar.locator('button', { hasText: '+' }).click();
+        const branchInput = contextBar.locator('input[placeholder="ticket-123"]');
+        await branchInput.fill('feat-a');
+        await contextBar.locator('button', { hasText: '作成' }).first().click();
+
+        await expect(branchSelect).toHaveValue('wi/feat-a');
+        expect(createCalls).toBe(0);
+    });
+
+    test('should recover from a stale branch list by opening BRANCH_EXISTS from the server', async ({ page }) => {
+        let serverConfirmedExisting = false;
+        await page.unroute('**/api/v1/branches*');
+        await page.route('**/api/v1/branches*', async route => {
+            if (serverConfirmedExisting) {
+                await route.fulfill({
+                    json: [
+                        { name: 'main', hash: 'hash-main' },
+                        { name: 'wi/stale-item', hash: 'hash-stale' },
+                    ],
+                });
+                return;
+            }
+            await route.fulfill({
+                json: [{ name: 'main', hash: 'hash-main' }],
+            });
+        });
+
+        await page.route('**/api/v1/branches/create*', async route => {
+            if (route.request().method() !== 'POST') {
+                await route.continue();
+                return;
+            }
+            serverConfirmedExisting = true;
+            await route.fulfill({
+                status: 409,
+                json: {
+                    error: {
+                        code: 'BRANCH_EXISTS',
+                        message: 'ブランチ wi/stale-item は既に存在します。既存の作業ブランチを開いて続行してください。',
+                        details: {
+                            branch_name: 'wi/stale-item',
+                            open_existing: true,
+                        },
+                    },
+                },
+            });
+        });
+
+        await page.goto('/');
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        const contextBar = page.locator('.context-bar');
+        await contextBar.locator('button', { hasText: '+' }).click();
+        const branchInput = contextBar.locator('input[placeholder="ticket-123"]');
+        await branchInput.fill('stale-item');
+        await contextBar.locator('button', { hasText: '作成' }).first().click();
+
+        await expect(contextBar.locator('select')).toHaveValue('wi/stale-item');
     });
 });

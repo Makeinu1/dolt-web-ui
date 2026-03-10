@@ -89,20 +89,29 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 	// ConnDB already sets USE db/main, so single-arg form creates from main HEAD.
 	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH(?)", req.BranchName)
 	if err != nil {
-		return fmt.Errorf("failed to create branch: %w", err)
+		return classifyBranchCreateError(ctx, conn, req.BranchName, err)
 	}
 
 	// Verify the branch is queryable on a fresh connection (USE db/branch).
 	// Dolt may need a moment to propagate the branch across connections.
 	if err := s.verifyBranchQueryable(ctx, req.TargetID, req.DBName, req.BranchName); err != nil {
-		// Verification failed: roll back by deleting the branch we just created.
-		// Use context.Background() so cancellation of the HTTP request doesn't prevent cleanup.
-		rollbackConn, rbErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
-		if rbErr == nil {
-			rollbackConn.ExecContext(context.Background(), "CALL DOLT_BRANCH('-D', ?)", req.BranchName) //nolint:errcheck
-			rollbackConn.Close()
+		// If the branch exists on the creating connection, USE db/branch is simply lagging.
+		// Surface a recoverable state instead of returning opaque INTERNAL.
+		exists, existsErr := branchExists(ctx, conn, req.BranchName)
+		if existsErr == nil && exists {
+			return newBranchNotReadyError(req.BranchName)
 		}
-		return fmt.Errorf("branch created but not yet queryable via USE")
+
+		// Fall back to a fresh connection check if the creating connection cannot confirm.
+		checkConn, checkErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
+		if checkErr == nil {
+			defer checkConn.Close()
+			exists, existsErr = branchExists(context.Background(), checkConn, req.BranchName)
+			if existsErr == nil && exists {
+				return newBranchNotReadyError(req.BranchName)
+			}
+		}
+		return fmt.Errorf("branch created but not yet queryable via USE: %w", err)
 	}
 	return nil
 }
