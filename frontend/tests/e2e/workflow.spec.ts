@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupBaseMocks, selectContextInUI } from './setup';
+import { MOCK_REQUESTS, setupBaseMocks, selectContextInUI } from './setup';
 
 test.describe('Workflow Tests', () => {
     test.beforeEach(async ({ page }) => {
@@ -8,7 +8,7 @@ test.describe('Workflow Tests', () => {
     });
 
     test('should allow committing draft changes', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // 削除操作を行なってドラフトを作成
         const gridContainer = page.locator('.ag-root-wrapper');
@@ -49,7 +49,7 @@ test.describe('Workflow Tests', () => {
     });
 
     test('should allow submitting branch and opening diffs', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // Open overflow menu
         const overflowBtn = page.locator('.overflow-btn');
@@ -76,7 +76,7 @@ test.describe('Workflow Tests', () => {
 
         // Mock submit response
         await page.route('**/api/v1/request/submit*', async route => {
-            await route.fulfill({ status: 200, json: { request_id: 'REQ-NEW', submitted_main_hash: 'hx', submitted_work_hash: 'hy' } });
+            await route.fulfill({ status: 200, json: { request_id: 'req/feat-a', submitted_main_hash: 'hx', submitted_work_hash: 'hy' } });
         });
 
         // Fill input and submit
@@ -89,7 +89,6 @@ test.describe('Workflow Tests', () => {
     });
 
     test('should allow opening approver inbox and viewing requests', async ({ page }) => {
-        page.on('request', r => console.log('REQ:', r.url()));
         await selectContextInUI(page, 'local', 'test_db', 'main');
 
         // Wait specific selector since header may load requests later
@@ -117,9 +116,16 @@ test.describe('Workflow Tests', () => {
         await expect(authModal).toBeVisible();
         await expect(authModal.locator('h2')).toHaveText('承認');
 
+        await page.unroute('**/api/v1/requests*');
+        let requestApproved = false;
+        await page.route('**/api/v1/requests*', async route => {
+            await route.fulfill({ json: requestApproved ? [] : MOCK_REQUESTS });
+        });
+
         // Mock approve response
         await page.route('**/api/v1/request/approve*', async route => {
-            await route.fulfill({ status: 200, json: { hash: 'hash-a' } });
+            requestApproved = true;
+            await route.fulfill({ status: 200, json: { hash: 'hash-a', active_branch: 'wi/feat-b', active_branch_advanced: true, archive_tag: 'merged/feat-b/01', warnings: [] } });
         });
 
         // Click 承認してマージ

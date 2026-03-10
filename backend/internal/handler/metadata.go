@@ -7,7 +7,7 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
 
-var workBranchRe = regexp.MustCompile(`^wi/[A-Za-z0-9._-]+/[0-9]{1,3}$`)
+var workBranchRe = regexp.MustCompile(`^wi/[A-Za-z0-9._-]+$`)
 
 func (h *Handler) ListTargets(w http.ResponseWriter, r *http.Request) {
 	targets := h.svc.ListTargets()
@@ -64,7 +64,7 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 
 	if !workBranchRe.MatchString(req.BranchName) {
 		writeError(w, http.StatusBadRequest, model.CodeInvalidArgument,
-			"branch name must match pattern wi/<WorkItem>/<Round> (e.g. wi/task-001/01)")
+			"branch name must match pattern wi/<WorkItem> (e.g. wi/task-001)")
 		return
 	}
 

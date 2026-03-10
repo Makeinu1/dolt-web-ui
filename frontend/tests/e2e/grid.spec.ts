@@ -7,7 +7,7 @@ test.describe('Grid and Draft Editing Tests', () => {
         await page.goto('/');
 
         // UIを通してコンテキストをセットしてTableGridを読み込ませる
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
     });
 
     test('should load table rows and display total count', async ({ page }) => {

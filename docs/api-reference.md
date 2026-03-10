@@ -57,7 +57,7 @@ Work branches with a pending approval request (`req/*` tag) are locked. Commit, 
   "error": {
     "code": "BRANCH_LOCKED",
     "message": "承認申請中のブランチは編集できません。却下されるとロックが解除されます。",
-    "details": { "request_tag": "req/work-1/1707744000" }
+    "details": { "request_tag": "req/work-1" }
   }
 }
 ```
@@ -871,7 +871,7 @@ Creates a Dolt tag with prefix `req/` containing the submission metadata.
 
 ```json
 {
-  "request_id": "req/wi-work-1/1707744000",
+  "request_id": "req/work-1",
   "submitted_main_hash": "mainhead123...",
   "submitted_work_hash": "workhead123..."
 }
@@ -895,7 +895,7 @@ List pending approval requests.
 ```json
 [
   {
-    "request_id": "req/wi-work-1/1707744000",
+    "request_id": "req/work-1",
     "work_branch": "wi/work-1",
     "submitted_main_hash": "mainhead123...",
     "submitted_work_hash": "workhead123...",
@@ -929,9 +929,9 @@ Approve a request and merge into main via **3-way merge** (Dolt cell-level merge
 
 On success:
 - Creates `merged/{item}/{round}` audit tag
-- Deletes the work branch (`wi/{item}/{round}`)
-- Creates the next-round branch (`wi/{item}/{round+1}`) from the new main HEAD
-- Returns the new main HEAD hash and the next-round branch name
+- Deletes the pending request tag (`req/{item}`)
+- Advances the existing work branch (`wi/{item}`) to the new main HEAD
+- Returns the new main HEAD hash, the active work branch, archive tag, and any warnings
 
 **No freeze gate**: multiple branches can be approved concurrently. Dolt's cell-level 3-way merge automatically resolves non-overlapping changes. Only same-cell conflicts cause an abort.
 
@@ -941,7 +941,7 @@ On success:
 {
   "target_id": "production",
   "db_name": "psx_data",
-  "request_id": "req/wi-work-1/1707744000",
+  "request_id": "req/work-1",
   "merge_message_ja": "承認マージ: アイテム更新"
 }
 ```
@@ -958,14 +958,20 @@ On success:
 ```json
 {
   "hash": "mergecommithash123...",
-  "next_branch": "wi/wi-work-1/2"
+  "active_branch": "wi/work-1",
+  "active_branch_advanced": true,
+  "archive_tag": "merged/work-1/01",
+  "warnings": []
 }
 ```
 
 | Field | Description |
 |-------|-------------|
 | `hash` | New main HEAD hash after merge |
-| `next_branch` | Auto-created next-round branch name (e.g., `wi/foo/02`) |
+| `active_branch` | Existing work branch name retained for subsequent work |
+| `active_branch_advanced` | Whether the work branch was successfully advanced to the new main HEAD |
+| `archive_tag` | Audit tag created for this approved merge (e.g., `merged/foo/01`) |
+| `warnings` | Non-fatal follow-up issues, such as branch realignment failure |
 
 **Errors:**
 
@@ -987,7 +993,7 @@ Reject a request. Removes the `req/` tag. **The work branch is preserved** so th
 {
   "target_id": "production",
   "db_name": "psx_data",
-  "request_id": "req/wi-work-1/1707744000"
+  "request_id": "req/work-1"
 }
 ```
 

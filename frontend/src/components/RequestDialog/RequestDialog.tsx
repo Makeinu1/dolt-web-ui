@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useContextStore } from "../../store/context";
+import { useUIStore } from "../../store/ui";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
+import type { ApproveResponse, RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
 
 const DIFF_PREVIEW_TIMEOUT_MS = 3000;
 
@@ -247,7 +248,7 @@ function ApproveModal({
   requestId: string;
   workBranch: string;
   onClose: () => void;
-  onApproved: (nextBranch: string) => void;
+  onApproved: (result: ApproveResponse) => void;
 }) {
   const { targetId, dbName } = useContextStore();
   const [mergeMessage, setMergeMessage] = useState(`承認マージ: ${requestId}`);
@@ -264,7 +265,7 @@ function ApproveModal({
         request_id: requestId,
         merge_message_ja: mergeMessage,
       });
-      onApproved(result.next_branch || "");
+      onApproved(result);
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
@@ -396,6 +397,7 @@ function RejectModal({
 // --- Approver inbox view ---
 export function ApproverInbox() {
   const { targetId, dbName, triggerBranchRefresh, setBranch } = useContextStore();
+  const setError = useUIStore((s) => s.setError);
   const [requests, setRequests] = useState<RequestSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [approveTarget, setApproveTarget] = useState<string | null>(null);
@@ -409,30 +411,33 @@ export function ApproverInbox() {
     api
       .listRequests(targetId, dbName)
       .then((data) => setRequests(data || []))
-      .catch(console.error)
+      .catch((err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "承認待ちリクエストの読み込みに失敗しました";
+        setError(msg);
+      })
       .finally(() => setLoading(false));
-  }, [targetId, dbName]);
+  }, [targetId, dbName, setError]);
 
   useEffect(() => {
     loadRequests();
   }, [loadRequests]);
 
-  const onApproved = (nextBranch: string) => {
-    if (approveTarget) {
-      setRequests((prev) => prev.filter((r) => r.request_id !== approveTarget));
-    }
+  const onApproved = (result: ApproveResponse) => {
     triggerBranchRefresh();
-    // Navigate to the auto-created next round branch if available
-    if (nextBranch) {
-      setBranch(nextBranch);
+    void loadRequests();
+    if (result.active_branch_advanced && result.active_branch) {
+      setBranch(result.active_branch);
+    } else {
+      setBranch("main");
+    }
+    if (result.warnings && result.warnings.length > 0) {
+      setError(result.warnings.join(" "));
     }
   };
 
   const onRejected = () => {
-    if (rejectTarget) {
-      setRequests((prev) => prev.filter((r) => r.request_id !== rejectTarget));
-    }
     triggerBranchRefresh();
+    void loadRequests();
   };
 
   if (loading) {

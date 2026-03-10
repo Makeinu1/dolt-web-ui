@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import { useUIStore } from "../../store/ui";
@@ -71,21 +71,8 @@ export function ContextSelector() {
     setCreateError(null);
   }, [targetId, dbName]);
 
-  // Auto-calculate next Round from existing branches for the given WorkItem
-  const nextRound = useMemo(() => {
-    const trimmed = workItemName.trim();
-    if (!trimmed) return "01";
-    const existing = branches
-      .map((b) => b.name.match(/^wi\/(.+)\/(\d{2})$/))
-      .filter(Boolean)
-      .filter((m) => m![1] === trimmed)
-      .map((m) => parseInt(m![2], 10));
-    const max = existing.length > 0 ? Math.max(...existing) : 0;
-    return String(max + 1).padStart(2, "0");
-  }, [branches, workItemName]);
-
   const fullBranchName = workItemName.trim()
-    ? `wi/${workItemName.trim()}/${nextRound}`
+    ? `wi/${workItemName.trim()}`
     : "";
 
   const workItemValid =
@@ -94,6 +81,14 @@ export function ContextSelector() {
 
   const handleCreateBranch = async () => {
     if (!fullBranchName || !workItemValid) return;
+    if (branches.some((b) => b.name === fullBranchName)) {
+      if (hasDraft() && !window.confirm("未コミットの変更があります。破棄して既存の作業ブランチを開きますか？")) return;
+      setBranch(fullBranchName);
+      setWorkItemName("");
+      setShowCreate(false);
+      setCreateError(null);
+      return;
+    }
     setCreating(true);
     setCreateError(null);
     try {
@@ -198,7 +193,6 @@ export function ContextSelector() {
             title="使用できる文字: A-Z a-z 0-9 . _ -"
             autoFocus
           />
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>/ {nextRound}</span>
           <button
             onClick={handleCreateBranch}
             disabled={creating || !workItemValid}

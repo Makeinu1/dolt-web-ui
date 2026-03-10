@@ -5,7 +5,7 @@ test.describe('Draft Undo and Discard Logic', () => {
     test.beforeEach(async ({ page }) => {
         await setupBaseMocks(page);
         await page.goto('/');
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
     });
 
     test('should allow discarding all drafts', async ({ page }) => {
@@ -52,7 +52,7 @@ test.describe('Draft Undo and Discard Logic', () => {
         await expect(commitBtn).toHaveText('Commit (1)');
 
         // Row remains selected after delete op — undo button should be visible
-        const undoBtn = page.locator('button', { hasText: '元に戻す' });
+        const undoBtn = page.locator('button', { hasText: 'Undo' });
         await expect(undoBtn).toBeVisible();
         await undoBtn.click();
 

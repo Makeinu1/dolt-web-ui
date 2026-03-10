@@ -148,7 +148,10 @@ export interface RejectRequest {
 
 export interface ApproveResponse {
   hash: string;
-  next_branch: string; // Auto-created next round branch (e.g., "wi/ProjectA/02")
+  active_branch: string;
+  active_branch_advanced: boolean;
+  archive_tag?: string;
+  warnings?: string[];
 }
 
 export interface PreviewCloneRequest {

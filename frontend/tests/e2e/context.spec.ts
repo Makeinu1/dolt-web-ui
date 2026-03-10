@@ -39,7 +39,7 @@ test.describe('ContextSelector Tests', () => {
 
         const contextBar = page.locator('.context-bar');
 
-        // Check branch select has "main" and "wi/feat-a/01" (from mocks)
+        // Check branch select has "main" and "wi/feat-a" (from mocks)
         const branchSelect = contextBar.locator('select');
         await expect(branchSelect).toBeVisible();
 

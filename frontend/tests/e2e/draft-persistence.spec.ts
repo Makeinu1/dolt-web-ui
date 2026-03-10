@@ -10,7 +10,7 @@ test.describe('ドラフト永続性テスト', () => {
     });
 
     test('2C-1: セッション回復 — ドラフト作成 → リロード → ドラフト復元', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // ドラフトを作成（行削除）
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -28,7 +28,7 @@ test.describe('ドラフト永続性テスト', () => {
     });
 
     test('2C-2: ドラフト確認 — 行削除でops数が正しくカウントされる', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // 1行目を削除
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -66,7 +66,7 @@ test.describe('ドラフト永続性テスト', () => {
             });
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // 行を選択してコピー（ツールバーのコピーボタン）
         const row = page.locator('.ag-center-cols-container .ag-row').first();

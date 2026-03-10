@@ -8,7 +8,7 @@ export const MOCK_TARGETS = [{ id: 'local' }];
 export const MOCK_DATABASES = [{ name: 'test_db' }];
 export const MOCK_BRANCHES = [
     { name: 'main', hash: 'hash-main', latest_commit_message: 'init', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
-    { name: 'wi/feat-a/01', hash: 'hash-feat-a', latest_commit_message: 'add user', latest_committer: 'alice', latest_commit_date: '2025-01-02T00:00:00Z' },
+    { name: 'wi/feat-a', hash: 'hash-feat-a', latest_commit_message: 'add user', latest_committer: 'alice', latest_commit_date: '2025-01-02T00:00:00Z' },
 ];
 export const MOCK_HEAD_MAIN = { hash: 'hash-main' };
 export const MOCK_HEAD_FEAT = { hash: 'hash-feat-a' };
@@ -32,7 +32,7 @@ export const MOCK_ROWS_USERS = {
 };
 
 export const MOCK_REQUESTS = [
-    { request_id: 'REQ-1', work_branch: 'wi/feat-b/01', submitted_main_hash: 'hash-m', submitted_work_hash: 'hash-w', summary_ja: 'テストリクエスト', submitted_at: '2025-01-03T00:00:00Z' }
+    { request_id: 'req/feat-b', work_branch: 'wi/feat-b', submitted_main_hash: 'hash-m', submitted_work_hash: 'hash-w', summary_ja: 'テストリクエスト', submitted_at: '2025-01-03T00:00:00Z' }
 ];
 
 export const MOCK_DIFF_SUMMARY = {

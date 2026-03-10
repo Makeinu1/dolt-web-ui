@@ -342,7 +342,7 @@ Database: Test
   - PK列の直接編集が可能（サーバー側で `PK_COLLISION` を検出）
   - `rowPkId` でアルファベット順正規化された JSON キーを使用（メモセルキーとの一致保証）
 - ドラフト管理（sessionStorage、Insert/Update/Delete の色分け表示）
-- ブランチ作成・削除（`wi/{WorkItem}/{Round}` パターン）
+- ブランチ作成・削除（`wi/{WorkItem}` パターン）
 - **保存**（旧「コミット」、楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
 - Main との同期（DOLT_MERGE、データコンフリクトは main 優先で自動解決 + 上書き通知）
 - 承認ワークフロー（Submit → Approve/Reject、`req/*` タグベース）
@@ -404,7 +404,7 @@ Database: Test
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
-- Playwright ブラウザテスト（20テスト、APIモックベース、`frontend/tests/e2e/`）
+- Playwright ブラウザテスト（31テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
 - curl ベース統合テスト（`/tmp/dolt-e2e-4changes.sh` — 19テスト、変更1〜4カバー）
 - curl ベース統合テスト（`/tmp/dolt-e2e-crosscopy.sh` — 46テスト、クロスDB P1〜P11カバー）

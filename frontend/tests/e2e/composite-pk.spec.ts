@@ -40,7 +40,7 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
     test.beforeEach(async ({ page }) => {
         await setupCompositePkMocks(page);
         await page.goto('/');
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
     });
 
     test('should display composite-PK table rows', async ({ page }) => {
@@ -105,7 +105,7 @@ test.describe('Composite PK — PK_COLLISION error (GAP-2)', () => {
     test.beforeEach(async ({ page }) => {
         await setupCompositePkMocks(page);
         await page.goto('/');
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
     });
 
     test('should show PK_COLLISION error when commit returns 400 PK_COLLISION', async ({ page }) => {
@@ -149,7 +149,7 @@ test.describe('Single PK — backward compat after composite PK changes', () => 
     test.beforeEach(async ({ page }) => {
         await setupBaseMocks(page);
         await page.goto('/');
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
     });
 
     test('should load single-PK table rows as before', async ({ page }) => {

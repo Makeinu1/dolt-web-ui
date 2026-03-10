@@ -21,7 +21,7 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
             }
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // Inline grid error banner should appear (TableGrid shows gridError, not global error-banner)
         const gridError = page.getByText(/DBに接続できません|失敗|エラー/).first();
@@ -35,7 +35,7 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
     });
 
     test('ドラフトあり → 承認申請ボタンが無効化', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // Create a draft by deleting a row
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -54,7 +54,7 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
     });
 
     test('ドラフトあり → CSVインポートが無効化', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // Wait for grid to load and create a draft (行削除)
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -79,7 +79,7 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
             });
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // Create a draft by deleting a row
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -102,7 +102,7 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
     });
 
     test('通常状態: ステートバッジが「待機中」を表示', async ({ page }) => {
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         const stateBadge = page.locator('.state-badge');
         await expect(stateBadge).toBeVisible({ timeout: 5000 });

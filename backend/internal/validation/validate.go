@@ -7,7 +7,7 @@ import (
 
 var safeIdentifierRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// safeRefRe validates Dolt refs: branch names (wi/ticket/01), commit hashes, tags.
+// safeRefRe validates Dolt refs: branch names (wi/ticket-123), commit hashes, tags.
 // Allows alphanumeric, dot, underscore, hyphen, and forward slash.
 var safeRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/\-]+$`)
 
@@ -33,7 +33,7 @@ func ValidateDBName(dbName string) error {
 }
 
 // ValidateBranchName validates a branch name for safe SQL embedding.
-// Branch names may contain forward slashes (e.g. wi/ticket/01).
+// Branch names may contain forward slashes (e.g. wi/ticket-123).
 func ValidateBranchName(branchName string) error {
 	if !safeRefRe.MatchString(branchName) {
 		return fmt.Errorf("branch name contains invalid characters: %q", branchName)

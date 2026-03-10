@@ -267,8 +267,11 @@ type PreviewResponse struct {
 
 // ApproveResponse represents the result of an approval.
 type ApproveResponse struct {
-	Hash       string `json:"hash"`
-	NextBranch string `json:"next_branch"` // Auto-created next round branch (e.g., "wi/ProjectA/02")
+	Hash                 string   `json:"hash"`
+	ActiveBranch         string   `json:"active_branch"`
+	ActiveBranchAdvanced bool     `json:"active_branch_advanced"`
+	ArchiveTag           string   `json:"archive_tag,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
 }
 
 // DiffSummaryEntry represents the row-count diff for one table.

@@ -574,7 +574,7 @@ function App() {
         mergeLogFilterPk={rowHistoryInfo?.pk}
         onCommitSuccess={onCommitSuccess}
         onSubmitted={(overwritten) => {
-          setRequestCount(requestCount + 1);
+          triggerBranchRefresh();
           if (overwritten && overwritten.length > 0) {
             setOverwrittenTables(overwritten);
           }

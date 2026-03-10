@@ -47,13 +47,20 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	// Optional keyword filter
 	if keyword != "" {
+		normalizedKeyword := normalizeWorkItemSearchKeyword(keyword)
 		escapedKw := strings.ReplaceAll(keyword, "|", "||")
 		escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
 		escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
 		if searchField == "branch" {
-			// Search by branch name: merged/{keyword}%
+			if normalizedKeyword == "" {
+				normalizedKeyword = keyword
+			}
+			escapedKw = strings.ReplaceAll(normalizedKeyword, "|", "||")
+			escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
+			escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
+			// Search by work item name: merged/{keyword}/NN
 			conditions = append(conditions, "tag_name LIKE ? ESCAPE '|'")
-			args = append(args, "merged/"+escapedKw+"%")
+			args = append(args, "merged/"+escapedKw+"/%")
 		} else {
 			// Search by message
 			conditions = append(conditions, "message LIKE ? ESCAPE '|'")
@@ -100,11 +107,13 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 			return nil, fmt.Errorf("failed to scan tag: %w", err)
 		}
 		c := model.HistoryCommit{
-			Hash:        tagHash,
-			Author:      tagger,
-			Message:     message,
-			Timestamp:   date,
-			MergeBranch: "wi/" + strings.TrimPrefix(tagName, "merged/"),
+			Hash:      tagHash,
+			Author:    tagger,
+			Message:   message,
+			Timestamp: date,
+		}
+		if workItem, _, ok := parseArchiveTag(tagName); ok {
+			c.MergeBranch = "wi/" + workItem
 		}
 		commits = append(commits, c)
 	}

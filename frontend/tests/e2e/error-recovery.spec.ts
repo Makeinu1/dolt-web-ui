@@ -18,7 +18,7 @@ test.describe('エラー回復テスト', () => {
             });
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // ドラフトを作成（行削除）
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -48,7 +48,7 @@ test.describe('エラー回復テスト', () => {
             });
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // ドラフトを作成（行削除）
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -72,7 +72,7 @@ test.describe('エラー回復テスト', () => {
             await route.abort('failed');
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // テーブル選択
         const tableSelect = page.locator('select').filter({ hasText: 'users' }).or(
@@ -102,7 +102,7 @@ test.describe('エラー回復テスト', () => {
             }
         });
 
-        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a/01');
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
         // エラーバナーが表示される
         await expect(page.getByText(/失敗|エラー/)).toBeVisible({ timeout: 5000 });
