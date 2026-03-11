@@ -24,6 +24,7 @@ import { ApiError } from "../../api/errors";
 import type { ColumnSchema, RowsResponse } from "../../types/api";
 import { BulkEditModal } from "../BulkPKReplaceModal/BulkEditModal";
 import { stablePkJson } from "../../utils/stablePk";
+import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -504,9 +505,24 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   }, [pkCols, tableName, addOp, setBaseState]);
 
 
-  // P5: 一括編集 — 選択行の任意カラムを一括置換・空欄埋め・文字を置換
+  const rowHasDraft = useCallback((row: Record<string, unknown>) => {
+    if (row._draftId != null) return true;
+    if (pkCols.length === 0) return false;
+    return draftIndex.has(rowPkId(row));
+  }, [draftIndex, pkCols.length, rowPkId]);
+
+  const selectedRowsContainDrafts = useMemo(
+    () => selectedRows.some((row) => rowHasDraft(row)),
+    [rowHasDraft, selectedRows]
+  );
+  const tableHasDrafts = draftIndex.size > 0;
+  const crossCopyDisabledReason = "未コミット変更は他DBコピーに含まれません。先にCommitするか、変更をクリアしてください。";
+  const canCrossCopyRows = !!onCrossCopyRows;
+  const canEditRows = !isProtected && !editingBlocked;
+
+  // P5: 一括置換 — 選択行の任意カラムを一括適用
   const handleBulkEdit = useCallback(
-    (column: string, value: string, mode: "replace" | "fill-empty" | "find-replace", searchValue?: string) => {
+    (column: string, operation: BulkEditOperation) => {
       if (pkCols.length === 0) return;
       const targetRows = bulkEditTargetRows;
       const targetSet = new Set(
@@ -515,38 +531,23 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         )
       );
       for (const row of targetRows) {
-        const currentVal = row[column];
-        const currentStr =
-          currentVal === null || currentVal === undefined ? "" : String(currentVal);
-        if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
-          continue;
-        }
-        if (mode === "find-replace") {
-          if (!searchValue || !currentStr.includes(searchValue)) continue;
-          const newVal = currentStr.replaceAll(searchValue, value);
-          const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
-          addOp({ type: "update", table: tableName, values: { [column]: newVal }, pk });
+        const preview = previewBulkEdit(row[column], operation);
+        if (!preview.willChange) {
           continue;
         }
         const pk = Object.fromEntries(pkCols.map((c) => [c.name, row[c.name]]));
-        addOp({ type: "update", table: tableName, values: { [column]: value }, pk });
+        addOp({ type: "update", table: tableName, values: { [column]: preview.newStr }, pk });
       }
       // Update rowData for immediate visual feedback
       setRowData((prev) =>
         prev.map((row) => {
           const rowKey = row._draftId != null ? `draft:${row._draftId}` : rowPkId(row);
           if (!targetSet.has(rowKey)) return row;
-          const currentVal = row[column];
-          const currentStr =
-            currentVal === null || currentVal === undefined ? "" : String(currentVal);
-          if (mode === "fill-empty" && currentStr !== "" && currentStr !== "null" && currentStr !== "NULL") {
+          const preview = previewBulkEdit(row[column], operation);
+          if (!preview.willChange) {
             return row;
           }
-          if (mode === "find-replace") {
-            if (!searchValue || !currentStr.includes(searchValue)) return row;
-            return { ...row, [column]: currentStr.replaceAll(searchValue, value) };
-          }
-          return { ...row, [column]: value };
+          return { ...row, [column]: preview.newStr };
         })
       );
       setBaseState("DraftEditing");
@@ -601,12 +602,12 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
 
   // U2: Cross-copy all filtered rows
   const handleCrossCopyAllFiltered = useCallback(async () => {
-    if (!onCrossCopyRows) return;
+    if (!onCrossCopyRows || tableHasDrafts) return;
     const rows = await fetchAllFilteredRows();
     if (!rows) return;
     const pks = rows.map((r) => rowPkId(r));
     onCrossCopyRows(pks);
-  }, [fetchAllFilteredRows, onCrossCopyRows, rowPkId]);
+  }, [fetchAllFilteredRows, onCrossCopyRows, rowPkId, tableHasDrafts]);
 
   // Toggle column visibility
   const handleColumnToggle = useCallback((colName: string) => {
@@ -630,7 +631,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
 
       const rowNode = params.node.data as Record<string, unknown>;
 
-      if (isProtected || editingBlocked) {
+      if (editingBlocked && !canCrossCopyRows) {
         return ["copy" as unknown as MenuItemDef];
       }
 
@@ -639,12 +640,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       const isInSelection = selectedRows.some((r) => rowPkId(r) === rowPkId(rowNode));
       const targetRows = isInSelection && selectedRows.length > 1 ? selectedRows : [rowNode];
       const n = targetRows.length;
-
-      const cloneItem: MenuItemDef = {
-        name: n > 1 ? `選択 ${n} 行をコピー` : "行をコピー",
-        action: () => handleCloneRows(targetRows),
-        disabled: pkCols.length === 0,
-      };
+      const targetRowsContainDrafts = targetRows.some((row) => rowHasDraft(row));
 
       const crossCopyItem: MenuItemDef = {
         name: n > 1 ? `選択 ${n} 行を他DBへコピー` : "他DBへコピー",
@@ -653,7 +649,26 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             onCrossCopyRows(targetRows.map((r) => rowPkId(r)));
           }
         },
-        disabled: pkCols.length === 0 || !onCrossCopyRows,
+        disabled: pkCols.length === 0 || !onCrossCopyRows || targetRowsContainDrafts,
+      };
+
+      if (isProtected) {
+        const items: MenuItemDef[] = [];
+        if (onCrossCopyRows) {
+          items.push(crossCopyItem, "separator" as unknown as MenuItemDef);
+        }
+        items.push("copy" as unknown as MenuItemDef);
+        return items;
+      }
+
+      if (editingBlocked) {
+        return ["copy" as unknown as MenuItemDef];
+      }
+
+      const cloneItem: MenuItemDef = {
+        name: n > 1 ? `選択 ${n} 行をコピー` : "行をコピー",
+        action: () => handleCloneRows(targetRows),
+        disabled: pkCols.length === 0,
       };
 
       const deleteItem: MenuItemDef = {
@@ -674,7 +689,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       );
       return items;
     },
-    [isProtected, editingBlocked, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, tableName]
+    [isProtected, editingBlocked, canCrossCopyRows, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, tableName, rowHasDraft]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON.
@@ -867,10 +882,10 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         )}
 
         {/* Row action buttons (visible when 1+ rows are selected and not blocked) */}
-        {selectedRows.length > 0 && !editingBlocked && (
+        {selectedRows.length > 0 && (canEditRows || canCrossCopyRows) && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
             {/* P3: Unified copy button — selected rows take priority over filter */}
-            {!isProtected && pkCols.length > 0 && (
+            {canEditRows && pkCols.length > 0 && (
               <button
                 onClick={() => handleCloneRows(selectedRows)}
                 disabled={cloning || fetchingAll}
@@ -880,38 +895,42 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
                 {(cloning || fetchingAll) ? "コピー中..." : `コピー (${selectedRows.length})`}
               </button>
             )}
-            {/* P5: 一括編集 — all selected rows */}
-            {!isProtected && pkCols.length > 0 && (
+            {/* P5: 一括置換 — all selected rows */}
+            {canEditRows && pkCols.length > 0 && (
               <button
                 onClick={() => { setBulkEditTargetRows(selectedRows); setShowBulkEditModal(true); }}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: "pointer" }}
-                title="選択行のカラム値を一括編集"
+                title="選択行のカラム値を一括置換"
               >
-                一括編集 ({selectedRows.length})
+                一括置換 ({selectedRows.length})
               </button>
             )}
             {onCrossCopyRows && (
+              <span title={selectedRowsContainDrafts ? crossCopyDisabledReason : "選択行を他のDBにコピー"}>
+                <button
+                  onClick={() => {
+                    const pks = selectedRows.map((r) => rowPkId(r));
+                    onCrossCopyRows(pks);
+                  }}
+                  disabled={pkCols.length === 0 || selectedRowsContainDrafts}
+                  style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: pkCols.length === 0 || selectedRowsContainDrafts ? "not-allowed" : "pointer" }}
+                  title={selectedRowsContainDrafts ? crossCopyDisabledReason : "選択行を他のDBにコピー"}
+                >
+                  他DBへ{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+                </button>
+              </span>
+            )}
+            {canEditRows && (
               <button
-                onClick={() => {
-                  const pks = selectedRows.map((r) => rowPkId(r));
-                  onCrossCopyRows(pks);
-                }}
+                onClick={() => handleDeleteRows(selectedRows)}
                 disabled={pkCols.length === 0}
-                style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
-                title="選択行を他のDBにコピー"
+                style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer" }}
+                title="行を削除"
               >
-                他DBへ{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
+                削除{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
               </button>
             )}
-            <button
-              onClick={() => handleDeleteRows(selectedRows)}
-              disabled={pkCols.length === 0}
-              style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer" }}
-              title="行を削除"
-            >
-              削除{selectedRows.length > 1 ? ` (${selectedRows.length})` : ""}
-            </button>
-            {selectedRows.length === 1 && undoableOpIndex !== null && (
+            {canEditRows && selectedRows.length === 1 && undoableOpIndex !== null && (
               <button
                 onClick={handleUndoRow}
                 style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#4b5563", border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
@@ -923,42 +942,50 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           </div>
         )}
         {/* P3/U2: Full-operation buttons — shown when no rows selected but filter is active */}
-        {!isProtected && !editingBlocked && selectedRows.length === 0 && serverFilter !== "" && pkCols.length > 0 && (
+        {selectedRows.length === 0 && serverFilter !== "" && pkCols.length > 0 && (canEditRows || canCrossCopyRows) && (
           <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
-            <button
-              onClick={handleCloneAllFiltered}
-              disabled={fetchingAll || cloning || totalCount === 0}
-              style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: fetchingAll || cloning ? "not-allowed" : "pointer" }}
-              title="フィルタ結果の全件をコピー（最大 1,000 件）"
-            >
-              {fetchingAll ? "取得中..." : `全件コピー (${Math.min(totalCount, 1000).toLocaleString()})`}
-            </button>
-            <button
-              onClick={handleBulkEditAllFiltered}
-              disabled={fetchingAll || totalCount === 0}
-              style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
-              title="フィルタ結果の全件を一括編集（最大 1,000 件）"
-            >
-              全件一括編集 ({Math.min(totalCount, 1000).toLocaleString()})
-            </button>
-            {onCrossCopyRows && (
+            {canEditRows && (
               <button
-                onClick={handleCrossCopyAllFiltered}
-                disabled={fetchingAll || totalCount === 0}
-                style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
-                title="フィルタ結果の全件を他DBへコピー（最大 1,000 件）"
+                onClick={handleCloneAllFiltered}
+                disabled={fetchingAll || cloning || totalCount === 0}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, cursor: fetchingAll || cloning ? "not-allowed" : "pointer" }}
+                title="フィルタ結果の全件をコピー（最大 1,000 件）"
               >
-                全件他DBへ ({Math.min(totalCount, 1000).toLocaleString()})
+                {fetchingAll ? "取得中..." : `全件コピー (${Math.min(totalCount, 1000).toLocaleString()})`}
               </button>
             )}
-            <button
-              onClick={handleDeleteAllFiltered}
-              disabled={fetchingAll || totalCount === 0}
-              style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
-              title="フィルタ結果の全件を削除（最大 1,000 件）"
-            >
-              全件削除 ({Math.min(totalCount, 1000).toLocaleString()})
-            </button>
+            {canEditRows && (
+              <button
+                onClick={handleBulkEditAllFiltered}
+                disabled={fetchingAll || totalCount === 0}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#fef9c3", color: "#713f12", border: "1px solid #fde68a", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
+                title="フィルタ結果の全件を一括置換（最大 1,000 件）"
+              >
+                全件一括置換 ({Math.min(totalCount, 1000).toLocaleString()})
+              </button>
+            )}
+            {onCrossCopyRows && (
+              <span title={tableHasDrafts ? crossCopyDisabledReason : "フィルタ結果の全件を他DBへコピー（最大 1,000 件）"}>
+                <button
+                  onClick={handleCrossCopyAllFiltered}
+                  disabled={fetchingAll || totalCount === 0 || tableHasDrafts}
+                  style={{ fontSize: 11, padding: "2px 8px", background: "#dbeafe", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: 4, cursor: fetchingAll || totalCount === 0 || tableHasDrafts ? "not-allowed" : "pointer" }}
+                  title={tableHasDrafts ? crossCopyDisabledReason : "フィルタ結果の全件を他DBへコピー（最大 1,000 件）"}
+                >
+                  全件他DBへ ({Math.min(totalCount, 1000).toLocaleString()})
+                </button>
+              </span>
+            )}
+            {canEditRows && (
+              <button
+                onClick={handleDeleteAllFiltered}
+                disabled={fetchingAll || totalCount === 0}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 4, cursor: fetchingAll ? "not-allowed" : "pointer" }}
+                title="フィルタ結果の全件を削除（最大 1,000 件）"
+              >
+                全件削除 ({Math.min(totalCount, 1000).toLocaleString()})
+              </button>
+            )}
           </div>
         )}
 

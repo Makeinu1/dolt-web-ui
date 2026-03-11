@@ -3,7 +3,7 @@ import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { Database, Branch, CrossCopyTableResponse } from "../../types/api";
+import type { Database, CrossCopyTableResponse } from "../../types/api";
 
 interface CrossCopyTableModalProps {
   tableName: string;
@@ -14,35 +14,15 @@ export function CrossCopyTableModal({
   tableName,
   onClose,
 }: CrossCopyTableModalProps) {
-  const { targetId, dbName } = useContextStore();
+  const { targetId, dbName, branchName } = useContextStore();
+  const sourceBranch = branchName;
 
   const [databases, setDatabases] = useState<Database[]>([]);
-  const [sourceBranches, setSourceBranches] = useState<Branch[]>([]);
-  const [sourceBranch, setSourceBranch] = useState("main");
   const [destDB, setDestDB] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CrossCopyTableResponse | null>(null);
   const [existingBranchName, setExistingBranchName] = useState<string | null>(null);
-
-  // Load source branches on mount
-  useEffect(() => {
-    api
-      .getBranches(targetId, dbName)
-      .then((brs) => {
-        const sorted = [...brs].sort((a, b) => {
-          const aProtected = a.name === "main" || a.name === "audit";
-          const bProtected = b.name === "main" || b.name === "audit";
-          if (aProtected && !bProtected) return -1;
-          if (!aProtected && bProtected) return 1;
-          return a.name.localeCompare(b.name);
-        });
-        setSourceBranches(sorted);
-        const hasMain = sorted.some((b) => b.name === "main");
-        if (!hasMain && sorted.length > 0) setSourceBranch(sorted[0].name);
-      })
-      .catch(() => {});
-  }, [targetId, dbName]);
 
   // Load databases on mount
   useEffect(() => {
@@ -163,30 +143,6 @@ export function CrossCopyTableModal({
         {!result && !existingBranchName ? (
           /* Input form */
           <div>
-            <div style={{ marginBottom: 12 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  marginBottom: 4,
-                }}
-              >
-                コピー元ブランチ
-              </label>
-              <select
-                value={sourceBranch}
-                onChange={(e) => setSourceBranch(e.target.value)}
-                style={{ width: "100%", padding: "4px 8px", fontSize: 13 }}
-              >
-                {sourceBranches.map((b) => (
-                  <option key={b.name} value={b.name}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             <div style={{ marginBottom: 12 }}>
               <label
                 style={{

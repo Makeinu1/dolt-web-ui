@@ -43,21 +43,24 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-MOCK-03` | mocked Playwright | `MT-02-02` | stale branch list でも `BRANCH_EXISTS` を拾って既存 branch を開く | implemented |
 | `BL-MOCK-02` | mocked Playwright | `MT-06-09` | approve の `active_branch_advanced=false` で `main` fallback + warning 表示 | implemented |
 | `BL-MOCK-04` | mocked Playwright | `MT-13-07` | CrossCopyTable の `BRANCH_EXISTS` で既存 import branch を開ける | implemented |
+| `BL-MOCK-05` | mocked Playwright | `MT-13-08` `MT-13-09` | cross-copy は protected branch でのみ表示され、modal は current protected branch を source に固定する | implemented |
 | `BL-INT-01` | backend integration | `MT-06-01` `MT-06-10` | submit -> reject -> resubmit -> approve と archive sequence `01/02` | implemented |
 | `BL-INT-02` | backend integration | `MT-13-03` `MT-13-04` | request lock 中 delete 拒否 / reject 後 delete 成功 | implemented |
 | `BL-INT-03` | backend integration | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-INT-04` | backend integration | `MT-13-07` | CrossCopyTable -> submit -> approve と既存 import branch 再利用 | implemented |
+| `BL-INT-05` | backend integration | `MT-13-10` | `source_branch=audit` は成功し、`source_branch=wi/...` は `INVALID_ARGUMENT` で拒否される | implemented |
 | `BL-REAL-01` | real Playwright smoke | `MT-02-02` | 実UIで branch 作成と同名再利用 | implemented |
 | `BL-REAL-02` | real Playwright smoke | `MT-06-01` `MT-06-10` `MT-13-03` | 実UIで submit / delete lock / reject / resubmit / approve / branch advance | implemented |
 | `BL-REAL-03` | real Playwright smoke | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-REAL-04` | real Playwright smoke | `MT-13-07` | cross-copy 生成 branch をそのまま submit でき、2 回目は `BRANCH_EXISTS` になる | implemented |
+| `BL-REAL-05` | real Playwright smoke | `MT-13-08` `MT-13-09` `MT-13-10` | protected branch だけで cross-copy を見せ、`audit -> wi/*` の row copy を current branch source で完了できる | implemented |
 
 ## Next Expansion Targets
 
 | Area | Candidate Coverage |
 |---|---|
 | `History / Merge log` | `merged/<WorkItem>/<NN>` の検索、branch 名正規化、archive 連番表示 |
-| `Branch-sensitive tools` | search / compare / memo / row history / cross-copy rows の real suite 化 |
+| `Branch-sensitive tools` | search / compare / memo / row history の real suite 化 |
 | `Partial failures` | archive tag failure / request tag cleanup failure / branch advance failure の injected test |
 | `Manual matrix parity` | branch lifecycle 以外の checklist 項目に `Automated By` を段階的に付与 |
 

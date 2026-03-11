@@ -20,6 +20,17 @@ var varcharRe = regexp.MustCompile(`^varchar\((\d+)\)$`)
 // A column can be expanded to a wider type automatically.
 var stringTypeOrder = []string{"tinytext", "text", "mediumtext", "longtext"}
 
+func validateProtectedCopySource(branchName string) error {
+	if !validation.IsProtectedBranch(branchName) {
+		return &model.APIError{
+			Status: 400,
+			Code:   model.CodeInvalidArgument,
+			Msg:    "コピー元ブランチは main または audit のみです",
+		}
+	}
+	return nil
+}
+
 // parseVarcharLen returns the length from "varchar(N)" or -1 if not varchar.
 func parseVarcharLen(t string) int {
 	m := varcharRe.FindStringSubmatch(t)
@@ -276,6 +287,9 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
 	}
+	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+		return nil, err
+	}
 	if err := validation.ValidateBranchName(req.DestBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効な宛先ブランチ名"}
 	}
@@ -449,6 +463,9 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	}
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
+	}
+	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+		return nil, err
 	}
 	if err := validation.ValidateBranchName(req.DestBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効な宛先ブランチ名"}

@@ -13,6 +13,7 @@ const MULTI_DB_DATABASES = [
 
 const SOURCE_BRANCHES = [
   { name: 'main', hash: 'hash-main', latest_commit_message: 'init', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
+  { name: 'audit', hash: 'hash-audit', latest_commit_message: 'snapshot', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
   { name: 'wi/feat-a', hash: 'hash-feat-a', latest_commit_message: 'add user', latest_committer: 'alice', latest_commit_date: '2025-01-02T00:00:00Z' },
 ];
 
@@ -134,6 +135,30 @@ test.describe('Branch-sensitive Features', () => {
     expect(capturedDiffTableQuery).toContain('to_ref=wi%2Ffeat-a');
   });
 
+  test('should only expose cross-db copy actions on protected branches', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+    const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+    await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+    await aliceRow.locator('.ag-selection-checkbox').click();
+
+    await expect(page.locator('button', { hasText: '他DBへ' })).toHaveCount(0);
+    await page.locator('.overflow-btn').click();
+    await expect(page.locator('button', { hasText: '他DBへテーブルコピー' })).toHaveCount(0);
+
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+    const mainAliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+    await mainAliceRow.waitFor({ state: 'visible', timeout: 5000 });
+    await mainAliceRow.locator('.ag-selection-checkbox').click();
+
+    await expect(page.locator('button', { hasText: '他DBへ' })).toBeVisible();
+    await page.locator('.overflow-btn').click();
+    await expect(page.locator('button', { hasText: '他DBへテーブルコピー' })).toBeVisible();
+  });
+
   test('should copy a whole table to another DB and switch to the returned branch', async ({ page }) => {
     await setupBaseMocks(page);
     await setupCrossDbMocks(page);
@@ -155,15 +180,16 @@ test.describe('Branch-sensitive Features', () => {
     });
 
     await page.goto('/');
-    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
 
     await page.locator('.overflow-btn').click();
     await page.locator('button', { hasText: '他DBへテーブルコピー' }).click();
 
     const modal = page.locator('.modal');
     await expect(modal.locator('h2')).toHaveText('他DBへテーブルコピー');
-    await modal.locator('select').first().selectOption('wi/feat-a');
-    await modal.locator('select').nth(1).selectOption('dest_db');
+    await expect(modal).toContainText('コピー元: test_db / main / users');
+    await expect(modal.locator('select')).toHaveCount(1);
+    await modal.locator('select').first().selectOption('dest_db');
     await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
 
     await expect(modal).toContainText('コピー完了');
@@ -179,7 +205,7 @@ test.describe('Branch-sensitive Features', () => {
 
     await expect(page.locator('.context-bar select')).toHaveValue('wi/import-test_db-users');
     expect(copyBody).not.toBeNull();
-    expect(copyBody?.source_branch).toBe('wi/feat-a');
+    expect(copyBody?.source_branch).toBe('main');
     expect(copyBody?.dest_db).toBe('dest_db');
   });
 
@@ -204,14 +230,15 @@ test.describe('Branch-sensitive Features', () => {
     });
 
     await page.goto('/');
-    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
 
     await page.locator('.overflow-btn').click();
     await page.locator('button', { hasText: '他DBへテーブルコピー' }).click();
 
     const modal = page.locator('.modal');
-    await modal.locator('select').first().selectOption('wi/feat-a');
-    await modal.locator('select').nth(1).selectOption('dest_db');
+    await expect(modal).toContainText('コピー元: test_db / main / users');
+    await expect(modal.locator('select')).toHaveCount(1);
+    await modal.locator('select').first().selectOption('dest_db');
     await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
 
     await expect(modal).toContainText('既存のインポートブランチがあります');
@@ -271,7 +298,7 @@ test.describe('Branch-sensitive Features', () => {
     });
 
     await page.goto('/');
-    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
 
     const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
     await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
@@ -281,9 +308,10 @@ test.describe('Branch-sensitive Features', () => {
 
     const modal = page.locator('.modal');
     await expect(modal.locator('h2')).toHaveText('他DBへコピー');
-    await modal.locator('select').first().selectOption('wi/feat-a');
-    await modal.locator('select').nth(1).selectOption('dest_db');
-    await modal.locator('select').nth(2).selectOption('wi/dest-users');
+    await expect(modal).toContainText('コピー元: test_db / main / users');
+    await expect(modal.locator('select')).toHaveCount(2);
+    await modal.locator('select').first().selectOption('dest_db');
+    await modal.locator('select').nth(1).selectOption('wi/dest-users');
     await modal.locator('button.primary', { hasText: 'プレビュー' }).click();
 
     await expect(modal).toContainText('共有カラム: id, name, role');
@@ -307,10 +335,151 @@ test.describe('Branch-sensitive Features', () => {
 
     await expect(page.locator('.context-bar select')).toHaveValue('wi/dest-users');
     expect(previewBody).not.toBeNull();
-    expect(previewBody?.source_branch).toBe('wi/feat-a');
+    expect(previewBody?.source_branch).toBe('main');
     expect(previewBody?.dest_branch).toBe('wi/dest-users');
     expect(executeBody).not.toBeNull();
-    expect(executeBody?.source_branch).toBe('wi/feat-a');
+    expect(executeBody?.source_branch).toBe('main');
     expect(executeBody?.dest_branch).toBe('wi/dest-users');
+  });
+
+  test('should create a destination work branch inside the row-copy modal when none exists', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    let destBranchCreated = false;
+
+    await page.unroute('**/api/v1/databases*');
+    await page.route('**/api/v1/databases*', async (route) => {
+      await route.fulfill({ json: MULTI_DB_DATABASES });
+    });
+
+    await page.unroute('**/api/v1/branches*');
+    await page.route('**/api/v1/branches*', async (route) => {
+      const url = new URL(route.request().url());
+      const dbName = url.searchParams.get('db_name');
+      await route.fulfill({
+        json:
+          dbName === 'dest_db'
+            ? [
+                { name: 'main', hash: 'hash-dest-main', latest_commit_message: 'init', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
+                ...(destBranchCreated
+                  ? [{ name: 'wi/copy-test_db-users', hash: 'hash-copy', latest_commit_message: 'copy work', latest_committer: 'bob', latest_commit_date: '2025-01-06T00:00:00Z' }]
+                  : []),
+              ]
+            : SOURCE_BRANCHES,
+      });
+    });
+
+    await page.route('**/api/v1/branches/create*', async (route) => {
+      destBranchCreated = true;
+      await route.fulfill({
+        status: 201,
+        json: { branch_name: 'wi/copy-test_db-users' },
+      });
+    });
+
+    let previewBody: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/cross-copy/preview', async (route) => {
+      previewBody = JSON.parse(route.request().postData() ?? '{}');
+      await route.fulfill({
+        json: {
+          shared_columns: ['id', 'name', 'role'],
+          source_only_columns: [],
+          dest_only_columns: [],
+          warnings: [],
+          rows: [
+            {
+              action: 'insert',
+              source_row: { id: 1, name: 'Alice', role: 'admin' },
+            },
+          ],
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+    await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+    await aliceRow.locator('.ag-selection-checkbox').click();
+
+    await page.locator('button', { hasText: '他DBへ' }).click();
+
+    const modal = page.locator('.modal');
+    await expect(modal).toContainText('コピー元: test_db / main / users');
+    await expect(modal.locator('select')).toHaveCount(2);
+    await expect(modal.locator('select').first()).toHaveValue('dest_db');
+    await expect(modal).toContainText('宛先DBに作業ブランチがありません');
+    await expect(modal.locator('input[placeholder="copy-test_db-users"]')).toHaveValue('copy-test_db-users');
+
+    await modal.locator('button.primary', { hasText: '作業ブランチを作成' }).click();
+
+    await expect(modal.locator('select').nth(1)).toHaveValue('wi/copy-test_db-users');
+    await modal.locator('button.primary', { hasText: 'プレビュー' }).click();
+
+    await expect(modal).toContainText('共有カラム: id, name, role');
+    expect(previewBody).not.toBeNull();
+    expect(previewBody?.source_branch).toBe('main');
+    expect(previewBody?.dest_branch).toBe('wi/copy-test_db-users');
+  });
+
+  test('should recover destination branch creation from BRANCH_NOT_READY inside the row-copy modal', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    let branchReady = false;
+
+    await page.unroute('**/api/v1/databases*');
+    await page.route('**/api/v1/databases*', async (route) => {
+      await route.fulfill({ json: MULTI_DB_DATABASES });
+    });
+
+    await page.unroute('**/api/v1/branches*');
+    await page.route('**/api/v1/branches*', async (route) => {
+      const url = new URL(route.request().url());
+      const dbName = url.searchParams.get('db_name');
+      await route.fulfill({
+        json:
+          dbName === 'dest_db'
+            ? [
+                { name: 'main', hash: 'hash-dest-main', latest_commit_message: 'init', latest_committer: 'system', latest_commit_date: '2025-01-01T00:00:00Z' },
+                ...(branchReady
+                  ? [{ name: 'wi/copy-test_db-users', hash: 'hash-copy', latest_commit_message: 'copy work', latest_committer: 'bob', latest_commit_date: '2025-01-06T00:00:00Z' }]
+                  : []),
+              ]
+            : SOURCE_BRANCHES,
+      });
+    });
+
+    await page.route('**/api/v1/branches/create*', async (route) => {
+      branchReady = true;
+      await route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'BRANCH_NOT_READY',
+            message: 'ブランチは作成されましたが、まだ使用可能になっていません。',
+            details: {
+              branch_name: 'wi/copy-test_db-users',
+              retry_after_ms: 800,
+            },
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
+    await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+    await aliceRow.locator('.ag-selection-checkbox').click();
+
+    await page.locator('button', { hasText: '他DBへ' }).click();
+
+    const modal = page.locator('.modal');
+    await expect(modal.locator('select')).toHaveCount(2);
+    await modal.locator('button.primary', { hasText: '作業ブランチを作成' }).click();
+
+    await expect(modal.locator('select').nth(1)).toHaveValue('wi/copy-test_db-users');
   });
 });

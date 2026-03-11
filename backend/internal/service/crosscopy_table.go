@@ -48,6 +48,9 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
 	}
+	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+		return nil, err
+	}
 	if err := validation.ValidateIdentifier("table", req.SourceTable); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なテーブル名"}
 	}

@@ -439,3 +439,85 @@ func TestCrossCopyTable_SubmitApproveUsesLongLivedImportBranch(t *testing.T) {
 	})
 	expectAPIErrorCode(t, copyAgainErr, model.CodeBranchExists)
 }
+
+func TestCrossCopyPreview_AllowsAuditSourceBranch(t *testing.T) {
+	svc := newIntegrationService(t)
+	destBranch := uniqueWorkBranch(t, "audit-copy")
+
+	if err := svc.CreateBranch(integrationContext(t), model.CreateBranchRequest{
+		TargetID:   "local",
+		DBName:     "dest_db",
+		BranchName: destBranch,
+	}); err != nil {
+		t.Fatalf("create dest branch: %v", err)
+	}
+
+	previewResp, err := svc.CrossCopyPreview(integrationContext(t), model.CrossCopyPreviewRequest{
+		TargetID:     "local",
+		SourceDB:     "test_db",
+		SourceBranch: "audit",
+		SourceTable:  "users",
+		SourcePKs:    []string{`{"id":1}`},
+		DestDB:       "dest_db",
+		DestBranch:   destBranch,
+	})
+	if err != nil {
+		t.Fatalf("cross copy preview from audit: %v", err)
+	}
+	if len(previewResp.Rows) != 1 {
+		t.Fatalf("expected one preview row, got %d", len(previewResp.Rows))
+	}
+}
+
+func TestCrossCopyRejectsWorkBranchSource(t *testing.T) {
+	svc := newIntegrationService(t)
+	destBranch := uniqueWorkBranch(t, "copy-dest")
+
+	if err := svc.CreateBranch(integrationContext(t), model.CreateBranchRequest{
+		TargetID:   "local",
+		DBName:     "dest_db",
+		BranchName: destBranch,
+	}); err != nil {
+		t.Fatalf("create dest branch: %v", err)
+	}
+
+	previewErr := func() error {
+		_, err := svc.CrossCopyPreview(integrationContext(t), model.CrossCopyPreviewRequest{
+			TargetID:     "local",
+			SourceDB:     "test_db",
+			SourceBranch: "wi/not-allowed",
+			SourceTable:  "users",
+			SourcePKs:    []string{`{"id":1}`},
+			DestDB:       "dest_db",
+			DestBranch:   destBranch,
+		})
+		return err
+	}()
+	expectAPIErrorCode(t, previewErr, model.CodeInvalidArgument)
+
+	rowsErr := func() error {
+		_, err := svc.CrossCopyRows(integrationContext(t), model.CrossCopyRowsRequest{
+			TargetID:     "local",
+			SourceDB:     "test_db",
+			SourceBranch: "wi/not-allowed",
+			SourceTable:  "users",
+			SourcePKs:    []string{`{"id":1}`},
+			DestDB:       "dest_db",
+			DestBranch:   destBranch,
+		})
+		return err
+	}()
+	expectAPIErrorCode(t, rowsErr, model.CodeInvalidArgument)
+
+	tableErr := func() error {
+		_, err := svc.CrossCopyTable(integrationContext(t), model.CrossCopyTableRequest{
+			TargetID:     "local",
+			SourceDB:     "test_db",
+			SourceBranch: "wi/not-allowed",
+			SourceTable:  "users",
+			DestDB:       "dest_db",
+		})
+		return err
+	}()
+	expectAPIErrorCode(t, tableErr, model.CodeInvalidArgument)
+}

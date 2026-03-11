@@ -71,6 +71,7 @@ function App() {
   const isMain = branchName === "main";
   const isAudit = branchName === "audit";
   const isProtected = isMain || isAudit;
+  const canCrossCopyFromProtected = isProtected && !previewCommit;
   const isContextReady = targetId !== "" && dbName !== "" && branchName !== "";
 
   // Prevent body scroll when modal is open
@@ -325,7 +326,7 @@ function App() {
     });
 
     // Cross-DB Table Copy
-    if (selectedTable) {
+    if (selectedTable && canCrossCopyFromProtected) {
       items.push({
         label: "他DBへテーブルコピー",
         onClick: () => { setShowCrossCopyTable(true); setShowOverflow(false); },
@@ -521,7 +522,7 @@ function App() {
                   setSelectedCell(info);
                   if (!info) setShowCommentPanel(false);
                 }}
-                onCrossCopyRows={!isProtected && !previewCommit ? (pks) => {
+                onCrossCopyRows={canCrossCopyFromProtected ? (pks) => {
                   setCrossCopyPKs(pks);
                   setShowCrossCopyRows(true);
                 } : undefined}

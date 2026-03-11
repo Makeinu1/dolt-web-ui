@@ -72,7 +72,7 @@
 | **P1 コミット後リフレッシュ修正** | `refreshKey` 専用 useEffect 追加 — schemaTable ガードをスキップして無条件リロード | 本コミット |
 | **P2 ドラフト行フィルタ** | 「📝 ドラフトのみ」トグルボタン + `displayRows` useMemo — INSERT/UPDATE/DELETE 行のみ表示 | 本コミット |
 | **P3 コピーボタン統合** | 選択行あり→「コピー (N)」、選択なし+フィルタ→「全件コピー (N)」、両方なし→非表示 | 本コミット |
-| **P4 クロスDB ソースブランチ選択** | CrossCopyRowsModal/CrossCopyTableModal に「コピー元ブランチ」ドロップダウン追加（デフォルト main） | 本コミット |
+| **P4 クロスDB 取り込み保護** | CrossCopyRowsModal/CrossCopyTableModal の source selector を廃止し、protected branch (`main` / `audit`) 上の現在 branch をコピー元に固定。work branch では入口自体を出さない | 本コミット |
 | **P5 一括編集拡張** | `BulkEditModal` — 全カラム対象 +「すべて置換」/「空欄のみ埋める」モード + 全選択行（INSERT/UPDATE/既存行）対応 | 本コミット |
 
 ---

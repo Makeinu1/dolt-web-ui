@@ -197,4 +197,63 @@ test.describe("Real branch lifecycle", () => {
     expect(copyAgainBody.error?.code).toBe("BRANCH_EXISTS");
     expect(copyAgainBody.error?.details?.branch_name).toBe(copyBody.branch_name);
   });
+
+  test("@smoke-real exposes cross-copy only on protected branches and supports audit row copy", async ({ page }) => {
+    const destBranchName = "wi/dest-users";
+    const selectUsersTable = async () => {
+      const tableSelect = page.locator(".header-table-select");
+      await expect(tableSelect).toBeVisible();
+      await tableSelect.selectOption("users");
+      await expect(tableSelect).toHaveValue("users");
+    };
+
+    await selectContext(page, "test_db", "wi/existing-item");
+    await selectUsersTable();
+    const workRow = page.locator(".ag-center-cols-container .ag-row", { hasText: "Alice" }).first();
+    await expect(workRow).toBeVisible();
+    await workRow.locator(".ag-selection-checkbox").click();
+    await expect(page.locator("button", { hasText: "他DBへ" })).toHaveCount(0);
+    await page.locator(".overflow-btn").click();
+    await expect(page.locator("button", { hasText: "他DBへテーブルコピー" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await selectContext(page, "test_db", "main");
+    await selectUsersTable();
+    const mainRow = page.locator(".ag-center-cols-container .ag-row", { hasText: "Alice" }).first();
+    await expect(mainRow).toBeVisible();
+    await mainRow.locator(".ag-selection-checkbox").click();
+    await expect(page.locator("button", { hasText: "他DBへ" })).toBeVisible();
+    await page.locator(".overflow-btn").click();
+    await expect(page.locator("button", { hasText: "他DBへテーブルコピー" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await selectContext(page, "test_db", "audit");
+    await selectUsersTable();
+    const auditRow = page.locator(".ag-center-cols-container .ag-row", { hasText: "Alice" }).first();
+    await expect(auditRow).toBeVisible();
+    await auditRow.locator(".ag-selection-checkbox").click();
+    await page.locator("button", { hasText: "他DBへ" }).click();
+
+    const modal = page.locator(".modal").last();
+    await expect(modal.locator("h2")).toHaveText("他DBへコピー");
+    await expect(modal).toContainText("コピー元: test_db / audit / users");
+    await expect(modal.locator("select")).toHaveCount(2);
+    await modal.locator("select").first().selectOption("dest_db");
+    await modal.locator("select").nth(1).selectOption(destBranchName);
+    await modal.locator("button.primary", { hasText: "プレビュー" }).click();
+
+    await expect(modal).toContainText("共有カラム:");
+    await modal.locator("button.primary", { hasText: /コピー実行/ }).click();
+    await expect(modal).toContainText("件コピーしました");
+
+    const switchedTablesRequest = page.waitForRequest((req) =>
+      req.url().includes("/api/v1/tables") &&
+      req.url().includes("db_name=dest_db") &&
+      req.url().includes(`branch_name=${encodeURIComponent(destBranchName)}`)
+    );
+    await modal.locator("button.primary", { hasText: "宛先に切り替え" }).click();
+    await switchedTablesRequest;
+
+    await expect(page.locator(".context-bar select")).toHaveValue(destBranchName);
+  });
 });

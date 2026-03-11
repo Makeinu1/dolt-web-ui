@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
 import * as api from "../../api/client";
@@ -9,6 +9,7 @@ import type {
   CrossCopyPreviewResponse,
   CrossCopyRowsResponse,
 } from "../../types/api";
+import { getBranchErrorDetails, waitForBranchReady } from "../../utils/branchRecovery";
 
 interface CrossCopyRowsModalProps {
   tableName: string;
@@ -19,22 +20,36 @@ interface CrossCopyRowsModalProps {
 
 type Step = "select" | "preview" | "done";
 
+function sanitizeWorkItemName(value: string): string {
+  const sanitized = value
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return sanitized || "copy-work";
+}
+
 export function CrossCopyRowsModal({
   tableName,
   selectedPKs,
   onClose,
 }: CrossCopyRowsModalProps) {
-  const { targetId, dbName } = useContextStore();
+  const { targetId, dbName, branchName } = useContextStore();
+  const sourceBranch = branchName;
+  const defaultDestWorkItem = useMemo(
+    () => sanitizeWorkItemName(`copy-${dbName}-${tableName}`),
+    [dbName, tableName]
+  );
 
   const [step, setStep] = useState<Step>("select");
   const [databases, setDatabases] = useState<Database[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [sourceBranches, setSourceBranches] = useState<Branch[]>([]);
-  const [sourceBranch, setSourceBranch] = useState("main");
   const [destDB, setDestDB] = useState("");
   const [destBranch, setDestBranch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [destWorkItemName, setDestWorkItemName] = useState(defaultDestWorkItem);
+  const [creatingBranch, setCreatingBranch] = useState(false);
+  const [createBranchError, setCreateBranchError] = useState<string | null>(null);
 
   // Preview data
   const [preview, setPreview] = useState<CrossCopyPreviewResponse | null>(null);
@@ -42,26 +57,38 @@ export function CrossCopyRowsModal({
   // Result data
   const [result, setResult] = useState<CrossCopyRowsResponse | null>(null);
 
-  // Load source branches on mount
-  useEffect(() => {
-    api
-      .getBranches(targetId, dbName)
-      .then((brs) => {
-        // Sort: protected branches first, then alphabetically
-        const sorted = [...brs].sort((a, b) => {
-          const aProtected = a.name === "main" || a.name === "audit";
-          const bProtected = b.name === "main" || b.name === "audit";
-          if (aProtected && !bProtected) return -1;
-          if (!aProtected && bProtected) return 1;
-          return a.name.localeCompare(b.name);
-        });
-        setSourceBranches(sorted);
-        // Default to main if available, else current branch
-        const hasMain = sorted.some((b) => b.name === "main");
-        if (!hasMain && sorted.length > 0) setSourceBranch(sorted[0].name);
-      })
-      .catch(() => {});
-  }, [targetId, dbName]);
+  const fullDestBranchName = destWorkItemName.trim() ? `wi/${destWorkItemName.trim()}` : "";
+  const destWorkItemValid =
+    destWorkItemName.trim().length > 0 &&
+    /^[A-Za-z0-9._-]+$/.test(destWorkItemName.trim());
+
+  const refreshDestBranches = useCallback(async (preferredBranchName?: string): Promise<Branch[]> => {
+    if (!destDB) {
+      setBranches([]);
+      setDestBranch("");
+      return [];
+    }
+    try {
+      const brs = await api.getBranches(targetId, destDB);
+      const wiBranches = brs
+        .filter((branch) => branch.name.startsWith("wi/"))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setBranches(wiBranches);
+      setDestBranch((current) => {
+        if (preferredBranchName && wiBranches.some((branch) => branch.name === preferredBranchName)) {
+          return preferredBranchName;
+        }
+        if (current && wiBranches.some((branch) => branch.name === current)) {
+          return current;
+        }
+        return wiBranches[0]?.name ?? "";
+      });
+      return wiBranches;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "ブランチの読み込みに失敗しました");
+      throw err;
+    }
+  }, [destDB, targetId]);
 
   // Load databases on mount
   useEffect(() => {
@@ -77,21 +104,87 @@ export function CrossCopyRowsModal({
 
   // Load branches when destDB changes
   useEffect(() => {
-    if (!destDB) {
-      setBranches([]);
-      setDestBranch("");
-      return;
+    refreshDestBranches().catch(() => undefined);
+    setCreateBranchError(null);
+  }, [refreshDestBranches]);
+
+  useEffect(() => {
+    setDestWorkItemName(defaultDestWorkItem);
+  }, [defaultDestWorkItem]);
+
+  const selectExistingDestBranch = async (existingBranchName: string) => {
+    const latestBranches = await refreshDestBranches(existingBranchName);
+    if (!latestBranches.some((branch) => branch.name === existingBranchName)) {
+      return false;
     }
-    api
-      .getBranches(targetId, destDB)
-      .then((brs) => {
-        const wiBranches = brs.filter((b) => b.name.startsWith("wi/"));
-        setBranches(wiBranches);
-        if (wiBranches.length > 0) setDestBranch(wiBranches[0].name);
-        else setDestBranch("");
-      })
-      .catch(() => setError("ブランチの読み込みに失敗しました"));
-  }, [targetId, destDB]);
+    setDestBranch(existingBranchName);
+    setCreateBranchError(null);
+    return true;
+  };
+
+  const handleCreateDestBranch = async () => {
+    if (!destDB || !fullDestBranchName || !destWorkItemValid) return;
+    setCreatingBranch(true);
+    setCreateBranchError(null);
+    try {
+      if (branches.some((branch) => branch.name === fullDestBranchName)) {
+        setDestBranch(fullDestBranchName);
+        return;
+      }
+
+      await api.createBranch({
+        target_id: targetId,
+        db_name: destDB,
+        branch_name: fullDestBranchName,
+      });
+
+      const refreshedBranches = await refreshDestBranches(fullDestBranchName);
+      if (!refreshedBranches.some((branch) => branch.name === fullDestBranchName)) {
+        const ready = await waitForBranchReady({
+          targetId,
+          dbName: destDB,
+          branchName: fullDestBranchName,
+          refreshBranches: () => refreshDestBranches(fullDestBranchName),
+        });
+        if (!ready) {
+          setCreateBranchError("ブランチは作成されましたが、一覧への反映を確認できませんでした。時間をおいて再度開いてください。");
+        } else {
+          setDestBranch(fullDestBranchName);
+        }
+        return;
+      }
+
+      setDestBranch(fullDestBranchName);
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
+        const details = getBranchErrorDetails(err);
+        const branchToOpen = details.branchName ?? fullDestBranchName;
+        const opened = await selectExistingDestBranch(branchToOpen);
+        if (!opened) {
+          setCreateBranchError(err.message);
+        }
+      } else if (err instanceof ApiError && err.code === "BRANCH_NOT_READY") {
+        const details = getBranchErrorDetails(err);
+        const branchToOpen = details.branchName ?? fullDestBranchName;
+        const ready = await waitForBranchReady({
+          targetId,
+          dbName: destDB,
+          branchName: branchToOpen,
+          refreshBranches: () => refreshDestBranches(branchToOpen),
+          retryAfterMs: details.retryAfterMs,
+        });
+        if (!ready) {
+          setCreateBranchError(err.message);
+        } else {
+          setDestBranch(branchToOpen);
+        }
+      } else {
+        setCreateBranchError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
+      }
+    } finally {
+      setCreatingBranch(false);
+    }
+  };
 
   const handlePreview = async () => {
     setLoading(true);
@@ -222,30 +315,6 @@ export function CrossCopyRowsModal({
                   marginBottom: 4,
                 }}
               >
-                コピー元ブランチ
-              </label>
-              <select
-                value={sourceBranch}
-                onChange={(e) => setSourceBranch(e.target.value)}
-                style={{ width: "100%", padding: "4px 8px", fontSize: 13 }}
-              >
-                {sourceBranches.map((b) => (
-                  <option key={b.name} value={b.name}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  marginBottom: 4,
-                }}
-              >
                 宛先DB
               </label>
               <select
@@ -290,6 +359,64 @@ export function CrossCopyRowsModal({
                 ))}
               </select>
             </div>
+
+            {destDB && branches.length === 0 && (
+              <div
+                style={{
+                  marginBottom: 16,
+                  padding: "10px 12px",
+                  background: "#eff6ff",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: 6,
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#1d4ed8", marginBottom: 8 }}>
+                  宛先DBに作業ブランチがありません
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, color: "#64748b" }}>wi /</span>
+                  <input
+                    type="text"
+                    value={destWorkItemName}
+                    onChange={(e) => setDestWorkItemName(e.target.value)}
+                    placeholder={defaultDestWorkItem}
+                    style={{
+                      flex: 1,
+                      fontSize: 12,
+                      padding: "4px 8px",
+                      border: destWorkItemName.trim() && !destWorkItemValid ? "1px solid #f87171" : "1px solid #cbd5e1",
+                      borderRadius: 4,
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void handleCreateDestBranch();
+                      }
+                    }}
+                  />
+                  <button
+                    className="primary"
+                    onClick={() => void handleCreateDestBranch()}
+                    disabled={creatingBranch || !destWorkItemValid}
+                    style={{ padding: "6px 12px", fontSize: 12 }}
+                  >
+                    {creatingBranch ? "作成中..." : "作業ブランチを作成"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "#475569" }}>
+                  推奨名: <code>{`wi/${defaultDestWorkItem}`}</code>
+                </div>
+                {destWorkItemName.trim() && !destWorkItemValid && (
+                  <div style={{ fontSize: 11, color: "#b91c1c", marginTop: 6 }}>
+                    使用できる文字は A-Z a-z 0-9 . _ - のみです
+                  </div>
+                )}
+                {createBranchError && (
+                  <div style={{ fontSize: 11, color: "#b91c1c", marginTop: 6 }}>
+                    {createBranchError}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div
               style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}

@@ -1320,6 +1320,97 @@ Returns `[]` if no comments exist or `pks` is empty.
 
 ---
 
+## Cross-DB Copy
+
+Cross-DB copy imports committed data from a protected source branch into a destination work branch.
+
+### Source Branch Policy
+
+- `source_branch` is still required on the wire.
+- Allowed values are only `main` and `audit`.
+- `wi/*` or any other work branch returns:
+
+```json
+{
+  "error": {
+    "code": "INVALID_ARGUMENT",
+    "message": "コピー元ブランチは main または audit のみです"
+  }
+}
+```
+
+### POST /cross-copy/preview
+
+Preview selected rows from `source_db/source_branch` into `dest_db/dest_branch`.
+
+**Request Body:**
+
+```json
+{
+  "target_id": "production",
+  "source_db": "source_db",
+  "source_branch": "main",
+  "source_table": "users",
+  "source_pks": ["{\"id\":1}"],
+  "dest_db": "dest_db",
+  "dest_branch": "wi/import-users"
+}
+```
+
+**Notes:**
+
+- `dest_branch` must be a writable work branch.
+- The preview is read-only and reports `insert` / `update` outcomes plus schema warnings.
+
+### POST /cross-copy/rows
+
+Copy selected rows from `source_db/source_branch` into `dest_db/dest_branch`.
+
+**Request Body:** same shape as `/cross-copy/preview`
+
+**Notes:**
+
+- `source_branch` must be `main` or `audit`.
+- `dest_branch` must not be `main` or `audit`.
+- The destination branch receives a normal commit and stays reusable for later work.
+
+### POST /cross-copy/table
+
+Copy the full source table into a long-lived import branch in the destination DB.
+
+**Request Body:**
+
+```json
+{
+  "target_id": "production",
+  "source_db": "source_db",
+  "source_branch": "main",
+  "source_table": "users",
+  "dest_db": "dest_db"
+}
+```
+
+**Response:**
+
+```json
+{
+  "hash": "abc123...",
+  "branch_name": "wi/import-source_db-users",
+  "row_count": 123,
+  "shared_columns": ["id", "name"],
+  "source_only_columns": [],
+  "dest_only_columns": []
+}
+```
+
+**Notes:**
+
+- `source_branch` must be `main` or `audit`.
+- The destination branch is created as `wi/import-<sourceDB>-<table>`.
+- Re-running the same copy returns `409 BRANCH_EXISTS` so the UI can reopen the existing import branch.
+
+---
+
 ## Health Check
 
 ### GET /health
@@ -1355,6 +1446,7 @@ The frontend manages a state machine with the following states:
 ### UI Guards
 
 - **ProtectedBranchGuard**: All editing, clone, bulk update, commit, sync, and submit operations are disabled on protected branches (`main` and `audit`).
+- **Protected Cross-DB Copy**: Cross-DB row/table copy is available from protected branches as a read-only import flow into destination `wi/*` branches.
 - **BranchLockGuard**: Commit, Sync, and Revert operations are blocked while a pending approval request (`req/*` tag) exists for the branch.
 - **DraftGuard**: Sync and Submit Request are disabled while draft operations exist.
 - **ConflictGuard**: All editing, clone, bulk update, commit, sync, and submit are disabled while in any conflict state (`MergeConflictsPresent`, `SchemaConflictDetected`, `ConstraintViolationDetected`).
