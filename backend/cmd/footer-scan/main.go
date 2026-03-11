@@ -16,8 +16,6 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"gopkg.in/yaml.v3"
-
-	"github.com/Makeinu1/dolt-web-ui/backend/internal/footer"
 )
 
 type config struct {
@@ -91,29 +89,31 @@ func main() {
 	defer rows.Close()
 
 	var invalid int
-	var total int
+	commits := make([]footerScanCommit, 0)
 	for rows.Next() {
 		var hash, message string
 		if err := rows.Scan(&hash, &message); err != nil {
 			log.Printf("WARN: scan error: %v", err)
 			continue
 		}
-		total++
-
-		f, err := footer.ParseApprovalFooter(message)
-		if err != nil {
-			fmt.Printf("INVALID  %s  %v\n", hash, err)
-			invalid++
-		} else if f != nil {
-			fmt.Printf("OK       %s  req/%s\n", hash, f.WorkItem)
-		}
-		// nil, nil = no footer (normal commit) — not reported
+		commits = append(commits, footerScanCommit{Hash: hash, Message: message})
 	}
 
 	if err := rows.Err(); err != nil {
 		log.Fatalf("row iteration error: %v", err)
 	}
 
+	results, invalid := scanApprovalFooters(commits)
+	for _, result := range results {
+		switch result.Status {
+		case footerScanStatusInvalid:
+			fmt.Printf("INVALID  %s  %s\n", result.Hash, result.Problem)
+		case footerScanStatusValid:
+			fmt.Printf("OK       %s  req/%s\n", result.Hash, result.WorkItem)
+		}
+	}
+
+	total := len(results)
 	fmt.Printf("\nScanned %d commits, %d invalid footers found.\n", total, invalid)
 	if invalid > 0 {
 		os.Exit(1)

@@ -558,6 +558,123 @@ func TestBranchLifecycle_SubmitRejectResubmitApproveCreatesSequentialArchiveTags
 	}
 }
 
+func TestBranchLifecycle_SecondApproveRemainsDiscoverableInHistoryAndSearch(t *testing.T) {
+	svc := newIntegrationService(t)
+	branchName := uniqueWorkBranch(t, "discover")
+	secondMergeMessage := fmt.Sprintf("integration discover approve 2 %d", time.Now().UnixNano())
+
+	if err := svc.CreateBranch(integrationContext(t), model.CreateBranchRequest{
+		TargetID:   "local",
+		DBName:     "test_db",
+		BranchName: branchName,
+	}); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	firstCommitHead := commitRoleChange(t, svc, branchName, "reviewer", "integration discover commit 1")
+	submitOne, err := svc.SubmitRequest(integrationContext(t), model.SubmitRequestRequest{
+		TargetID:     "local",
+		DBName:       "test_db",
+		BranchName:   branchName,
+		ExpectedHead: firstCommitHead,
+		SummaryJa:    "integration discover request 1",
+	})
+	if err != nil {
+		t.Fatalf("submit request 1: %v", err)
+	}
+
+	if _, err := svc.ApproveRequest(integrationContext(t), model.ApproveRequest{
+		TargetID:       "local",
+		DBName:         "test_db",
+		RequestID:      submitOne.RequestID,
+		MergeMessageJa: "integration discover approve 1",
+	}); err != nil {
+		t.Fatalf("approve request 1: %v", err)
+	}
+
+	commitRoleChange(t, svc, branchName, "supervisor", "integration discover commit 2")
+	submitTwo, err := svc.SubmitRequest(integrationContext(t), model.SubmitRequestRequest{
+		TargetID:     "local",
+		DBName:       "test_db",
+		BranchName:   branchName,
+		ExpectedHead: mustHead(t, svc, branchName),
+		SummaryJa:    "integration discover request 2",
+	})
+	if err != nil {
+		t.Fatalf("submit request 2: %v", err)
+	}
+
+	approveTwo, err := svc.ApproveRequest(integrationContext(t), model.ApproveRequest{
+		TargetID:       "local",
+		DBName:         "test_db",
+		RequestID:      submitTwo.RequestID,
+		MergeMessageJa: secondMergeMessage,
+	})
+	if err != nil {
+		t.Fatalf("approve request 2: %v", err)
+	}
+
+	if got, want := mustHead(t, svc, "main"), mustHead(t, svc, branchName); got != want {
+		t.Fatalf("expected work branch head to match main after second approve: main=%s branch=%s", got, want)
+	}
+
+	historyResp, err := svc.HistoryCommits(
+		integrationContext(t),
+		"local",
+		"test_db",
+		"main",
+		1,
+		20,
+		secondMergeMessage,
+		"",
+		"",
+		"message",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("history commits after second approve: %v", err)
+	}
+	if historyResp.ReadIntegrity != model.ReadIntegrityComplete {
+		t.Fatalf("expected read_integrity=%s, got %s", model.ReadIntegrityComplete, historyResp.ReadIntegrity)
+	}
+
+	foundHistoryCommit := false
+	for _, commit := range historyResp.Commits {
+		if commit.Hash == approveTwo.Hash {
+			foundHistoryCommit = true
+			if commit.Message != secondMergeMessage {
+				t.Fatalf("unexpected merge message: got %q want %q", commit.Message, secondMergeMessage)
+			}
+			if commit.MergeBranch != branchName {
+				t.Fatalf("unexpected merge branch: got %s want %s", commit.MergeBranch, branchName)
+			}
+		}
+	}
+	if !foundHistoryCommit {
+		t.Fatalf("expected second approved commit %s in history search results", approveTwo.Hash)
+	}
+
+	searchResp, err := svc.Search(integrationContext(t), "local", "test_db", "main", "supervisor", false, 20)
+	if err != nil {
+		t.Fatalf("search main after second approve: %v", err)
+	}
+	if searchResp.ReadIntegrity != model.ReadIntegrityComplete {
+		t.Fatalf("expected search read_integrity=%s, got %s", model.ReadIntegrityComplete, searchResp.ReadIntegrity)
+	}
+
+	foundSearchHit := false
+	for _, result := range searchResp.Results {
+		if result.Table == "users" && result.PK == "1" && result.Column == "role" && result.Value == "supervisor" {
+			foundSearchHit = true
+			break
+		}
+	}
+	if !foundSearchHit {
+		t.Fatalf("expected search result for users PK 1 role=supervisor, got %+v", searchResp.Results)
+	}
+}
+
 func TestDeleteBranch_BlockedWhileRequestPendingAndSucceedsAfterReject(t *testing.T) {
 	svc := newIntegrationService(t)
 	branchName := uniqueWorkBranch(t, "delete")
