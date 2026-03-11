@@ -50,6 +50,8 @@ export function CrossCopyRowsModal({
   const [destWorkItemName, setDestWorkItemName] = useState(defaultDestWorkItem);
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [createBranchError, setCreateBranchError] = useState<string | null>(null);
+  const [createBranchInfo, setCreateBranchInfo] = useState<string | null>(null);
+  const [switchingContext, setSwitchingContext] = useState(false);
 
   // Preview data
   const [preview, setPreview] = useState<CrossCopyPreviewResponse | null>(null);
@@ -106,6 +108,7 @@ export function CrossCopyRowsModal({
   useEffect(() => {
     refreshDestBranches().catch(() => undefined);
     setCreateBranchError(null);
+    setCreateBranchInfo(null);
   }, [refreshDestBranches]);
 
   useEffect(() => {
@@ -113,12 +116,21 @@ export function CrossCopyRowsModal({
   }, [defaultDestWorkItem]);
 
   const selectExistingDestBranch = async (existingBranchName: string) => {
-    const latestBranches = await refreshDestBranches(existingBranchName);
-    if (!latestBranches.some((branch) => branch.name === existingBranchName)) {
+    refreshDestBranches(existingBranchName).catch(() => undefined);
+    setCreateBranchInfo("既存ブランチの接続反映を確認しています...");
+    const ready = await waitForBranchReady({
+      targetId,
+      dbName: destDB,
+      branchName: existingBranchName,
+      refreshBranches: () => refreshDestBranches(existingBranchName),
+    });
+    if (!ready) {
+      setCreateBranchInfo(null);
       return false;
     }
     setDestBranch(existingBranchName);
     setCreateBranchError(null);
+    setCreateBranchInfo(null);
     return true;
   };
 
@@ -126,9 +138,13 @@ export function CrossCopyRowsModal({
     if (!destDB || !fullDestBranchName || !destWorkItemValid) return;
     setCreatingBranch(true);
     setCreateBranchError(null);
+    setCreateBranchInfo(null);
     try {
       if (branches.some((branch) => branch.name === fullDestBranchName)) {
-        setDestBranch(fullDestBranchName);
+        const opened = await selectExistingDestBranch(fullDestBranchName);
+        if (!opened) {
+          setCreateBranchError("既存ブランチの接続反映を確認できませんでした。時間をおいて再度開いてください。");
+        }
         return;
       }
 
@@ -137,35 +153,33 @@ export function CrossCopyRowsModal({
         db_name: destDB,
         branch_name: fullDestBranchName,
       });
-
-      const refreshedBranches = await refreshDestBranches(fullDestBranchName);
-      if (!refreshedBranches.some((branch) => branch.name === fullDestBranchName)) {
-        const ready = await waitForBranchReady({
-          targetId,
-          dbName: destDB,
-          branchName: fullDestBranchName,
-          refreshBranches: () => refreshDestBranches(fullDestBranchName),
-        });
-        if (!ready) {
-          setCreateBranchError("ブランチは作成されましたが、一覧への反映を確認できませんでした。時間をおいて再度開いてください。");
-        } else {
-          setDestBranch(fullDestBranchName);
-        }
+      setCreateBranchInfo("ブランチの接続反映を確認しています...");
+      const ready = await waitForBranchReady({
+        targetId,
+        dbName: destDB,
+        branchName: fullDestBranchName,
+        refreshBranches: () => refreshDestBranches(fullDestBranchName),
+      });
+      if (!ready) {
+        setCreateBranchInfo(null);
+        setCreateBranchError("ブランチは作成されましたが、接続反映を確認できませんでした。時間をおいて再度開いてください。");
         return;
       }
-
       setDestBranch(fullDestBranchName);
+      setCreateBranchInfo(null);
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
         const details = getBranchErrorDetails(err);
         const branchToOpen = details.branchName ?? fullDestBranchName;
         const opened = await selectExistingDestBranch(branchToOpen);
         if (!opened) {
+          setCreateBranchInfo(null);
           setCreateBranchError(err.message);
         }
       } else if (err instanceof ApiError && err.code === "BRANCH_NOT_READY") {
         const details = getBranchErrorDetails(err);
         const branchToOpen = details.branchName ?? fullDestBranchName;
+        setCreateBranchInfo("ブランチの接続反映を確認しています...");
         const ready = await waitForBranchReady({
           targetId,
           dbName: destDB,
@@ -174,11 +188,14 @@ export function CrossCopyRowsModal({
           retryAfterMs: details.retryAfterMs,
         });
         if (!ready) {
+          setCreateBranchInfo(null);
           setCreateBranchError(err.message);
         } else {
           setDestBranch(branchToOpen);
+          setCreateBranchInfo(null);
         }
       } else {
+        setCreateBranchInfo(null);
         setCreateBranchError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
       }
     } finally {
@@ -234,13 +251,27 @@ export function CrossCopyRowsModal({
     }
   };
 
-  const handleSwitchContext = () => {
+  const handleSwitchContext = async () => {
     if (useDraftStore.getState().hasDraft()) {
       if (!window.confirm("未保存の変更があります。破棄して切り替えますか？")) return;
+    }
+    setSwitchingContext(true);
+    setError(null);
+    const ready = await waitForBranchReady({
+      targetId,
+      dbName: destDB,
+      branchName: destBranch,
+      refreshBranches: () => refreshDestBranches(destBranch),
+    });
+    if (!ready) {
+      setSwitchingContext(false);
+      setError("宛先ブランチの接続反映を確認できませんでした。時間をおいて再度開いてください。");
+      return;
     }
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
     useContextStore.getState().setBranch(destBranch);
+    setSwitchingContext(false);
     onClose();
   };
 
@@ -413,6 +444,11 @@ export function CrossCopyRowsModal({
                 {createBranchError && (
                   <div style={{ fontSize: 11, color: "#b91c1c", marginTop: 6 }}>
                     {createBranchError}
+                  </div>
+                )}
+                {createBranchInfo && (
+                  <div style={{ fontSize: 11, color: "#1d4ed8", marginTop: 6 }}>
+                    {createBranchInfo}
                   </div>
                 )}
               </div>
@@ -680,10 +716,11 @@ export function CrossCopyRowsModal({
               </button>
               <button
                 className="primary"
-                onClick={handleSwitchContext}
+                onClick={() => void handleSwitchContext()}
+                disabled={switchingContext}
                 style={{ padding: "6px 16px", fontSize: 13 }}
               >
-                宛先に切り替え
+                {switchingContext ? "接続反映待ち..." : "宛先に切り替え"}
               </button>
             </div>
           </div>

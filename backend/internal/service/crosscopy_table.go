@@ -148,8 +148,10 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 
 	// Verify branch is queryable before getting writable connection.
 	// Guards against Dolt propagation lag (same pattern as CreateBranch).
-	if err := s.verifyBranchQueryable(ctx, req.TargetID, req.DestDB, newBranchName); err != nil {
-		return nil, crossCopyFailure(fmt.Errorf("failed to verify branch %s: %w", newBranchName, err), expanded)
+	queryability := s.verifyBranchQueryable(ctx, req.TargetID, req.DestDB, newBranchName)
+	if !queryability.Ready {
+		logBranchQueryabilityFailure("cross_copy_branch_not_ready", req.TargetID, req.DestDB, newBranchName, queryability)
+		return nil, crossCopyFailure(fmt.Errorf("failed to verify branch %s: %w", newBranchName, queryability.Err(newBranchName)), expanded)
 	}
 
 	// Get writable connection on the new branch

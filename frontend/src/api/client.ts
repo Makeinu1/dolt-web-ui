@@ -42,6 +42,11 @@ export const getBranches = (targetId: string, dbName: string) =>
     `/branches${queryString({ target_id: targetId, db_name: dbName })}`
   );
 
+export const getBranchReady = (targetId: string, dbName: string, branchName: string) =>
+  request<import("../types/api").BranchReady>(
+    `/branches/ready${queryString({ target_id: targetId, db_name: dbName, branch_name: branchName })}`
+  );
+
 export const createBranch = (body: import("../types/api").CreateBranchRequest) =>
   request<{ branch_name: string }>("/branches/create", {
     method: "POST",

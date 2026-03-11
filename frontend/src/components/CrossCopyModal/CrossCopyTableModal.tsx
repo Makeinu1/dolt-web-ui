@@ -4,6 +4,7 @@ import { useDraftStore } from "../../store/draft";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { Database, CrossCopyTableResponse } from "../../types/api";
+import { waitForBranchReady } from "../../utils/branchRecovery";
 
 interface CrossCopyTableModalProps {
   tableName: string;
@@ -23,6 +24,8 @@ export function CrossCopyTableModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CrossCopyTableResponse | null>(null);
   const [existingBranchName, setExistingBranchName] = useState<string | null>(null);
+  const [switchInfo, setSwitchInfo] = useState<string | null>(null);
+  const [switchingBranch, setSwitchingBranch] = useState(false);
 
   // Load databases on mount
   useEffect(() => {
@@ -40,6 +43,7 @@ export function CrossCopyTableModal({
     setLoading(true);
     setError(null);
     setExistingBranchName(null);
+    setSwitchInfo(null);
     try {
       const res = await api.crossCopyTable({
         target_id: targetId,
@@ -69,16 +73,32 @@ export function CrossCopyTableModal({
     }
   };
 
-  const handleSwitchContext = () => {
+  const handleSwitchContext = async () => {
     const branchToOpen = result?.branch_name ?? existingBranchName;
     if (!branchToOpen) return;
     if (useDraftStore.getState().hasDraft()) {
       if (!window.confirm("未保存の変更があります。破棄して切り替えますか？")) return;
     }
+    setSwitchingBranch(true);
+    setError(null);
+    setSwitchInfo("ブランチの接続反映を確認しています...");
+    const ready = await waitForBranchReady({
+      targetId,
+      dbName: destDB,
+      branchName: branchToOpen,
+      refreshBranches: () => api.getBranches(targetId, destDB),
+    });
+    if (!ready) {
+      setSwitchingBranch(false);
+      setSwitchInfo(null);
+      setError("宛先ブランチの接続反映を確認できませんでした。時間をおいて再度開いてください。");
+      return;
+    }
     const ctx = useContextStore.getState();
     ctx.setDatabase(destDB);
-    // The backend only offers branches that already exist and can be opened from the UI.
     ctx.setBranch(branchToOpen);
+    setSwitchingBranch(false);
+    setSwitchInfo(null);
     onClose();
   };
 
@@ -137,6 +157,20 @@ export function CrossCopyTableModal({
             }}
           >
             {error}
+          </div>
+        )}
+        {switchInfo && (
+          <div
+            style={{
+              padding: "6px 10px",
+              background: "#eff6ff",
+              color: "#1d4ed8",
+              fontSize: 12,
+              borderRadius: 4,
+              marginBottom: 8,
+            }}
+          >
+            {switchInfo}
           </div>
         )}
 
@@ -268,10 +302,15 @@ export function CrossCopyTableModal({
               </button>
               <button
                 className="primary"
-                onClick={handleSwitchContext}
+                onClick={() => void handleSwitchContext()}
+                disabled={switchingBranch}
                 style={{ padding: "6px 16px", fontSize: 13 }}
               >
-                {result ? "宛先に切り替え" : "既存ブランチを開く"}
+                {switchingBranch
+                  ? "接続反映待ち..."
+                  : result
+                    ? "宛先に切り替え"
+                    : "既存ブランチを開く"}
               </button>
             </div>
           </div>

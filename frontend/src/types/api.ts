@@ -23,6 +23,10 @@ export interface Head {
   hash: string;
 }
 
+export interface BranchReady {
+  ready: boolean;
+}
+
 export interface CreateBranchRequest {
   target_id: string;
   db_name: string;

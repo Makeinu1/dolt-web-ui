@@ -182,6 +182,7 @@ databases:
     name: your_database
     allowed_branches:
       - "main"
+      - "audit"
       - "wi/*"
 
 server:
@@ -192,6 +193,18 @@ server:
     read_sec: 30          # HTTP read タイムアウト
     write_sec: 300        # HTTP write タイムアウト (DOLT_MERGE 等の重い操作向け)
     idle_sec: 120         # HTTP idle タイムアウト
+  recovery:
+    branch_ready_sec: 10      # branch 作成/再利用後に queryable になるまで待つ上限
+    branch_ready_poll_ms: 500 # readiness poll 間隔
+  retries:
+    tag_retry_attempts: 3     # req/merged tag 後処理の再試行回数
+    tag_retry_delay_ms: 500   # tag retry 間隔
+  search:
+    timeout_sec: 5            # 全文検索の time budget
+  pool:
+    max_open: 20              # DB pool max open
+    max_idle: 10              # DB pool max idle
+    conn_lifetime_sec: 3600   # DB connection lifetime
 ```
 
 ### 起動
@@ -211,6 +224,9 @@ cd frontend && npm run dev
 ```
 
 ブラウザで `http://localhost:8080`（本番）または `http://localhost:5173`（開発）を開きます。
+
+巨大な DB で branch 作成直後に `BRANCH_NOT_READY` が出る場合は、`server.recovery.branch_ready_sec` を伸ばして調整できます。  
+frontend は `GET /api/v1/branches/ready` を poll してから branch を開くため、409 が返っても UI は壊れず復帰できます。
 
 ## 使い方
 

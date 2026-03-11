@@ -59,6 +59,10 @@ type HeadResponse struct {
 	Hash string `json:"hash"`
 }
 
+type BranchReadyResponse struct {
+	Ready bool `json:"ready"`
+}
+
 // CreateBranchRequest represents a request to create a work branch.
 type CreateBranchRequest struct {
 	TargetID   string `json:"target_id"`

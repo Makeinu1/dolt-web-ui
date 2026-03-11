@@ -60,8 +60,32 @@ export async function setupBaseMocks(page: Page) {
     await page.route('**/api/v1/databases*', async route => {
         await route.fulfill({ json: MOCK_DATABASES });
     });
+    await page.route('**/api/v1/branches/ready*', async route => {
+        await route.fulfill({ json: { ready: true } });
+    });
     await page.route('**/api/v1/branches*', async route => {
         await route.fulfill({ json: MOCK_BRANCHES });
+    });
+    await page.route('**/api/v1/branches/create*', async route => {
+        const body = JSON.parse(route.request().postData() ?? '{}');
+        const branchName = typeof body.branch_name === 'string' ? body.branch_name : '';
+        if (MOCK_BRANCHES.some((branch) => branch.name === branchName)) {
+            await route.fulfill({
+                status: 409,
+                json: {
+                    error: {
+                        code: 'BRANCH_EXISTS',
+                        message: `ブランチ ${branchName} は既に存在します。既存の作業ブランチを開いて続行してください。`,
+                        details: {
+                            branch_name: branchName,
+                            open_existing: true,
+                        },
+                    },
+                },
+            });
+            return;
+        }
+        await route.fulfill({ status: 201, json: { branch_name: branchName } });
     });
     await page.route('**/api/v1/head*', async route => {
         const url = new URL(route.request().url());
@@ -134,10 +158,50 @@ export async function selectContextInUI(page: Page, targetId: string, dbName: st
 
     // Branch の選択
     if (branchName) {
+        if (branchName.startsWith('wi/')) {
+            const branchSelect = contextBar.locator('select');
+            await expect(branchSelect).toBeVisible({ timeout: 5000 });
+            await expect.poll(async () => await branchSelect.isDisabled(), { timeout: 5000 }).toBe(false);
+            await expect.poll(
+                async () =>
+                    await branchSelect.evaluate(
+                        (element, expectedBranchName) =>
+                            Array.from((element as HTMLSelectElement).options).some(
+                                (option) => option.value === expectedBranchName
+                            ),
+                        branchName
+                    ),
+                { timeout: 5000 }
+            ).toBe(true);
+            await contextBar.locator('button', { hasText: '+' }).click();
+            const branchInput = contextBar.locator('input[placeholder="ticket-123"]');
+            await expect(branchInput).toBeVisible({ timeout: 5000 });
+            await branchInput.fill(branchName.replace(/^wi\//, ''));
+            await contextBar.locator('button', { hasText: '作成' }).first().click();
+            await expect.poll(async () => await contextBar.locator('select').inputValue(), { timeout: 10000 }).toBe(branchName);
+        } else {
         const branchSelect = contextBar.locator('select');
         await expect(branchSelect).toBeVisible({ timeout: 5000 });
-        await branchSelect.selectOption(branchName);
-        await expect(branchSelect).toHaveValue(branchName, { timeout: 5000 });
+        await expect.poll(async () => await branchSelect.isDisabled(), { timeout: 5000 }).toBe(false);
+        await expect.poll(
+            async () =>
+                await branchSelect.evaluate(
+                    (element, expectedBranchName) =>
+                        Array.from((element as HTMLSelectElement).options).some(
+                            (option) => option.value === expectedBranchName
+                        ),
+                    branchName
+                ),
+            { timeout: 5000 }
+        ).toBe(true);
+        await branchSelect.evaluate((element, nextBranchName) => {
+            const select = element as HTMLSelectElement;
+            select.value = nextBranchName;
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        }, branchName);
+        await expect.poll(async () => await branchSelect.inputValue(), { timeout: 10000 }).toBe(branchName);
+        }
     }
 
     // Wait for the table grid to appear rather than using a fixed timeout.

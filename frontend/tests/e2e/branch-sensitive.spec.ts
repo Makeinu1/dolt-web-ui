@@ -29,6 +29,10 @@ async function setupCrossDbMocks(page: Page) {
     await route.fulfill({ json: MULTI_DB_DATABASES });
   });
 
+  await page.unroute('**/api/v1/branches/ready*');
+  await page.route('**/api/v1/branches/ready*', async (route) => {
+    await route.fulfill({ json: { ready: true } });
+  });
   await page.unroute('**/api/v1/branches*');
   await page.route('**/api/v1/branches*', async (route) => {
     const url = new URL(route.request().url());

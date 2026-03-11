@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { CommitOp } from "../types/api";
 import { safeGetJSON, safeSetJSON } from "../utils/safeStorage";
 import { stablePkJson } from "../utils/stablePk";
+import { UI_DRAFT_SAVE_DEBOUNCE_MS } from "../constants/ui";
 
 const STORAGE_KEY = "dolt-web-ui-draft";
 
@@ -25,7 +26,7 @@ function saveDraftDebounced(ops: CommitOp[]) {
     safeSetJSON(sessionStorage, STORAGE_KEY, _pendingOps);
     _saveTimer = null;
     _pendingOps = null;
-  }, 500);
+  }, UI_DRAFT_SAVE_DEBOUNCE_MS);
 }
 
 function saveDraftImmediate(ops: CommitOp[]) {

@@ -32,12 +32,30 @@ type Server struct {
 	CORSOrigin  string   `yaml:"cors_origin"`
 	BodyLimitMB int      `yaml:"body_limit_mb"` // BUG-J: configurable request body size limit
 	Timeouts    Timeouts `yaml:"timeouts"`
+	Recovery    Recovery `yaml:"recovery"`
+	Retries     Retries  `yaml:"retries"`
+	Search      Search   `yaml:"search"`
+	Pool        Pool     `yaml:"pool"`
 }
 
 type Timeouts struct {
 	ReadSec  int `yaml:"read_sec"`  // HTTP read timeout (default 30s)
 	WriteSec int `yaml:"write_sec"` // HTTP write timeout for heavy ops like DOLT_MERGE (default 300s)
 	IdleSec  int `yaml:"idle_sec"`  // HTTP idle timeout (default 120s)
+}
+
+type Recovery struct {
+	BranchReadySec    int `yaml:"branch_ready_sec"`
+	BranchReadyPollMS int `yaml:"branch_ready_poll_ms"`
+}
+
+type Retries struct {
+	TagRetryAttempts int `yaml:"tag_retry_attempts"`
+	TagRetryDelayMS  int `yaml:"tag_retry_delay_ms"`
+}
+
+type Search struct {
+	TimeoutSec int `yaml:"timeout_sec"`
 }
 
 type Pool struct {
@@ -76,6 +94,30 @@ func Load(path string) (*Config, error) {
 	// BUG-J: default body size limit
 	if cfg.Server.BodyLimitMB == 0 {
 		cfg.Server.BodyLimitMB = 10
+	}
+	if cfg.Server.Recovery.BranchReadySec == 0 {
+		cfg.Server.Recovery.BranchReadySec = 10
+	}
+	if cfg.Server.Recovery.BranchReadyPollMS == 0 {
+		cfg.Server.Recovery.BranchReadyPollMS = 500
+	}
+	if cfg.Server.Retries.TagRetryAttempts == 0 {
+		cfg.Server.Retries.TagRetryAttempts = 3
+	}
+	if cfg.Server.Retries.TagRetryDelayMS == 0 {
+		cfg.Server.Retries.TagRetryDelayMS = 500
+	}
+	if cfg.Server.Search.TimeoutSec == 0 {
+		cfg.Server.Search.TimeoutSec = 5
+	}
+	if cfg.Server.Pool.MaxOpen == 0 {
+		cfg.Server.Pool.MaxOpen = 20
+	}
+	if cfg.Server.Pool.MaxIdle == 0 {
+		cfg.Server.Pool.MaxIdle = 10
+	}
+	if cfg.Server.Pool.ConnLifetimeSec == 0 {
+		cfg.Server.Pool.ConnLifetimeSec = 3600
 	}
 
 	return &cfg, nil

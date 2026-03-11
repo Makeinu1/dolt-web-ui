@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useContextStore } from "../../store/context";
+import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { CSVPreviewResponse } from "../../types/api";
@@ -68,6 +69,8 @@ export function CSVImportModal({
   onApplied,
 }: CSVImportModalProps) {
   const { targetId, dbName, branchName } = useContextStore();
+  const setBaseState = useUIStore((s) => s.setBaseState);
+  const setGlobalError = useUIStore((s) => s.setError);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>("select");
@@ -146,6 +149,12 @@ export function CSVImportModal({
       onApplied(result.hash);
       setStep("done");
     } catch (err) {
+      if (err instanceof ApiError && err.code === "STALE_HEAD") {
+        setBaseState("StaleHeadDetected");
+        setGlobalError("データが更新されています" + (err.message ? ": " + err.message : ""));
+        setError(null);
+        return;
+      }
       const msg = err instanceof ApiError ? err.message : "適用に失敗しました";
       setError(msg);
     } finally {

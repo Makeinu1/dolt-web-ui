@@ -38,6 +38,10 @@ test.describe('ContextSelector Tests', () => {
         await selectContextInUI(page, 'local', 'test_db', 'main');
 
         let branchCreated = false;
+        await page.unroute('**/api/v1/branches/ready*');
+        await page.route('**/api/v1/branches/ready*', async route => {
+            await route.fulfill({ json: { ready: true } });
+        });
         await page.unroute('**/api/v1/branches*');
         await page.route('**/api/v1/branches*', async route => {
             await route.fulfill({
@@ -68,9 +72,9 @@ test.describe('ContextSelector Tests', () => {
             if (route.request().method() === 'POST') {
                 branchCreated = true;
                 await route.fulfill({ status: 201, json: { branch_name: 'wi/test-feature' } });
-            } else {
-                await route.continue();
+                return;
             }
+            await route.continue();
         });
 
         const createBtn = contextBar.locator('button', { hasText: '作成' }).first();
@@ -108,6 +112,22 @@ test.describe('ContextSelector Tests', () => {
 
     test('should recover from a stale branch list by opening BRANCH_EXISTS from the server', async ({ page }) => {
         let serverConfirmedExisting = false;
+        await page.unroute('**/api/v1/branches/ready*');
+        await page.route('**/api/v1/branches/ready*', async route => {
+            const url = new URL(route.request().url());
+            const branchName = url.searchParams.get('branch_name');
+            await route.fulfill({
+                status: serverConfirmedExisting && branchName === 'wi/stale-item' ? 200 : 409,
+                json: serverConfirmedExisting && branchName === 'wi/stale-item'
+                    ? { ready: true }
+                    : {
+                        error: {
+                            code: 'BRANCH_NOT_READY',
+                            message: 'まだ準備中です',
+                        },
+                    },
+            });
+        });
         await page.unroute('**/api/v1/branches*');
         await page.route('**/api/v1/branches*', async route => {
             if (serverConfirmedExisting) {
@@ -155,5 +175,66 @@ test.describe('ContextSelector Tests', () => {
         await contextBar.locator('button', { hasText: '作成' }).first().click();
 
         await expect(contextBar.locator('select')).toHaveValue('wi/stale-item');
+    });
+
+    test('should poll branch readiness before opening a newly created work branch', async ({ page }) => {
+        await page.goto('/');
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        let branchCreated = false;
+        let readyCalls = 0;
+
+        await page.unroute('**/api/v1/branches/ready*');
+        await page.route('**/api/v1/branches/ready*', async route => {
+            readyCalls += 1;
+            if (readyCalls < 3) {
+                await route.fulfill({
+                    status: 409,
+                    json: {
+                        error: {
+                            code: 'BRANCH_NOT_READY',
+                            message: '準備中です',
+                            details: { branch_name: 'wi/slow-branch', retry_after_ms: 1200 },
+                        },
+                    },
+                });
+                return;
+            }
+            await route.fulfill({ json: { ready: true } });
+        });
+        await page.unroute('**/api/v1/branches*');
+        await page.route('**/api/v1/branches*', async route => {
+            await route.fulfill({
+                json: [
+                    { name: 'main', hash: 'hash-main' },
+                    { name: 'wi/feat-a', hash: 'hash-feat-a' },
+                    ...(branchCreated ? [{ name: 'wi/slow-branch', hash: 'hash-slow-branch' }] : []),
+                ],
+            });
+        });
+
+        await page.route('**/api/v1/branches/create*', async route => {
+            branchCreated = true;
+            await route.fulfill({
+                status: 409,
+                json: {
+                    error: {
+                        code: 'BRANCH_NOT_READY',
+                        message: 'ブランチ wi/slow-branch は作成されましたが、まだ接続準備が完了していません。少し待ってから開いてください。',
+                        details: { branch_name: 'wi/slow-branch', retry_after_ms: 1200 },
+                    },
+                },
+            });
+        });
+
+        const contextBar = page.locator('.context-bar');
+        await contextBar.locator('button', { hasText: '+' }).click();
+        const branchInput = contextBar.locator('input[placeholder="ticket-123"]');
+        await branchInput.fill('slow-branch');
+        await contextBar.locator('button', { hasText: '作成' }).first().click();
+
+        await expect(contextBar).toContainText('ブランチの接続反映を確認しています...');
+        await expect(contextBar.locator('select')).toHaveValue('wi/slow-branch');
+        expect(readyCalls).toBeGreaterThanOrEqual(3);
     });
 });

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -54,31 +53,6 @@ func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]
 	return branches, rows.Err()
 }
 
-// verifyBranchQueryable retries Conn() up to 5 times to confirm a newly created branch
-// is queryable via USE db/branch. Returns nil on success.
-// This guards against Dolt's branch propagation lag across connection pool connections.
-// 5 retries × 500ms = up to 2000ms, sufficient for large DBs (2-5GB).
-func (s *Service) verifyBranchQueryable(ctx context.Context, targetID, dbName, branch string) error {
-	for attempt := 0; attempt < 5; attempt++ {
-		conn, err := s.repo.Conn(ctx, targetID, dbName, branch)
-		if err == nil {
-			rows, queryErr := conn.QueryContext(ctx, "SHOW TABLES")
-			if queryErr == nil {
-				rows.Close()
-			}
-			conn.Close()
-			if queryErr == nil {
-				return nil
-			}
-			err = queryErr
-		}
-		if attempt < 4 {
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-	return fmt.Errorf("branch %s not queryable after 5 retries", branch)
-}
-
 func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchRequest) error {
 	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
 	if err != nil {
@@ -94,12 +68,15 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 
 	// Verify the branch is queryable on a fresh connection (USE db/branch).
 	// Dolt may need a moment to propagate the branch across connections.
-	if err := s.verifyBranchQueryable(ctx, req.TargetID, req.DBName, req.BranchName); err != nil {
+	queryability := s.verifyBranchQueryable(ctx, req.TargetID, req.DBName, req.BranchName)
+	if !queryability.Ready {
+		logBranchQueryabilityFailure("create_branch_not_ready", req.TargetID, req.DBName, req.BranchName, queryability)
+
 		// If the branch exists on the creating connection, USE db/branch is simply lagging.
 		// Surface a recoverable state instead of returning opaque INTERNAL.
 		exists, existsErr := branchExists(ctx, conn, req.BranchName)
 		if existsErr == nil && exists {
-			return newBranchNotReadyError(req.BranchName)
+			return newBranchNotReadyError(req.BranchName, s.branchReadyRetryAfterMS())
 		}
 
 		// Fall back to a fresh connection check if the creating connection cannot confirm.
@@ -108,12 +85,34 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 			defer checkConn.Close()
 			exists, existsErr = branchExists(context.Background(), checkConn, req.BranchName)
 			if existsErr == nil && exists {
-				return newBranchNotReadyError(req.BranchName)
+				return newBranchNotReadyError(req.BranchName, s.branchReadyRetryAfterMS())
 			}
 		}
-		return fmt.Errorf("branch created but not yet queryable via USE: %w", err)
+		return fmt.Errorf("branch created but not yet queryable via USE: %w", queryability.Err(req.BranchName))
 	}
 	return nil
+}
+
+func (s *Service) GetBranchReady(ctx context.Context, targetID, dbName, branchName string) (*model.BranchReadyResponse, error) {
+	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	exists, err := branchExists(ctx, conn, branchName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("branch %s not found", branchName)}
+	}
+
+	if err := s.checkBranchQueryableOnce(ctx, targetID, dbName, branchName); err != nil {
+		return nil, newBranchNotReadyError(branchName, s.branchReadyRetryAfterMS())
+	}
+
+	return &model.BranchReadyResponse{Ready: true}, nil
 }
 
 func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchRequest) error {

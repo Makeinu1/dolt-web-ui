@@ -1,6 +1,10 @@
 import * as api from "../api/client";
 import { ApiError } from "../api/errors";
 import type { Branch } from "../types/api";
+import {
+  UI_BRANCH_READY_DEFAULT_WAIT_MS,
+  UI_BRANCH_READY_POLL_MS,
+} from "../constants/ui";
 
 export interface BranchErrorDetails {
   branchName?: string;
@@ -23,7 +27,7 @@ export async function waitForBranchReady({
   dbName,
   branchName,
   refreshBranches,
-  retryAfterMs = 2000,
+  retryAfterMs = UI_BRANCH_READY_DEFAULT_WAIT_MS,
 }: {
   targetId: string;
   dbName: string;
@@ -31,18 +35,29 @@ export async function waitForBranchReady({
   refreshBranches: () => Promise<Branch[]>;
   retryAfterMs?: number;
 }): Promise<boolean> {
-  const attempts = Math.max(1, Math.ceil(retryAfterMs / 400));
+  const attempts = Math.max(1, Math.ceil(retryAfterMs / UI_BRANCH_READY_POLL_MS));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const latestBranches = await refreshBranches();
-      if (latestBranches.some((branch) => branch.name === branchName)) {
-        await api.getHead(targetId, dbName, branchName);
+      const readiness = await api.getBranchReady(targetId, dbName, branchName);
+      if (readiness.ready) {
+        await refreshBranches();
         return true;
       }
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.code !== "BRANCH_NOT_READY" && err.code !== "NOT_FOUND")) {
+        // Ignore transient API errors while polling and keep retrying until the timeout expires.
+      }
+    }
+
+    try {
+      await refreshBranches();
     } catch {
       // Keep polling until the branch becomes queryable or the timeout expires.
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, UI_BRANCH_READY_POLL_MS));
+    }
   }
   return false;
 }

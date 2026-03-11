@@ -25,6 +25,7 @@ export function ContextSelector() {
   const [workItemName, setWorkItemName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createInfo, setCreateInfo] = useState<string | null>(null);
 
   useEffect(() => {
     api.getTargets().then(setTargets).catch((err) => {
@@ -74,6 +75,7 @@ export function ContextSelector() {
     setShowCreate(false);
     setWorkItemName("");
     setCreateError(null);
+    setCreateInfo(null);
   }, [targetId, dbName]);
 
   const fullBranchName = workItemName.trim()
@@ -85,24 +87,57 @@ export function ContextSelector() {
     /^[A-Za-z0-9._-]+$/.test(workItemName.trim());
 
   const openExistingBranch = async (existingBranchName: string) => {
-    const latestBranches = await refreshBranches();
-    if (!latestBranches.some((branch) => branch.name === existingBranchName)) {
+    refreshBranches().catch(() => undefined);
+    setCreateInfo("既存ブランチの接続反映を確認しています...");
+    const ready = await waitForBranchReady({
+      targetId,
+      dbName,
+      branchName: existingBranchName,
+      refreshBranches,
+    });
+    if (!ready) {
+      setCreateInfo(null);
       return false;
     }
     if (hasDraft() && !window.confirm(branchSwitchDiscardMessage)) {
+      setCreateInfo(null);
       return true;
     }
     setBranch(existingBranchName);
     setWorkItemName("");
     setShowCreate(false);
     setCreateError(null);
+    setCreateInfo(null);
     return true;
+  };
+
+  const handleSelectBranch = async (nextBranchName: string) => {
+    if (hasDraft() && !window.confirm("未コミットの変更があります。破棄してブランチを切り替えますか？")) {
+      return;
+    }
+    if (!nextBranchName || nextBranchName === "main" || nextBranchName === "audit") {
+      setBranch(nextBranchName);
+      return;
+    }
+
+    const ready = await waitForBranchReady({
+      targetId,
+      dbName,
+      branchName: nextBranchName,
+      refreshBranches,
+    });
+    if (!ready) {
+      setError("ブランチの接続反映を確認できませんでした。時間をおいて再度開いてください。");
+      return;
+    }
+    setBranch(nextBranchName);
   };
 
   const handleCreateBranch = async () => {
     if (!fullBranchName || !workItemValid) return;
     setCreating(true);
     setCreateError(null);
+    setCreateInfo(null);
     try {
       if (branches.some((branch) => branch.name === fullBranchName)) {
         const opened = await openExistingBranch(fullBranchName);
@@ -116,38 +151,35 @@ export function ContextSelector() {
         db_name: dbName,
         branch_name: fullBranchName,
       });
-      const refreshedBranches = await refreshBranches();
-      if (!refreshedBranches.some((branch) => branch.name === fullBranchName)) {
-        const ready = await waitForBranchReady({
-          targetId,
-          dbName,
-          branchName: fullBranchName,
-          refreshBranches,
-        });
-        if (!ready) {
-          setCreateError("ブランチは作成されましたが、一覧への反映を確認できませんでした。時間をおいて再度開いてください。");
-        } else {
-          setBranch(fullBranchName);
-          setWorkItemName("");
-          setShowCreate(false);
-          setCreateError(null);
-        }
+      setCreateInfo("ブランチの接続反映を確認しています...");
+      const ready = await waitForBranchReady({
+        targetId,
+        dbName,
+        branchName: fullBranchName,
+        refreshBranches,
+      });
+      if (!ready) {
+        setCreateInfo(null);
+        setCreateError("ブランチは作成されましたが、接続反映を確認できませんでした。時間をおいて再度開いてください。");
         return;
       }
       setBranch(fullBranchName);
       setWorkItemName("");
       setShowCreate(false);
+      setCreateInfo(null);
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
         const details = getBranchErrorDetails(err);
         const branchToOpen = details.branchName ?? fullBranchName;
         const opened = await openExistingBranch(branchToOpen);
         if (!opened) {
+          setCreateInfo(null);
           setCreateError(err.message);
         }
       } else if (err instanceof ApiError && err.code === "BRANCH_NOT_READY") {
         const details = getBranchErrorDetails(err);
         const branchToOpen = details.branchName ?? fullBranchName;
+        setCreateInfo("ブランチの接続反映を確認しています...");
         const ready = await waitForBranchReady({
           targetId,
           dbName,
@@ -156,14 +188,17 @@ export function ContextSelector() {
           retryAfterMs: details.retryAfterMs,
         });
         if (!ready) {
+          setCreateInfo(null);
           setCreateError(err.message);
         } else {
           setBranch(branchToOpen);
           setWorkItemName("");
           setShowCreate(false);
           setCreateError(null);
+          setCreateInfo(null);
         }
       } else {
+        setCreateInfo(null);
         setCreateError(err instanceof ApiError ? err.message : "ブランチの作成に失敗しました");
       }
     } finally {
@@ -198,8 +233,7 @@ export function ContextSelector() {
           <select
             value={branchName}
             onChange={(e) => {
-              if (hasDraft() && !window.confirm("未コミットの変更があります。破棄してブランチを切り替えますか？")) return;
-              setBranch(e.target.value);
+              void handleSelectBranch(e.target.value);
             }}
             style={{ minWidth: 120 }}
             disabled={loadingBranches}
@@ -267,6 +301,7 @@ export function ContextSelector() {
             onClick={() => {
               setShowCreate(false);
               setCreateError(null);
+              setCreateInfo(null);
               setWorkItemName("");
             }}
             style={{ fontSize: 11, padding: "2px 8px", background: "transparent", color: "#cbd5e1", border: "none", cursor: "pointer" }}
@@ -278,6 +313,9 @@ export function ContextSelector() {
           )}
           {createError && (
             <span style={{ color: "#fca5a5", fontSize: 10 }}>{createError}</span>
+          )}
+          {createInfo && (
+            <span style={{ color: "#bfdbfe", fontSize: 10 }}>{createInfo}</span>
           )}
         </div>
       )}

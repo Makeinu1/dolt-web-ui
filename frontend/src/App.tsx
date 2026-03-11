@@ -16,6 +16,7 @@ import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsMod
 import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
 import { CSVImportModal } from "./components/CSVImportModal/CSVImportModal";
 import { SearchModal } from "./components/SearchModal/SearchModal";
+import { UI_ERROR_AUTO_CLEAR_MS } from "./constants/ui";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -151,7 +152,7 @@ function App() {
   // Auto-clear error after 8 seconds to prevent persistent error loops.
   useEffect(() => {
     if (!error) return;
-    const timer = setTimeout(() => setError(null), 8000);
+    const timer = setTimeout(() => setError(null), UI_ERROR_AUTO_CLEAR_MS);
     return () => clearTimeout(timer);
   }, [error, setError]);
 

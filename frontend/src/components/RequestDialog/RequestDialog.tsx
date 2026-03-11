@@ -5,8 +5,7 @@ import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { ApproveResponse, RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
-
-const DIFF_PREVIEW_TIMEOUT_MS = 3000;
+import { UI_DIFF_PREVIEW_TIMEOUT_MS } from "../../constants/ui";
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
 function ExpandableDiffSummary({ targetId, dbName, branchName }: {
@@ -35,7 +34,7 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
         new Promise<never>((_, reject) => {
           timeoutId = window.setTimeout(() => {
             reject(new ApiError(408, { code: "TIMEOUT", message: "差分の読み込みがタイムアウトしました。再試行してください。" }));
-          }, DIFF_PREVIEW_TIMEOUT_MS);
+          }, UI_DIFF_PREVIEW_TIMEOUT_MS);
         }),
       ]);
 
@@ -152,6 +151,8 @@ export function SubmitDialog({
   onSubmitted,
 }: SubmitDialogProps) {
   const { targetId, dbName, branchName } = useContextStore();
+  const setBaseState = useUIStore((s) => s.setBaseState);
+  const setGlobalError = useUIStore((s) => s.setError);
   const [submitting, setSubmitting] = useState(false);
   const [summaryJa, setSummaryJa] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +175,12 @@ export function SubmitDialog({
       onSubmitted(result.overwritten_tables);
       onClose();
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.code === "STALE_HEAD") {
+        setBaseState("StaleHeadDetected");
+        setGlobalError("データが更新されています" + (err.message ? ": " + err.message : ""));
+        setError(null);
+        return;
+      }
       const msg = err instanceof ApiError ? err.message : "";
       setError("申請に失敗しました" + (msg ? ": " + msg : ""));
     } finally {

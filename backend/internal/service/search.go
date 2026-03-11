@@ -11,9 +11,12 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
 
-const searchTimeBudget = 5 * time.Second
+func (s *Service) searchTimeBudget() time.Duration {
+	return time.Duration(s.cfg.Server.Search.TimeoutSec) * time.Second
+}
 
-func searchTimeoutError() *model.APIError {
+func (s *Service) searchTimeoutError() *model.APIError {
+	searchTimeBudget := s.searchTimeBudget()
 	return &model.APIError{
 		Status:  408,
 		Code:    model.CodePreconditionFailed,
@@ -33,7 +36,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		return &model.SearchResponse{Results: make([]model.SearchResult, 0), Total: 0}, nil
 	}
 
-	searchCtx, cancel := context.WithTimeout(ctx, searchTimeBudget)
+	searchCtx, cancel := context.WithTimeout(ctx, s.searchTimeBudget())
 	defer cancel()
 
 	conn, err := s.repo.Conn(searchCtx, targetID, dbName, branchName)
@@ -46,7 +49,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	rows, err := conn.QueryContext(searchCtx, "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")
 	if err != nil {
 		if isSearchTimeout(err, searchCtx) {
-			return nil, searchTimeoutError()
+			return nil, s.searchTimeoutError()
 		}
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
@@ -64,12 +67,12 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		if isSearchTimeout(err, searchCtx) {
-			return nil, searchTimeoutError()
+			return nil, s.searchTimeoutError()
 		}
 		return nil, fmt.Errorf("failed to iterate tables: %w", err)
 	}
 	if err := searchCtx.Err(); err != nil {
-		return nil, searchTimeoutError()
+		return nil, s.searchTimeoutError()
 	}
 
 	if len(tableNames) == 0 {
@@ -106,7 +109,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		}
 		colRows.Close()
 	} else if isSearchTimeout(err, searchCtx) {
-		return nil, searchTimeoutError()
+		return nil, s.searchTimeoutError()
 	}
 	// If INFORMATION_SCHEMA returned no columns (e.g. revision-DB TABLE_SCHEMA mismatch),
 	// fall back to per-table SHOW COLUMNS for each table that has no entry yet.
@@ -120,7 +123,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 
 	for _, tableName := range tableNames {
 		if err := searchCtx.Err(); err != nil {
-			return nil, searchTimeoutError()
+			return nil, s.searchTimeoutError()
 		}
 		if len(results) >= limit {
 			break
@@ -132,7 +135,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			colRows2, err := conn.QueryContext(searchCtx, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 			if err != nil {
 				if isSearchTimeout(err, searchCtx) {
-					return nil, searchTimeoutError()
+					return nil, s.searchTimeoutError()
 				}
 				continue
 			}
@@ -189,7 +192,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		dataRows, err := conn.QueryContext(searchCtx, query, args...)
 		if err != nil {
 			if isSearchTimeout(err, searchCtx) {
-				return nil, searchTimeoutError()
+				return nil, s.searchTimeoutError()
 			}
 			// Query failed — skip table
 			continue
@@ -216,7 +219,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			if err := dataRows.Scan(scanDest...); err != nil {
 				if isSearchTimeout(err, searchCtx) {
 					dataRows.Close()
-					return nil, searchTimeoutError()
+					return nil, s.searchTimeoutError()
 				}
 				continue
 			}
@@ -259,7 +262,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		if err := dataRows.Err(); err != nil {
 			dataRows.Close()
 			if isSearchTimeout(err, searchCtx) {
-				return nil, searchTimeoutError()
+				return nil, s.searchTimeoutError()
 			}
 			continue
 		}
@@ -293,12 +296,12 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 				}
 				memoRows.Close()
 			} else if isSearchTimeout(err, searchCtx) {
-				return nil, searchTimeoutError()
+				return nil, s.searchTimeoutError()
 			}
 		}
 	}
 	if err := searchCtx.Err(); err != nil {
-		return nil, searchTimeoutError()
+		return nil, s.searchTimeoutError()
 	}
 
 	return &model.SearchResponse{Results: results, Total: len(results)}, nil

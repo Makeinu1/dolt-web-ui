@@ -1,0 +1,6 @@
+export const UI_ERROR_AUTO_CLEAR_MS = 8000;
+export const UI_BRANCH_READY_DEFAULT_WAIT_MS = 10_000;
+export const UI_BRANCH_READY_POLL_MS = 500;
+export const UI_DRAFT_SAVE_DEBOUNCE_MS = 500;
+export const UI_DIFF_PREVIEW_TIMEOUT_MS = 3000;
+export const UI_CLONE_TIMEOUT_MS = 30_000;

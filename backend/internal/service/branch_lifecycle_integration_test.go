@@ -362,6 +362,30 @@ func TestDeleteBranch_BlockedWhileRequestPendingAndSucceedsAfterReject(t *testin
 	}
 }
 
+func TestGetBranchReady_ReturnsReadyAndNotFound(t *testing.T) {
+	svc := newIntegrationService(t)
+	branchName := uniqueWorkBranch(t, "ready")
+
+	if err := svc.CreateBranch(integrationContext(t), model.CreateBranchRequest{
+		TargetID:   "local",
+		DBName:     "test_db",
+		BranchName: branchName,
+	}); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	readyResp, err := svc.GetBranchReady(integrationContext(t), "local", "test_db", branchName)
+	if err != nil {
+		t.Fatalf("get branch ready: %v", err)
+	}
+	if !readyResp.Ready {
+		t.Fatalf("expected branch %s to be ready", branchName)
+	}
+
+	_, err = svc.GetBranchReady(integrationContext(t), "local", "test_db", "wi/does-not-exist")
+	expectAPIErrorCode(t, err, model.CodeNotFound)
+}
+
 func TestCreateBranch_DuplicateReturnsBranchExists(t *testing.T) {
 	svc := newIntegrationService(t)
 	branchName := uniqueWorkBranch(t, "duplicate")

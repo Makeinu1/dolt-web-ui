@@ -25,6 +25,7 @@ import type { ColumnSchema, RowsResponse } from "../../types/api";
 import { BulkEditModal } from "../BulkPKReplaceModal/BulkEditModal";
 import { stablePkJson } from "../../utils/stablePk";
 import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
+import { UI_CLONE_TIMEOUT_MS } from "../../constants/ui";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -444,7 +445,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     setCloning(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30_000);
+    const timeoutId = setTimeout(() => controller.abort(), UI_CLONE_TIMEOUT_MS);
 
     try {
       for (const row of rows) {

@@ -27,3 +27,15 @@ server:
     read_sec: 30
     write_sec: 300
     idle_sec: 120
+  recovery:
+    branch_ready_sec: 10
+    branch_ready_poll_ms: 500
+  retries:
+    tag_retry_attempts: 3
+    tag_retry_delay_ms: 500
+  search:
+    timeout_sec: 5
+  pool:
+    max_open: 20
+    max_idle: 10
+    conn_lifetime_sec: 3600

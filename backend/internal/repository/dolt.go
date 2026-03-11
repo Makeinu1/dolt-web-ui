@@ -32,18 +32,9 @@ func New(cfg *config.Config) (*Repository, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to target %q: %w", target.ID, err)
 		}
-		db.SetMaxOpenConns(20)
-		// Re-enable connection pooling to fix performance bottleneck
-		// Previously MaxIdleConns=0 was used to avoid Stale Context,
-		// but we now use stateless revision specifiers (`db/branch`).
-		db.SetMaxIdleConns(10)
-		// L1-1: Set connection lifetime to survive Dolt server restarts.
-		// Default 1 hour via config.Pool.ConnLifetimeSec.
-		connLifetime := 1 * time.Hour
-		if cfg.Server.Timeouts.IdleSec > 0 {
-			connLifetime = time.Duration(cfg.Server.Timeouts.IdleSec*30) * time.Second
-		}
-		db.SetConnMaxLifetime(connLifetime)
+		db.SetMaxOpenConns(cfg.Server.Pool.MaxOpen)
+		db.SetMaxIdleConns(cfg.Server.Pool.MaxIdle)
+		db.SetConnMaxLifetime(time.Duration(cfg.Server.Pool.ConnLifetimeSec) * time.Second)
 		r.pools[target.ID] = db
 	}
 

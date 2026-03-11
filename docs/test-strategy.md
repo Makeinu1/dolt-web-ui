@@ -49,6 +49,7 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-INT-03` | backend integration | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-INT-04` | backend integration | `MT-13-07` | CrossCopyTable -> submit -> approve と既存 import branch 再利用 | implemented |
 | `BL-INT-05` | backend integration | `MT-13-10` | `source_branch=audit` は成功し、`source_branch=wi/...` は `INVALID_ARGUMENT` で拒否される | implemented |
+| `BL-INT-06` | backend integration | `MT-02-03` | `GetBranchReady` が existing branch で ready を返し、missing branch を `NOT_FOUND` で返す | implemented |
 | `BL-REAL-01` | real Playwright smoke | `MT-02-02` | 実UIで branch 作成と同名再利用 | implemented |
 | `BL-REAL-02` | real Playwright smoke | `MT-06-01` `MT-06-10` `MT-13-03` | 実UIで submit / delete lock / reject / resubmit / approve / branch advance | implemented |
 | `BL-REAL-03` | real Playwright smoke | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |

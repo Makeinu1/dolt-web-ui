@@ -334,7 +334,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	}
 
 	requestCleared := true
-	if err := retryExec(bgCtx, 3, 500*time.Millisecond, func(execCtx context.Context) error {
+	if err := retryExec(bgCtx, s.cfg.Server.Retries.TagRetryAttempts, s.tagRetryDelay(), func(execCtx context.Context) error {
 		_, err := conn.ExecContext(execCtx, "CALL DOLT_TAG('-d', ?)", req.RequestID)
 		return err
 	}); err != nil {
@@ -374,7 +374,7 @@ func (s *Service) createArchiveTag(ctx context.Context, conn *sql.Conn, workItem
 	}
 
 	archiveTag := archiveTagForWorkItem(workItem, sequence)
-	if err := retryExec(ctx, 3, 500*time.Millisecond, func(execCtx context.Context) error {
+	if err := retryExec(ctx, s.cfg.Server.Retries.TagRetryAttempts, s.tagRetryDelay(), func(execCtx context.Context) error {
 		_, err := conn.ExecContext(execCtx, "CALL DOLT_TAG('-m', ?, ?, 'HEAD')", mergeMessage, archiveTag)
 		return err
 	}); err != nil {
@@ -408,7 +408,7 @@ func (s *Service) nextArchiveSequence(ctx context.Context, conn *sql.Conn, workI
 }
 
 func (s *Service) advanceWorkBranch(ctx context.Context, conn *sql.Conn, targetID, dbName, workBranch string, warnings *[]string) bool {
-	if err := retryExec(ctx, 3, 500*time.Millisecond, func(execCtx context.Context) error {
+	if err := retryExec(ctx, s.cfg.Server.Retries.TagRetryAttempts, s.tagRetryDelay(), func(execCtx context.Context) error {
 		_, err := conn.ExecContext(execCtx, "CALL DOLT_BRANCH('-f', ?, 'main')", workBranch)
 		return err
 	}); err != nil {
@@ -417,8 +417,9 @@ func (s *Service) advanceWorkBranch(ctx context.Context, conn *sql.Conn, targetI
 		return false
 	}
 
-	if err := s.verifyBranchQueryable(ctx, targetID, dbName, workBranch); err != nil {
-		log.Printf("WARN: advanced branch %s not yet queryable: %v", workBranch, err)
+	queryability := s.verifyBranchQueryable(ctx, targetID, dbName, workBranch)
+	if !queryability.Ready {
+		logBranchQueryabilityFailure("advance_work_branch_not_ready", targetID, dbName, workBranch, queryability)
 		*warnings = append(*warnings, fmt.Sprintf("作業ブランチ %s は更新済みですが、接続反映を確認できませんでした。時間をおいて再度開いてください。", workBranch))
 		return false
 	}
@@ -426,8 +427,15 @@ func (s *Service) advanceWorkBranch(ctx context.Context, conn *sql.Conn, targetI
 	return true
 }
 
+func (s *Service) tagRetryDelay() time.Duration {
+	return time.Duration(s.cfg.Server.Retries.TagRetryDelayMS) * time.Millisecond
+}
+
 func retryExec(ctx context.Context, attempts int, delay time.Duration, fn func(context.Context) error) error {
 	var lastErr error
+	if attempts < 1 {
+		attempts = 1
+	}
 	for attempt := 0; attempt < attempts; attempt++ {
 		if err := fn(ctx); err == nil {
 			return nil
@@ -435,7 +443,9 @@ func retryExec(ctx context.Context, attempts int, delay time.Duration, fn func(c
 			lastErr = err
 		}
 		if attempt < attempts-1 {
-			time.Sleep(delay)
+			if err := sleepWithContext(ctx, delay); err != nil {
+				return err
+			}
 		}
 	}
 	return lastErr

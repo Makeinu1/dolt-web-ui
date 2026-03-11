@@ -40,6 +40,27 @@ export async function createWorkBranchFromUI(page: Page, workItem: string) {
   return branchName;
 }
 
+async function waitForBranchReady(request: APIRequestContext, dbName: string, branchName: string, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const readyRes = await request.get(`/api/v1/branches/ready?${queryString({
+      target_id: TARGET_ID,
+      db_name: dbName,
+      branch_name: branchName,
+    })}`);
+    if (readyRes.status() === 200) {
+      const body = (await readyRes.json()) as { ready: boolean };
+      if (body.ready) {
+        return;
+      }
+    } else if (![404, 409].includes(readyRes.status())) {
+      expect(readyRes.ok()).toBeTruthy();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`branch ${branchName} in ${dbName} did not become ready within ${timeoutMs}ms`);
+}
+
 export async function ensureBranch(request: APIRequestContext, dbName: string, branchName: string) {
   const branchesRes = await request.get(`/api/v1/branches?${queryString({
     target_id: TARGET_ID,
@@ -48,6 +69,7 @@ export async function ensureBranch(request: APIRequestContext, dbName: string, b
   expect(branchesRes.ok()).toBeTruthy();
   const branches = (await branchesRes.json()) as Array<{ name: string }>;
   if (branches.some((branch) => branch.name === branchName)) {
+    await waitForBranchReady(request, dbName, branchName);
     return;
   }
 
@@ -58,7 +80,15 @@ export async function ensureBranch(request: APIRequestContext, dbName: string, b
       branch_name: branchName,
     },
   });
-  expect(createRes.ok()).toBeTruthy();
+  if (createRes.status() === 201) {
+    await waitForBranchReady(request, dbName, branchName);
+    return;
+  }
+
+  expect(createRes.status()).toBe(409);
+  const body = await createRes.json();
+  expect(["BRANCH_NOT_READY", "BRANCH_EXISTS"]).toContain(body.error?.code);
+  await waitForBranchReady(request, dbName, branchName, body.error?.details?.retry_after_ms ?? 10000);
 }
 
 export async function getHead(request: APIRequestContext, dbName: string, branchName: string) {

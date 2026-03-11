@@ -111,3 +111,17 @@ func (h *Handler) GetHead(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, head)
 }
+
+func (h *Handler) GetBranchReady(w http.ResponseWriter, r *http.Request) {
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
+
+	ready, err := h.svc.GetBranchReady(r.Context(), targetID, dbName, branchName)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ready)
+}

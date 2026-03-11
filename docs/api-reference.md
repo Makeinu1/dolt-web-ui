@@ -170,11 +170,40 @@ Create a new work branch from main. **ProtectedBranchGuard applies.**
     "message": "ブランチ wi/my-branch は作成されましたが、まだ接続準備が完了していません。少し待ってから開いてください。",
     "details": {
       "branch_name": "wi/my-branch",
-      "retry_after_ms": 2000
+      "retry_after_ms": 10000
     }
   }
 }
 ```
+
+`retry_after_ms` は固定値ではなく、`server.recovery.branch_ready_sec` と `server.recovery.branch_ready_poll_ms` に基づいて返されます。
+
+---
+
+### GET /branches/ready
+
+Check whether a branch is fully queryable before the UI opens or reopens it.
+
+`GET /head` の成功だけではなく、`USE db/branch` での table/schema 取得と `HASHOF(branch)` を含めて ready 判定します。
+
+**Query Parameters:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `target_id` | Yes | Target ID |
+| `db_name` | Yes | Database name |
+| `branch_name` | Yes | Branch name |
+
+**Response:**
+
+```json
+{ "ready": true }
+```
+
+**Recoverable errors:**
+
+- `404 NOT_FOUND`
+- `409 BRANCH_NOT_READY`
 
 ---
 
