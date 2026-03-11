@@ -20,6 +20,16 @@ test.describe('Grid and Draft Editing Tests', () => {
         await expect(rowElements).toHaveCount(3);
     });
 
+    test('should enable cell text selection only on protected branches', async ({ page }) => {
+        await expect(page.locator('.ag-root-wrapper').first()).toBeVisible();
+        await expect(page.locator('.ag-selectable')).toHaveCount(0);
+
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        await expect(page.locator('.ag-root-wrapper').first()).toBeVisible();
+        await expect(page.locator('.ag-selectable')).not.toHaveCount(0);
+    });
+
     test('should mark row as deleted (strikethrough) on toolbar Delete', async ({ page }) => {
         // Wait for grid
         const gridContainer = page.locator('.ag-root-wrapper');

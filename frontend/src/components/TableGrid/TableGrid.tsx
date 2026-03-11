@@ -1020,6 +1020,8 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           }}
           autoSizeStrategy={{ type: "fitCellContents" }}
           rowSelection="multiple"
+          enableCellTextSelection={isProtected}
+          ensureDomOrder={isProtected}
           suppressRowClickSelection={true}
           getRowId={getRowId}
           onSelectionChanged={onSelectionChanged}
