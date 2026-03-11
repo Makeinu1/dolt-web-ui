@@ -3,6 +3,7 @@ import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { DiffSummaryEntry, DiffSummaryLightEntry, HistoryCommit } from "../../types/api";
+import { readIntegrityMessage } from "../../utils/apiResult";
 import { mergeDiffSummaryEntries } from "../../utils/diffSummary";
 
 // ─── MergeLog ────────────────────────────────────────────────────────────────
@@ -204,10 +205,17 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                 filterPk ?? ""
             );
             if (searchVersionRef.current !== version) return;
-            setCommits(result || []);
+            const integrityError = readIntegrityMessage(result, "履歴の整合性を確認できませんでした");
+            if (integrityError) {
+                setCommits([]);
+                setSearchError(integrityError);
+                setSearched(true);
+                return;
+            }
+            setCommits(result.commits || []);
             setPage(p);
             setSearched(true);
-            void preloadLightSummaries((result || []).map((c) => c.hash), version);
+            void preloadLightSummaries((result.commits || []).map((c) => c.hash), version);
         } catch (err) {
             if (searchVersionRef.current !== version) return;
             const msg = err instanceof ApiError ? err.message : "マージログの読み込みに失敗しました";

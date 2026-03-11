@@ -8,7 +8,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -16,12 +15,9 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
-// safeRefRe validates Dolt refs (commit hashes, branch names, tags).
-var safeRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/\-\^~]+$`)
-
 func validateRef(name, value string) error {
-	if !safeRefRe.MatchString(value) {
-		return fmt.Errorf("%s contains invalid characters: %q", name, value)
+	if err := validation.ValidateRevisionRef(value); err != nil {
+		return fmt.Errorf("%s %w", name, err)
 	}
 	return nil
 }
@@ -85,10 +81,16 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 	if err := validateRef("to", toRef); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, fromRef); err != nil {
+		return nil, err
+	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, toRef); err != nil {
+		return nil, err
+	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -201,10 +203,16 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 	if err := validateRef("to", toRef); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, fromRef); err != nil {
+		return nil, err
+	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, toRef); err != nil {
+		return nil, err
+	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -273,10 +281,16 @@ func (s *Service) DiffSummaryLight(ctx context.Context, targetID, dbName, branch
 	if err := validateRef("to", toRef); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, fromRef); err != nil {
+		return nil, err
+	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, toRef); err != nil {
+		return nil, err
+	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -353,6 +367,12 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 	}
 	if err := validateRef("to", toRef); err != nil {
 		return nil, "", "", &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, fromRef); err != nil {
+		return nil, "", "", err
+	}
+	if err := s.ensureHistoryRef(ctx, targetID, dbName, toRef); err != nil {
+		return nil, "", "", err
 	}
 
 	// Get diff summary to know which tables have changes

@@ -20,17 +20,6 @@ var varcharRe = regexp.MustCompile(`^varchar\((\d+)\)$`)
 // A column can be expanded to a wider type automatically.
 var stringTypeOrder = []string{"tinytext", "text", "mediumtext", "longtext"}
 
-func validateProtectedCopySource(branchName string) error {
-	if !validation.IsProtectedBranch(branchName) {
-		return &model.APIError{
-			Status: 400,
-			Code:   model.CodeInvalidArgument,
-			Msg:    "コピー元ブランチは main または audit のみです",
-		}
-	}
-	return nil
-}
-
 // parseVarcharLen returns the length from "varchar(N)" or -1 if not varchar.
 func parseVarcharLen(t string) int {
 	m := varcharRe.FindStringSubmatch(t)
@@ -179,6 +168,67 @@ func computeSharedColumns(srcCols, dstCols []model.ColumnSchema) (shared, srcOnl
 	return
 }
 
+func expandColumnsForShared(srcCols, dstCols []model.ColumnSchema, shared []string) []model.ExpandColumn {
+	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
+	for _, c := range srcCols {
+		srcColMap[c.Name] = c
+	}
+	dstColMap := make(map[string]model.ColumnSchema, len(dstCols))
+	for _, c := range dstCols {
+		dstColMap[c.Name] = c
+	}
+
+	expandColumns := make([]model.ExpandColumn, 0)
+	for _, colName := range shared {
+		sc := srcColMap[colName]
+		dc := dstColMap[colName]
+		if sc.Type != dc.Type {
+			if expand, _ := needsExpansion(sc.Type, dc.Type); expand {
+				expandColumns = append(expandColumns, model.ExpandColumn{
+					Name:    colName,
+					SrcType: sc.Type,
+					DstType: dc.Type,
+				})
+			}
+		}
+	}
+	return expandColumns
+}
+
+func crossCopySchemaPreconditionError(expandColumns []model.ExpandColumn) *model.APIError {
+	return &model.APIError{
+		Status: 412,
+		Code:   model.CodePreconditionFailed,
+		Msg:    "スキーマ準備が必要です。管理レーンで schema を揃えてから再試行してください。",
+		Details: map[string]interface{}{
+			"expand_columns": expandColumns,
+		},
+	}
+}
+
+func crossCopyRowsRetryResponse(hash string, inserted, updated int, message, retryReason string) *model.CrossCopyRowsResponse {
+	total := inserted + updated
+	return &model.CrossCopyRowsResponse{
+		Hash:     hash,
+		Inserted: inserted,
+		Updated:  updated,
+		Total:    total,
+		OperationResultFields: model.OperationResultFields{
+			Outcome:     model.OperationOutcomeRetryRequired,
+			Message:     message,
+			RetryReason: retryReason,
+			RetryActions: []model.RetryAction{
+				{Action: "reopen_destination_branch", Label: "宛先ブランチを開き直す"},
+			},
+			Completion: map[string]bool{
+				"destination_committed":    hash != "",
+				"destination_branch_ready": false,
+				"protected_refs_clean":     true,
+			},
+		},
+	}
+}
+
 // getPKColumns returns PK column names from a schema.
 func getPKColumns(cols []model.ColumnSchema) []string {
 	pks := make([]string, 0)
@@ -287,11 +337,11 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
 	}
-	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+	if err := s.ensureCrossCopySourceRef(req.TargetID, req.SourceDB, req.SourceBranch); err != nil {
 		return nil, err
 	}
-	if err := validation.ValidateBranchName(req.DestBranch); err != nil {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効な宛先ブランチ名"}
+	if err := s.ensureCrossCopyDestinationBranch(req.TargetID, req.DestDB, req.DestBranch); err != nil {
+		return nil, err
 	}
 	if err := validation.ValidateIdentifier("table", req.SourceTable); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なテーブル名"}
@@ -301,16 +351,16 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 	}
 
 	// Get source connection (read-only)
-	srcConn, err := s.repo.Conn(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
+	srcConn, err := s.connCrossCopySourceRevision(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to source: %w", err)
+		return nil, err
 	}
 	defer srcConn.Close()
 
 	// Get dest connection (read-only for preview)
-	dstConn, err := s.repo.Conn(ctx, req.TargetID, req.DestDB, req.DestBranch)
+	dstConn, err := s.connCrossCopyDestinationRevision(ctx, req.TargetID, req.DestDB, req.DestBranch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to dest: %w", err)
+		return nil, err
 	}
 	defer dstConn.Close()
 
@@ -353,19 +403,12 @@ func (s *Service) CrossCopyPreview(ctx context.Context, req model.CrossCopyPrevi
 	}
 
 	// Check type mismatches on shared columns; detect string columns that need expansion.
-	expandColumns := make([]model.ExpandColumn, 0)
+	expandColumns := expandColumnsForShared(srcCols, dstCols, shared)
 	for _, colName := range shared {
 		sc := srcColMap[colName]
 		dc := dstColMap[colName]
 		if sc.Type != dc.Type {
-			if expand, widenedType := needsExpansion(sc.Type, dc.Type); expand {
-				expandColumns = append(expandColumns, model.ExpandColumn{
-					Name:    colName,
-					SrcType: sc.Type,
-					DstType: dc.Type,
-				})
-				_ = widenedType // used during actual copy
-			} else {
+			if expand, _ := needsExpansion(sc.Type, dc.Type); !expand {
 				warnings = append(warnings, fmt.Sprintf("カラム %s の型が異なります（コピー元: %s, 宛先: %s）", colName, sc.Type, dc.Type))
 			}
 		}
@@ -464,11 +507,11 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
 	}
-	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+	if err := s.ensureCrossCopySourceRef(req.TargetID, req.SourceDB, req.SourceBranch); err != nil {
 		return nil, err
 	}
-	if err := validation.ValidateBranchName(req.DestBranch); err != nil {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効な宛先ブランチ名"}
+	if err := s.ensureCrossCopyDestinationBranch(req.TargetID, req.DestDB, req.DestBranch); err != nil {
+		return nil, err
 	}
 	if err := validation.ValidateIdentifier("table", req.SourceTable); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なテーブル名"}
@@ -477,20 +520,15 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "source_pks は空にできません"}
 	}
 
-	// Protected branch check
-	if validation.IsProtectedBranch(req.DestBranch) {
-		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "保護ブランチへの書き込みは禁止されています"}
-	}
-
 	// Source connection (read-only)
-	srcConn, err := s.repo.Conn(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
+	srcConn, err := s.connCrossCopySourceRevision(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to source: %w", err)
+		return nil, err
 	}
 	defer srcConn.Close()
 
 	// Dest connection (writable)
-	dstConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, req.DestBranch)
+	dstConn, err := s.repo.ConnWorkBranchWrite(ctx, req.TargetID, req.DestDB, req.DestBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to dest: %w", err)
 	}
@@ -516,57 +554,9 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "共有カラムがありません"}
 	}
 
-	// Build column maps for expansion check
-	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
-	for _, c := range srcCols {
-		srcColMap[c.Name] = c
-	}
-	dstColMap := make(map[string]model.ColumnSchema, len(dstCols))
-	for _, c := range dstCols {
-		dstColMap[c.Name] = c
-	}
-
-	// DDL先行コミット: Apply schema expansion to main FIRST, then work branch.
-	// Order is critical for failure recovery:
-	//   main first  → if work fails on retry, work=schema_A → needsExpansion=true → recoverable
-	//   work first  → if main fails on retry, work=schema_B → needsExpansion=false → main stays schema_A forever (CR-2)
-	// Use main's actual schema (not work branch's) to avoid inadvertently narrowing main (CR-1).
-	mainReadConn, err := s.repo.Conn(ctx, req.TargetID, req.DestDB, "main")
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to main for schema read: %w", err)
-	}
-	mainCols, err := getSchemaColumns(ctx, mainReadConn, req.SourceTable)
-	mainReadConn.Close()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get main schema: %w", err)
-	}
-	mainColMap := make(map[string]model.ColumnSchema, len(mainCols))
-	for _, c := range mainCols {
-		mainColMap[c.Name] = c
-	}
-
-	mainWriteConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, "main")
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to main for DDL: %w", err)
-	}
-	mainExpanded, err := applyExpandColumns(ctx, mainWriteConn, req.SourceTable, srcColMap, mainColMap, shared)
-	if err != nil {
-		mainWriteConn.Close()
-		return nil, fmt.Errorf("failed to expand columns on main: %w", err)
-	}
-	if mainExpanded {
-		schemaMsg := fmt.Sprintf("schema: %s カラム型を拡張（クロスコピー前）", req.SourceTable)
-		mainWriteConn.ExecContext(ctx, "CALL DOLT_ADD('.')") //nolint:errcheck
-		if _, cerr := mainWriteConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", schemaMsg); cerr != nil {
-			mainWriteConn.Close()
-			return nil, fmt.Errorf("failed to commit DDL to main: %w", cerr)
-		}
-	}
-	mainWriteConn.Close()
-
-	// Apply same expansion to work branch using work branch's own schema map
-	if _, err := applyExpandColumns(ctx, dstConn, req.SourceTable, srcColMap, dstColMap, shared); err != nil {
-		return nil, fmt.Errorf("failed to expand columns on work branch: %w", err)
+	expandColumns := expandColumnsForShared(srcCols, dstCols, shared)
+	if len(expandColumns) > 0 {
+		return nil, crossCopySchemaPreconditionError(expandColumns)
 	}
 
 	// Fetch source rows
@@ -648,11 +638,25 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	// If no rows were copied, rollback the empty transaction and return current HEAD
 	if inserted+updated == 0 {
 		dstConn.ExecContext(context.Background(), "ROLLBACK")
+		readiness := s.branchReadiness(ctx, req.TargetID, req.DestDB, req.DestBranch)
+		if !readiness.Ready {
+			logBranchQueryabilityFailure("cross_copy_rows_empty_branch_not_ready", req.TargetID, req.DestDB, req.DestBranch, readiness)
+			return crossCopyRowsRetryResponse(headHash, 0, 0, "コピー先ブランチの接続反映を確認できませんでした。時間をおいて開き直してください。", "destination_branch_not_ready"), nil
+		}
 		return &model.CrossCopyRowsResponse{
 			Hash:     headHash,
 			Inserted: 0,
 			Updated:  0,
 			Total:    0,
+			OperationResultFields: model.OperationResultFields{
+				Outcome: model.OperationOutcomeCompleted,
+				Message: "コピー対象の差分はありません",
+				Completion: map[string]bool{
+					"destination_committed":    false,
+					"destination_branch_ready": true,
+					"protected_refs_clean":     true,
+				},
+			},
 		}, nil
 	}
 
@@ -682,7 +686,13 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 	// Get new HEAD
 	var newHead string
 	if err := dstConn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {
-		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
+		return crossCopyRowsRetryResponse("", inserted, updated, "コピーコミットは作成された可能性がありますが、確認に失敗しました。宛先ブランチを確認して再試行してください。", "destination_commit_uncertain"), nil
+	}
+
+	readiness := s.branchReadiness(ctx, req.TargetID, req.DestDB, req.DestBranch)
+	if !readiness.Ready {
+		logBranchQueryabilityFailure("cross_copy_rows_branch_not_ready", req.TargetID, req.DestDB, req.DestBranch, readiness)
+		return crossCopyRowsRetryResponse(newHead, inserted, updated, "コピーは完了しましたが、宛先ブランチの接続反映を確認できませんでした。時間をおいて開き直してください。", "destination_branch_not_ready"), nil
 	}
 
 	return &model.CrossCopyRowsResponse{
@@ -690,5 +700,14 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 		Inserted: inserted,
 		Updated:  updated,
 		Total:    inserted + updated,
+		OperationResultFields: model.OperationResultFields{
+			Outcome: model.OperationOutcomeCompleted,
+			Message: "他DBへ行をコピーしました",
+			Completion: map[string]bool{
+				"destination_committed":    true,
+				"destination_branch_ready": true,
+				"protected_refs_clean":     true,
+			},
+		},
 	}, nil
 }

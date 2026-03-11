@@ -6,7 +6,6 @@ export type BaseState =
   | "DraftEditing"
   | "Previewing"
   | "Committing"
-  | "Syncing"
   | "SchemaConflictDetected"
   | "ConstraintViolationDetected"
   | "StaleHeadDetected";

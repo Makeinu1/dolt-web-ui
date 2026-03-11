@@ -199,7 +199,6 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     !!previewCommitHash ||
     isProtected ||
     baseState === "Committing" ||
-    baseState === "Syncing" ||
     baseState === "SchemaConflictDetected" ||
     baseState === "ConstraintViolationDetected" ||
     baseState === "StaleHeadDetected";

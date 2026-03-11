@@ -160,6 +160,23 @@ curl http://localhost:8080/health  # 起動確認
 `DOLT_COMMIT('--all')` は既存テーブルの変更のみステージする。
 `CREATE TABLE` 後は `CALL DOLT_ADD('.')` を明示的に呼ぶこと。
 
+### CrossCopy cleanup の注意事項
+
+`crosscopy_table.go` の `parseCopyError` マッチパス（Data too long / FK violation）では `cleanupIfNeeded()` を呼ぶ。
+cleanup 失敗時は `crossCopyTableFailureResponse(..., cleanupErr)` を返して `outcome=retry_required` に格上げする。
+**この動作は単体テスト (`crosscopy_outcome_test.go`) で検証済み。**
+
+### 承認 footer パーサー
+
+`internal/footer/footer.go` に共有パーサー (`ParseApprovalFooter`, `BuildApprovalFooter`) を実装。
+`service/approval_footer.go` は型エイリアス (`type approvalFooter = footer.ApprovalFooter`) で委譲。
+`cmd/footer-scan/main.go` がこのパーサーを使って DB の全コミットを検証する。
+
+```bash
+# main ブランチの全コミットをスキャンして不正 footer を検出
+go run ./cmd/footer-scan --config config.yaml --target default --db Test
+```
+
 ---
 
 ## Frontend Conventions

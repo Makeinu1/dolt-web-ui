@@ -60,9 +60,9 @@ func buildStableOrderByClause(sortStr string, allowedCols map[string]bool, pkCol
 }
 
 func (s *Service) ListTables(ctx context.Context, targetID, dbName, branchName string) ([]model.TableResponse, error) {
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -92,9 +92,9 @@ func (s *Service) GetTableSchema(ctx context.Context, targetID, dbName, branchNa
 		return nil, fmt.Errorf("invalid table name: %w", err)
 	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -153,9 +153,9 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key (not supported)"}
 	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return err
 	}
 	defer conn.Close()
 
@@ -320,9 +320,9 @@ func (s *Service) GetTableRow(ctx context.Context, targetID, dbName, branchName,
 		whereArgs = append(whereArgs, v)
 	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 

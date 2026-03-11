@@ -115,3 +115,36 @@ server:
 		t.Fatalf("Pool.ConnLifetimeSec = %d, want 181", got)
 	}
 }
+
+func TestFindDatabaseReturnsConfiguredDatabase(t *testing.T) {
+	cfg, err := Load(writeConfigFile(t, `
+targets:
+  - id: local
+    host: localhost
+    port: 3306
+    user: root
+    password: ""
+databases:
+  - target_id: local
+    name: test_db
+    allowed_branches:
+      - main
+      - wi/*
+server:
+  port: 8080
+`))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	db, err := cfg.FindDatabase("local", "test_db")
+	if err != nil {
+		t.Fatalf("FindDatabase returned error: %v", err)
+	}
+	if db.Name != "test_db" {
+		t.Fatalf("FindDatabase returned %q, want test_db", db.Name)
+	}
+	if len(db.AllowedBranches) != 2 {
+		t.Fatalf("AllowedBranches len = %d, want 2", len(db.AllowedBranches))
+	}
+}

@@ -8,9 +8,12 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-11
-**最終コミット**: `eee90ec` Refine diff summaries and restore direct actions
+**最終更新**: 2026-03-12
+**状態**: backend / frontend 契約更新はほぼ反映済み。公開 docs を現行 router / response shape に同期済み。
 **ブランチ**: `master`（直接プッシュ運用）
+
+> このファイルは引き継ぎメモです。API / behavior の source of truth は
+> 実装コード + `docs/reviews/` + [api-reference.md](api-reference.md) とする。
 
 ---
 
@@ -31,12 +34,12 @@
 
 ---
 
-## 現在のフェーズ: Backend 主導リファクタリング
+## 現在のフェーズ: Contract Sync 後半
 
 ### 方針概要
 
-UI flow 固定 + backend truth rebuild + minimal UI alignment。
-詳細は `docs/reviews/` を参照。
+Track A/B/AB/C の contract 実装を先行で揃え、public docs と handoff 文書を追随させる。
+詳細設計は `docs/reviews/` を参照。
 
 ### 設計文書一覧
 
@@ -62,45 +65,69 @@ UI flow 固定 + backend truth rebuild + minimal UI alignment。
 Track A: Safety Boundary → Track B: Audit/Completion → Track C: UI Alignment → Track D: Docs/Tests
 ```
 
-ただし Track D のテスト計画は各 Track の PR に同梱する。
+Track D のテスト計画は各 Track に同梱済み。現在は docs 同期が中心。
 
 ---
 
-## 実装キュー
+## 実装状況
 
-### D1 テスト計画に基づく PR 分割と進捗
+### Track 状態
 
-| PR | 内容 | 状態 |
-|----|------|------|
-| **A-PR1** | Repository session boundary（ConnDB read path 除去） | 📋 未着手 |
-| **A-PR2** | AllowedRefPolicy / FeatureRefPolicy | 📋 未着手 |
-| **B-PR1** | Footer writer + approve outcome | 📋 未着手 |
-| **B-PR2** | Footer-first history read ← **次のタスク** | 🔜 次 |
-| **AB-PR2** | Normal-flow safety cut（cross-copy） | 📋 未着手 |
-| **AB-PR3** | Import-lane cleanup and retry contract | 📋 未着手 |
-| **AB-PR4** | Admin lane（placeholder） | 📋 未着手 |
+| Track / PR | 状態 | メモ |
+|------------|------|------|
+| **Track A** | ✅ landed | safety boundary, allowed ref policy, read/write session split を維持 |
+| **B-PR1** | ✅ landed | footer writer + approve outcome |
+| **B-PR2** | ✅ landed | footer-first history read |
+| **B-PR3** | ✅ landed | search fail-loud、degraded `req/*` JSON approve、read/write contract 揃え |
+| **AB-PR2** | ✅ landed | cross-copy normal flow から protected maintenance / main-first schema expansion を除去 |
+| **AB-PR3** | ✅ landed | cross-copy `failed` / `retry_required` 契約、cleanup 分類、protected clean invariant |
+| **AB-PR4** | ✅ landed | cross-copy admin lane で schema prep / stale import cleanup を modal 内に追加 |
+| **C-PR1** | ✅ landed | frontend types/client を `OperationResultFields` / `ReadResultFields` に揃えた |
+| **D1** | ✅ landed | backend test matrix 整理済み |
+| **D2-PR1** | ✅ landed | `docs/api-reference.md` / `README.md` / 本ファイルを現行実装に同期 |
 
-> **現在地**: D1 の設計文書は完了。B-PR2 のテスト（footer-first history）の実装が次。
+### 現行の固定事項
 
-### B-PR2 で実装するテスト
+- 承認の audit truth は main merge commit の approval footer。`merged/*` は secondary index。
+- write 系 success truth は `outcome=completed`。`warnings` は advisory で success truth には使わない。
+- read 系は partial を返さない。`history` / `search` は integrity 問題を fail-loud で返す。
+- cross-copy source ref は `main` / `audit` のみ。schema widening が必要なら normal flow は `412 PRECONDITION_FAILED` で停止し、admin lane が destination `main` prep と stale import cleanup を担う。
 
-| テストケース | レイヤ | 固定する invariant |
-|---|---|---|
-| ApproveRequest_SecondaryIndexFailure_DoesNotEraseAuditTruth | service | `merged/*` 作成失敗だけでは audit truth は壊れない |
-| HistoryCommits_FooterFirst_ReadsPostCutoverWithoutMergedTag | integration | post-cutover approval は `merged/*` 欠損でも footer だけで history 復元可能 |
-| HistoryCommits_InvalidFooter_ReturnsIntegrityError | service | footer present but invalid は silent skip しない |
-| HistoryCommits_FooterMergedMismatch_PrefersFooter | service | footer と `merged/*` が矛盾したら footer を正 |
-| HistoryCommits_LegacyMergedAdapter_OnlyPreCutover | service | footer absent record への `merged/*` fallback は pre-cutover legacy に限る |
+### 残件
 
-### B-PR2 の前提テスト（B-PR1 で先に必要）
+- **実運用 E2E 拡張**: `read_integrity` / `retry_required` 系の real Playwright coverage を増やす余地あり
 
-B-PR1 はまだ未実装。B-PR2 は以下の B-PR1 成果物を前提とする:
+---
 
-- **Footer parser/writer**（unit: ApprovalFooter_RoundTrip_Valid 等）
-- **Approve outcome 契約**（service: ApproveRequest_CompletedRequiresFooter 等）
-- **Search fail-loud**（service: Search_PartialTableFailure_FailsLoud 等）
+## LLM コードレビュー 安定化対応（2026-03-12）
 
-**判断**: B-PR1 → B-PR2 の順番で進める。B-PR2 のテスト設計は完了済みだが、実装は B-PR1 の footer 基盤が必要。
+ChatGPT との相互レビュー後、以下の追加対応を実施。
+
+| # | 対応 | 状態 |
+|---|------|------|
+| 1 | `backend/cmd/footer-scan` CLI 作成（main 全コミットスキャン、共有 parser 使用、不正 hash 一覧出力） | ✅ |
+| 2 | `internal/footer` 共有 parser パッケージ作成（`ParseApprovalFooter` / `BuildApprovalFooter` をエクスポート、`service/approval_footer.go` は型エイリアスで委譲） | ✅ |
+| 3 | `service/ref_policy_test.go` 新規作成（`ensureAllowedBranchRef` / `ensureAllowedWorkBranchWrite` / `ensureHistoryRef` 直接テスト、12ケース） | ✅ |
+| 4 | `validation/validate_test.go` 拡張（`ValidateDBName` / `ValidateRevisionRef` / `ValidateBranchName` の SQL 特殊文字 reject テスト追加） | ✅ |
+| 5 | `service/crosscopy_table.go` バグ修正（`parseCopyError` マッチパスで `cleanupIfNeeded()` が呼ばれていなかった — Data too long / FK violation の各経路でも cleanup を実行するよう修正） | ✅ |
+| 6 | `service/crosscopy_outcome_test.go` 拡張（data-too-long / FK violation 各経路で cleanup 1回呼び出し確認 + cleanup failure → retry_required 確認、4ケース追加） | ✅ |
+| 7 | `go test -race -cover ./internal/service ./internal/validation` PASS 確認 | ✅ |
+
+### footer-scan 使用方法
+
+```bash
+go run ./cmd/footer-scan --config config.yaml --target default --db Test
+# 0件なら OK（exit 0）、不正 footer があれば一覧出力して exit 1
+```
+
+### 直近の検証
+
+- backend unit: `go test ./internal/service ./internal/validation ./internal/config`
+- backend integration: `go test -tags=integration ./internal/service`
+- frontend unit: `npm test`
+- frontend build: `npm run build`
+- frontend mock E2E: `CI=1 npx playwright test tests/e2e/branch-sensitive.spec.ts --reporter=line`
+- frontend real E2E: `CI=1 npx playwright test --config=playwright.real.config.ts tests/e2e-real/branch-lifecycle.spec.ts --reporter=line`
 
 ---
 
@@ -149,7 +176,7 @@ B-PR1 はまだ未実装。B-PR2 は以下の B-PR1 成果物を前提とする:
 | P5 | 作者追跡 | ✅ | Dolt commit metadata |
 | P6 | 選択的マージ | ✅ | PJ ブランチにはPJ編集のみ入る運用前提 |
 | P7 | 100万行対応 | ✅ | サーバーサイドページネーション + ストリーミング |
-| P8 | ブランチロック | ✅ | req/タグ存在時に commit/revert/sync を HTTP 423 で拒否 |
+| P8 | ブランチロック | ✅ | req/タグ存在時に direct write lane を拒否。現行 public API では少なくとも commit は HTTP 423 |
 | — | 複合PK安全性 | ✅ | 3ラウンド静的証明済み |
 | — | QA状況 | ✅ | 全5ラウンド完了。全18バグ修正済み。[QA_REPORT.md](QA_REPORT.md) 参照 |
 

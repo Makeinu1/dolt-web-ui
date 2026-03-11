@@ -58,6 +58,7 @@ test.describe('Branch-sensitive Features', () => {
             { table: 'users', pk: '2', column: 'name', value: 'Bob', match_type: 'value' },
           ],
           total: 1,
+          read_integrity: 'complete',
         },
       });
     });
@@ -86,6 +87,35 @@ test.describe('Branch-sensitive Features', () => {
     await expect(tableSelect).toHaveValue('users');
     expect(capturedSearchBranch).toBe('wi/feat-a');
     expect(capturedKeyword).toBe('Bob');
+  });
+
+  test('should fail loud when search cannot confirm integrity', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    await page.route('**/api/v1/search*', async (route) => {
+      await route.fulfill({
+        status: 500,
+        json: {
+          error: {
+            code: 'INTERNAL',
+            message: '検索結果の整合性を確認できませんでした。時間をおいて再試行してください。',
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '🔍 全テーブル検索' }).click();
+
+    const modal = page.locator('.modal');
+    await modal.locator('input[type="text"]').fill('Bob');
+    await modal.locator('button.primary', { hasText: '検索' }).click();
+
+    await expect(modal).toContainText('検索結果の整合性を確認できませんでした');
+    await expect(modal).not.toContainText('PK: 2');
   });
 
   test('should compare versions using explicit from/to branches', async ({ page }) => {
@@ -147,15 +177,18 @@ test.describe('Branch-sensitive Features', () => {
 
     await page.route('**/api/v1/history/commits*', async (route) => {
       await route.fulfill({
-        json: [
-          {
-            hash: 'merge-hash-1',
-            author: 'alice',
-            message: 'merge feat-a',
-            timestamp: '2025-01-03T00:00:00Z',
-            merge_branch: 'wi/feat-a',
-          },
-        ],
+        json: {
+          commits: [
+            {
+              hash: 'merge-hash-1',
+              author: 'alice',
+              message: 'merge feat-a',
+              timestamp: '2025-01-03T00:00:00Z',
+              merge_branch: 'wi/feat-a',
+            },
+          ],
+          read_integrity: 'complete',
+        },
       });
     });
 
@@ -205,6 +238,33 @@ test.describe('Branch-sensitive Features', () => {
     await expect(modal).toContainText('+1');
   });
 
+  test('should fail loud when merge history cannot confirm integrity', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    await page.route('**/api/v1/history/commits*', async (route) => {
+      await route.fulfill({
+        status: 500,
+        json: {
+          error: {
+            code: 'INTERNAL',
+            message: '履歴の整合性を確認できませんでした。時間をおいて再試行してください。',
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '📋 マージログ' }).click();
+
+    const modal = page.locator('.modal');
+    await expect(modal.locator('h2')).toHaveText('📋 マージログ');
+    await expect(modal).toContainText('履歴の整合性を確認できませんでした');
+    await expect(modal).not.toContainText('merge feat-a');
+  });
+
   test('should only expose cross-db copy actions on protected branches', async ({ page }) => {
     await setupBaseMocks(page);
 
@@ -244,6 +304,13 @@ test.describe('Branch-sensitive Features', () => {
           shared_columns: ['id', 'name', 'role'],
           source_only_columns: [],
           dest_only_columns: [],
+          outcome: 'completed',
+          message: '他DBへテーブルをコピーしました',
+          completion: {
+            destination_committed: true,
+            destination_branch_ready: true,
+            protected_refs_clean: true,
+          },
         },
       });
     });
@@ -261,7 +328,7 @@ test.describe('Branch-sensitive Features', () => {
     await modal.locator('select').first().selectOption('dest_db');
     await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
 
-    await expect(modal).toContainText('コピー完了');
+    await expect(modal).toContainText('他DBへテーブルをコピーしました');
     await expect(modal).toContainText('ブランチ: wi/import-test_db-users');
     await expect(page.locator('.success-toast')).toContainText('他DBへテーブルをコピーしました');
 
@@ -311,18 +378,72 @@ test.describe('Branch-sensitive Features', () => {
     await modal.locator('select').first().selectOption('dest_db');
     await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
 
-    await expect(modal).toContainText('既存のインポートブランチがあります');
-    await expect(modal).toContainText('ブランチ: wi/import-test_db-users');
+    await expect(modal).toContainText('stale import branch を掃除');
+    await expect(modal).toContainText('branch: wi/import-test_db-users');
+    await expect(modal.locator('button', { hasText: 'stale import branch を掃除する' })).toBeVisible();
 
     const switchedTablesRequest = page.waitForRequest((req) =>
       req.url().includes('/api/v1/tables') &&
       req.url().includes('db_name=dest_db') &&
       req.url().includes('branch_name=wi%2Fimport-test_db-users')
     );
-    await modal.locator('button.primary', { hasText: '既存ブランチを開く' }).click();
+    await modal.locator('button', { hasText: '既存ブランチを開く' }).click();
     await switchedTablesRequest;
 
     await expect(page.locator('.context-bar select')).toHaveValue('wi/import-test_db-users');
+  });
+
+  test('should surface cleanup retry_required without showing a success toast', async ({ page }) => {
+    await setupBaseMocks(page);
+    await setupCrossDbMocks(page);
+
+    await page.route('**/api/v1/cross-copy/table', async (route) => {
+      await route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'BRANCH_EXISTS',
+            message: 'ブランチ wi/import-test_db-users は既に存在します。',
+            details: {
+              branch_name: 'wi/import-test_db-users',
+            },
+          },
+        },
+      });
+    });
+
+    await page.route('**/api/v1/cross-copy/admin/cleanup-import', async (route) => {
+      await route.fulfill({
+        json: {
+          branch_name: 'wi/import-test_db-users',
+          outcome: 'retry_required',
+          message: 'stale import branch の掃除結果を確認できませんでした。',
+          retry_reason: 'destination_branch_cleanup_failed',
+          retry_actions: [
+            { action: 'open_import_branch', label: 'インポートブランチを確認する' },
+          ],
+          completion: {
+            destination_branch_removed: false,
+            protected_refs_clean: false,
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '他DBへテーブルコピー' }).click();
+
+    const modal = page.locator('.modal');
+    await modal.locator('select').first().selectOption('dest_db');
+    await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
+    await modal.locator('button', { hasText: 'stale import branch を掃除する' }).click();
+
+    await expect(modal).toContainText('stale import branch の掃除結果を確認できませんでした');
+    await expect(modal).toContainText('インポートブランチを確認する');
+    await expect(page.locator('.success-toast')).toHaveCount(0);
   });
 
   test('should preview and copy selected rows across DBs with explicit source and destination branches', async ({ page }) => {
@@ -363,6 +484,13 @@ test.describe('Branch-sensitive Features', () => {
           inserted: 1,
           updated: 1,
           total: 2,
+          outcome: 'completed',
+          message: '他DBへ行をコピーしました',
+          completion: {
+            destination_committed: true,
+            destination_branch_ready: true,
+            protected_refs_clean: true,
+          },
         },
       });
     });
@@ -393,7 +521,8 @@ test.describe('Branch-sensitive Features', () => {
 
     await modal.locator('button.primary', { hasText: 'コピー実行 (2件)' }).click();
 
-    await expect(modal).toContainText('2件コピーしました（挿入: 1, 更新: 1）');
+    await expect(modal).toContainText('他DBへ行をコピーしました');
+    await expect(modal).toContainText('2件コピー対象（挿入: 1, 更新: 1）');
     await expect(page.locator('.success-toast')).toContainText('他DBへ行をコピーしました');
 
     const switchedTablesRequest = page.waitForRequest((req) =>
@@ -411,6 +540,187 @@ test.describe('Branch-sensitive Features', () => {
     expect(executeBody).not.toBeNull();
     expect(executeBody?.source_branch).toBe('main');
     expect(executeBody?.dest_branch).toBe('wi/dest-users');
+  });
+
+  test('should run row-copy admin prep, rerender preview, and only toast after the actual copy completes', async ({ page }) => {
+    await setupBaseMocks(page);
+    await setupCrossDbMocks(page);
+
+    let previewCalls = 0;
+
+    await page.route('**/api/v1/cross-copy/preview', async (route) => {
+      previewCalls += 1;
+      await route.fulfill({
+        json: {
+          shared_columns: ['id', 'name', 'role'],
+          source_only_columns: [],
+          dest_only_columns: [],
+          warnings: [],
+          rows: [
+            {
+              action: 'update',
+              source_row: { id: 1, name: 'Alice', role: 'admin' },
+              dest_row: { id: 1, name: 'Alice', role: 'guest' },
+            },
+          ],
+          ...(previewCalls === 1
+            ? {
+                expand_columns: [
+                  { name: 'name', src_type: 'varchar(255)', dst_type: 'varchar(50)' },
+                ],
+              }
+            : {}),
+        },
+      });
+    });
+
+    await page.route('**/api/v1/cross-copy/admin/prepare-rows', async (route) => {
+      await route.fulfill({
+        json: {
+          main_hash: 'hash-dest-main-2',
+          branch_hash: 'hash-dest-branch-2',
+          prepared_columns: [
+            { name: 'name', src_type: 'varchar(255)', dst_type: 'varchar(50)' },
+          ],
+          outcome: 'completed',
+          message: 'schema prep とブランチ同期が完了しました。プレビューを更新して再試行してください。',
+          completion: {
+            protected_schema_prepared: true,
+            destination_branch_synced: true,
+            destination_branch_ready: true,
+            protected_refs_clean: true,
+          },
+        },
+      });
+    });
+
+    await page.route('**/api/v1/cross-copy/rows', async (route) => {
+      await route.fulfill({
+        json: {
+          hash: 'hash-row-copy',
+          inserted: 0,
+          updated: 1,
+          total: 1,
+          outcome: 'completed',
+          message: '他DBへ行をコピーしました',
+          completion: {
+            destination_committed: true,
+            destination_branch_ready: true,
+            protected_refs_clean: true,
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' }).first();
+    await aliceRow.waitFor({ state: 'visible', timeout: 5000 });
+    await aliceRow.locator('.ag-selection-checkbox').click();
+    await page.locator('button', { hasText: '他DBへ' }).click();
+
+    const modal = page.locator('.modal');
+    await modal.locator('select').first().selectOption('dest_db');
+    await modal.locator('select').nth(1).selectOption('wi/dest-users');
+    await modal.locator('button.primary', { hasText: 'プレビュー' }).click();
+
+    await expect(modal).toContainText('schema prep が必要');
+    await expect(modal.locator('button.primary', { hasText: 'schema prep が必要' })).toBeDisabled();
+    await modal.locator('button.primary', { hasText: '管理レーンで schema を準備' }).click();
+
+    await expect.poll(() => previewCalls).toBe(2);
+    await expect(modal).toContainText('schema prep とブランチ同期が完了しました');
+    await expect(page.locator('.success-toast')).toHaveCount(0);
+    await expect(modal.locator('button.primary', { hasText: 'コピー実行 (1件)' })).toBeEnabled();
+
+    await modal.locator('button.primary', { hasText: 'コピー実行 (1件)' }).click();
+    await expect(modal).toContainText('他DBへ行をコピーしました');
+    await expect(page.locator('.success-toast')).toContainText('他DBへ行をコピーしました');
+  });
+
+  test('should surface table schema-prep CTA after PRECONDITION_FAILED and require an explicit retry', async ({ page }) => {
+    await setupBaseMocks(page);
+    await setupCrossDbMocks(page);
+
+    let copyAttempts = 0;
+
+    await page.route('**/api/v1/cross-copy/table', async (route) => {
+      copyAttempts += 1;
+      if (copyAttempts === 1) {
+        await route.fulfill({
+          status: 412,
+          json: {
+            error: {
+              code: 'PRECONDITION_FAILED',
+              message: 'スキーマ準備が必要です。',
+              details: {
+                expand_columns: [
+                  { name: 'name', src_type: 'varchar(255)', dst_type: 'varchar(50)' },
+                ],
+              },
+            },
+          },
+        });
+        return;
+      }
+
+      await route.fulfill({
+        json: {
+          hash: 'hash-users-copy',
+          branch_name: 'wi/import-test_db-users',
+          row_count: 3,
+          shared_columns: ['id', 'name', 'role'],
+          source_only_columns: [],
+          dest_only_columns: [],
+          outcome: 'completed',
+          message: '他DBへテーブルをコピーしました',
+          completion: {
+            destination_committed: true,
+            destination_branch_ready: true,
+            protected_refs_clean: true,
+          },
+        },
+      });
+    });
+
+    await page.route('**/api/v1/cross-copy/admin/prepare-table', async (route) => {
+      await route.fulfill({
+        json: {
+          main_hash: 'hash-dest-main-2',
+          prepared_columns: [
+            { name: 'name', src_type: 'varchar(255)', dst_type: 'varchar(50)' },
+          ],
+          outcome: 'completed',
+          message: 'schema prep が完了しました。コピーを再実行してください。',
+          completion: {
+            protected_schema_prepared: true,
+            protected_refs_clean: true,
+          },
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '他DBへテーブルコピー' }).click();
+
+    const modal = page.locator('.modal');
+    await modal.locator('select').first().selectOption('dest_db');
+    await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
+
+    await expect(modal).toContainText('schema prep が必要');
+    await expect(modal.locator('button.primary', { hasText: 'schema を準備する' })).toBeVisible();
+    await modal.locator('button.primary', { hasText: 'schema を準備する' }).click();
+
+    await expect(modal).toContainText('schema prep が完了しました。コピーを再実行してください。');
+    await expect(page.locator('.success-toast')).toHaveCount(0);
+
+    await modal.locator('button.primary', { hasText: 'コピー実行' }).click();
+    await expect(modal).toContainText('他DBへテーブルをコピーしました');
+    await expect(page.locator('.success-toast')).toContainText('他DBへテーブルをコピーしました');
   });
 
   test('should create a destination work branch inside the row-copy modal when none exists', async ({ page }) => {

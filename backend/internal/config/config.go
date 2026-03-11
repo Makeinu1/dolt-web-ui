@@ -132,6 +132,16 @@ func (c *Config) FindTarget(id string) (*Target, error) {
 	return nil, fmt.Errorf("target %q not found", id)
 }
 
+func (c *Config) FindDatabase(targetID, name string) (*Database, error) {
+	for i := range c.Databases {
+		db := &c.Databases[i]
+		if db.TargetID == targetID && db.Name == name {
+			return db, nil
+		}
+	}
+	return nil, fmt.Errorf("database %q not found for target %q", name, targetID)
+}
+
 func (c *Config) FindDatabases(targetID string) []Database {
 	var result []Database
 	for _, db := range c.Databases {

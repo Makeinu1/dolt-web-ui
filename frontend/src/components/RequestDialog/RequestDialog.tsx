@@ -4,8 +4,9 @@ import { useUIStore } from "../../store/ui";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { ApproveResponse, DiffSummaryEntry, DiffSummaryLightEntry, OverwrittenTable, RequestSummary } from "../../types/api";
+import type { ApproveResult, DiffSummaryEntry, DiffSummaryLightEntry, OverwrittenTable, RejectResponse, RequestSummary } from "../../types/api";
 import { UI_DIFF_PREVIEW_TIMEOUT_MS } from "../../constants/ui";
+import { isCompleted, operationMessage } from "../../utils/apiResult";
 import { mergeDiffSummaryEntries } from "../../utils/diffSummary";
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
@@ -214,14 +215,32 @@ export function SubmitDialog({
         expected_head: expectedHead,
         summary_ja: summaryJa,
       });
+      if (!isCompleted(result)) {
+        setError(operationMessage(result, "申請を完了できませんでした"));
+        return;
+      }
       onSubmitted(result.overwritten_tables);
-      setSuccess("承認を申請しました");
+      setSuccess(operationMessage(result, "承認を申請しました"));
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "STALE_HEAD") {
         setBaseState("StaleHeadDetected");
         setGlobalError("データが更新されています" + (err.message ? ": " + err.message : ""));
         setError(null);
+        return;
+      }
+      if (err instanceof ApiError && err.code === "SCHEMA_CONFLICTS_PRESENT") {
+        setBaseState("SchemaConflictDetected");
+        setGlobalError(err.message || "スキーマコンフリクトが検出されました");
+        setError(null);
+        onClose();
+        return;
+      }
+      if (err instanceof ApiError && err.code === "CONSTRAINT_VIOLATIONS_PRESENT") {
+        setBaseState("ConstraintViolationDetected");
+        setGlobalError(err.message || "制約違反が検出されました");
+        setError(null);
+        onClose();
         return;
       }
       const msg = err instanceof ApiError ? err.message : "";
@@ -298,7 +317,7 @@ function ApproveModal({
   requestId: string;
   workBranch: string;
   onClose: () => void;
-  onApproved: (result: ApproveResponse) => void;
+  onApproved: (result: ApproveResult) => void;
 }) {
   const { targetId, dbName } = useContextStore();
   const [mergeMessage, setMergeMessage] = useState(`承認マージ: ${requestId}`);
@@ -315,6 +334,10 @@ function ApproveModal({
         request_id: requestId,
         merge_message_ja: mergeMessage,
       });
+      if (!isCompleted(result)) {
+        setError(operationMessage(result, "承認を完了できませんでした"));
+        return;
+      }
       onApproved(result);
       onClose();
     } catch (err: unknown) {
@@ -396,7 +419,7 @@ function RejectModal({
 }: {
   requestId: string;
   onClose: () => void;
-  onRejected: () => void;
+  onRejected: (result: RejectResponse) => void;
 }) {
   const { targetId, dbName } = useContextStore();
   const [loading, setLoading] = useState(false);
@@ -406,12 +429,16 @@ function RejectModal({
     setLoading(true);
     setError(null);
     try {
-      await api.rejectRequest({
+      const result = await api.rejectRequest({
         target_id: targetId,
         db_name: dbName,
         request_id: requestId,
       });
-      onRejected();
+      if (!isCompleted(result)) {
+        setError(operationMessage(result, "却下を完了できませんでした"));
+        return;
+      }
+      onRejected(result);
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
@@ -473,7 +500,7 @@ export function ApproverInbox() {
     loadRequests();
   }, [loadRequests]);
 
-  const onApproved = (result: ApproveResponse) => {
+  const onApproved = (result: ApproveResult) => {
     triggerBranchRefresh();
     void loadRequests();
     if (result.active_branch_advanced && result.active_branch) {
@@ -481,16 +508,13 @@ export function ApproverInbox() {
     } else {
       setBranch("main");
     }
-    setSuccess("main へのマージが完了しました");
-    if (result.warnings && result.warnings.length > 0) {
-      setError(result.warnings.join(" "));
-    }
+    setSuccess(operationMessage(result, "main へのマージが完了しました"));
   };
 
-  const onRejected = () => {
+  const onRejected = (result: RejectResponse) => {
     triggerBranchRefresh();
     void loadRequests();
-    setSuccess("申請を却下しました");
+    setSuccess(operationMessage(result, "申請を却下しました"));
   };
 
   if (loading) {

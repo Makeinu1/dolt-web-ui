@@ -21,10 +21,10 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "CSVデータが空です"}
 	}
 
-	// NEW-7: CSVPreview is read-only, use Conn (not ConnWrite) to avoid unnecessary write lock.
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	// CSVPreview is read-only, so it must stay on a revision session.
+	conn, err := s.connAllowedRevision(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -236,7 +236,7 @@ func (s *Service) CSVPreview(ctx context.Context, req model.CSVPreviewRequest) (
 }
 
 // CSVApply inserts or updates rows from CSV data, then commits.
-func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*model.CommitResponse, error) {
+func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*model.CSVApplyResponse, error) {
 	if validation.IsProtectedBranch(req.BranchName) {
 		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "protected branch cannot be modified"}
 	}
@@ -247,9 +247,9 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "CSVデータが空です"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.connAllowedWorkBranchWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -399,5 +399,14 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
 	}
 
-	return &model.CommitResponse{Hash: newHead}, nil
+	return &model.CSVApplyResponse{
+		Hash: newHead,
+		OperationResultFields: model.OperationResultFields{
+			Outcome: model.OperationOutcomeCompleted,
+			Message: "CSV を適用しました",
+			Completion: map[string]bool{
+				"destination_committed": true,
+			},
+		},
+	}, nil
 }

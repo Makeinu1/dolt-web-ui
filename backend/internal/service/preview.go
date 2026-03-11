@@ -29,9 +29,9 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 
 	// PK-preserving copy: if no new_values, fetch template and return as-is insert op
 	if len(newValues) == 0 {
-		conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+		conn, err := s.connAllowedRevision(ctx, req.TargetID, req.DBName, req.BranchName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect: %w", err)
+			return nil, err
 		}
 		defer conn.Close()
 
@@ -68,9 +68,9 @@ func (s *Service) PreviewClone(ctx context.Context, req model.PreviewCloneReques
 			Msg: fmt.Sprintf("vary_column '%s' not found in template_pk", varyCol)}
 	}
 
-	conn, err := s.repo.Conn(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.connAllowedRevision(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 

@@ -29,19 +29,51 @@ func isSearchTimeout(err error, ctx context.Context) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
+func isMissingSearchTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "doesn't exist") || strings.Contains(msg, "not found")
+}
+
+func (s *Service) searchIntegrityError(stage, table string, err error) *model.APIError {
+	details := map[string]string{
+		"stage": stage,
+	}
+	if table != "" {
+		details["table"] = table
+	}
+	if err != nil {
+		details["cause"] = err.Error()
+	}
+	return &model.APIError{
+		Status:  500,
+		Code:    model.CodeInternal,
+		Msg:     "検索結果の整合性を確認できませんでした。時間をおいて再試行してください。",
+		Details: details,
+	}
+}
+
 // Search performs a full-table keyword search across all user tables and, optionally, memo tables.
 // It returns up to `limit` matching results across all tables.
 func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyword string, includeMemo bool, limit int) (*model.SearchResponse, error) {
 	if keyword == "" {
-		return &model.SearchResponse{Results: make([]model.SearchResult, 0), Total: 0}, nil
+		return &model.SearchResponse{
+			Results: make([]model.SearchResult, 0),
+			Total:   0,
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, s.searchTimeBudget())
 	defer cancel()
 
-	conn, err := s.repo.Conn(searchCtx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(searchCtx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -76,7 +108,13 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 	}
 
 	if len(tableNames) == 0 {
-		return &model.SearchResponse{Results: make([]model.SearchResult, 0), Total: 0}, nil
+		return &model.SearchResponse{
+			Results: make([]model.SearchResult, 0),
+			Total:   0,
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	// 2. Batch-fetch all column info for all user tables in ONE query (eliminates N+1).
@@ -103,13 +141,22 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			var tblName, colName, colKey string
 			if err := colRows.Scan(&tblName, &colName, &colKey); err != nil {
 				colRows.Close()
-				break
+				return nil, s.searchIntegrityError("column_scan", tblName, err)
 			}
 			tableCols[tblName] = append(tableCols[tblName], colInfo{name: colName, isPK: colKey == "PRI"})
+		}
+		if err := colRows.Err(); err != nil {
+			colRows.Close()
+			if isSearchTimeout(err, searchCtx) {
+				return nil, s.searchTimeoutError()
+			}
+			return nil, s.searchIntegrityError("column_iter", "", err)
 		}
 		colRows.Close()
 	} else if isSearchTimeout(err, searchCtx) {
 		return nil, s.searchTimeoutError()
+	} else {
+		return nil, s.searchIntegrityError("column_query", "", err)
 	}
 	// If INFORMATION_SCHEMA returned no columns (e.g. revision-DB TABLE_SCHEMA mismatch),
 	// fall back to per-table SHOW COLUMNS for each table that has no entry yet.
@@ -137,16 +184,23 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 				if isSearchTimeout(err, searchCtx) {
 					return nil, s.searchTimeoutError()
 				}
-				continue
+				return nil, s.searchIntegrityError("show_columns", tableName, err)
 			}
 			for colRows2.Next() {
 				var field, colType, null, key string
 				var defaultVal, extra interface{}
 				if err := colRows2.Scan(&field, &colType, &null, &key, &defaultVal, &extra); err != nil {
 					colRows2.Close()
-					break
+					return nil, s.searchIntegrityError("show_columns_scan", tableName, err)
 				}
 				cols = append(cols, colInfo{name: field, isPK: key == "PRI"})
+			}
+			if err := colRows2.Err(); err != nil {
+				colRows2.Close()
+				if isSearchTimeout(err, searchCtx) {
+					return nil, s.searchTimeoutError()
+				}
+				return nil, s.searchIntegrityError("show_columns_iter", tableName, err)
 			}
 			colRows2.Close()
 		}
@@ -194,14 +248,13 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			if isSearchTimeout(err, searchCtx) {
 				return nil, s.searchTimeoutError()
 			}
-			// Query failed — skip table
-			continue
+			return nil, s.searchIntegrityError("data_query", tableName, err)
 		}
 
 		colNames, err := dataRows.Columns()
 		if err != nil {
 			dataRows.Close()
-			continue
+			return nil, s.searchIntegrityError("data_columns", tableName, err)
 		}
 
 		// colNames[0] = pk_json, colNames[1..] = column values
@@ -221,7 +274,8 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 					dataRows.Close()
 					return nil, s.searchTimeoutError()
 				}
-				continue
+				dataRows.Close()
+				return nil, s.searchIntegrityError("data_scan", tableName, err)
 			}
 
 			pkJSON := ""
@@ -264,7 +318,7 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 			if isSearchTimeout(err, searchCtx) {
 				return nil, s.searchTimeoutError()
 			}
-			continue
+			return nil, s.searchIntegrityError("data_iter", tableName, err)
 		}
 		dataRows.Close()
 
@@ -284,19 +338,30 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 						break
 					}
 					var pk, col, memo string
-					if err := memoRows.Scan(&pk, &col, &memo); err == nil {
-						results = append(results, model.SearchResult{
-							Table:     tableName,
-							PK:        pk,
-							Column:    col,
-							Value:     memo,
-							MatchType: "memo",
-						})
+					if err := memoRows.Scan(&pk, &col, &memo); err != nil {
+						memoRows.Close()
+						return nil, s.searchIntegrityError("memo_scan", tableName, err)
 					}
+					results = append(results, model.SearchResult{
+						Table:     tableName,
+						PK:        pk,
+						Column:    col,
+						Value:     memo,
+						MatchType: "memo",
+					})
+				}
+				if err := memoRows.Err(); err != nil {
+					memoRows.Close()
+					if isSearchTimeout(err, searchCtx) {
+						return nil, s.searchTimeoutError()
+					}
+					return nil, s.searchIntegrityError("memo_iter", tableName, err)
 				}
 				memoRows.Close()
 			} else if isSearchTimeout(err, searchCtx) {
 				return nil, s.searchTimeoutError()
+			} else if !isMissingSearchTable(err) {
+				return nil, s.searchIntegrityError("memo_query", tableName, err)
 			}
 		}
 	}
@@ -304,5 +369,11 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		return nil, s.searchTimeoutError()
 	}
 
-	return &model.SearchResponse{Results: results, Total: len(results)}, nil
+	return &model.SearchResponse{
+		Results: results,
+		Total:   len(results),
+		ReadResultFields: model.ReadResultFields{
+			ReadIntegrity: model.ReadIntegrityComplete,
+		},
+	}, nil
 }

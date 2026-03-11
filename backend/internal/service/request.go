@@ -126,6 +126,15 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		SubmittedMainHash: submittedMainHash,
 		SubmittedWorkHash: submittedWorkHash,
 		OverwrittenTables: overwrittenTables,
+		OperationResultFields: model.OperationResultFields{
+			Outcome: model.OperationOutcomeCompleted,
+			Message: "承認を申請しました",
+			Completion: map[string]bool{
+				"request_recorded": true,
+				"lock_observable":  true,
+				"work_head_synced": true,
+			},
+		},
 	}, nil
 }
 
@@ -313,7 +322,7 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	var mergeHash string
 	var fastForward, conflicts int
 	var mergeMessage string
-	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE(?, '-m', ?)", workBranch, commitMessage).
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE(?, '--no-ff', '-m', ?)", workBranch, commitMessage).
 		Scan(&mergeHash, &fastForward, &conflicts, &mergeMessage)
 	if err != nil {
 		if strings.Contains(err.Error(), "Merge conflict detected") || strings.Contains(err.Error(), "conflict") {
@@ -352,14 +361,16 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	bgCtx := context.Background()
 	workItem := workItemForFooter // already validated above
 
-	warnings := make([]string, 0)
+	advisoryWarnings := make([]string, 0)
+	auditIndexed := true
 
 	// Secondary index (merged/* tag) — failure does not block audit truth.
 	archiveTag, archiveErr := s.approveCreateSecondaryIndexHook(bgCtx, conn, workItem, req.MergeMessageJa)
 	if archiveErr != nil {
 		log.Printf("WARN: failed to create archive tag for %s: %v", workBranch, archiveErr)
-		warnings = append(warnings, "mainへの反映は完了しましたが、履歴タグの保存に失敗しました。")
+		advisoryWarnings = append(advisoryWarnings, "mainへの反映は完了しましたが、履歴タグの保存に失敗しました。")
 		archiveTag = ""
+		auditIndexed = false
 	}
 
 	// Postcondition 1: delete the request tag (release the lock).
@@ -367,23 +378,51 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	if err := s.approveDeleteRequestTagHook(bgCtx, req.TargetID, req.DBName, req.RequestID); err != nil {
 		log.Printf("WARN: failed to delete request tag %s: %v", req.RequestID, err)
 		requestCleared = false
-		warnings = append(warnings, "mainへの反映は完了しましたが、申請タグの解除に失敗しました。Inbox から再試行または却下を行ってください。")
 	}
 
 	connClosed = true
 	conn.Close()
 
 	// Postcondition 2: advance the work branch to main HEAD.
-	branchAdvanced := s.approveAdvanceWorkBranchHook(bgCtx, req.TargetID, req.DBName, workBranch, &warnings)
+	advanceWarnings := make([]string, 0)
+	branchAdvanced := s.approveAdvanceWorkBranchHook(bgCtx, req.TargetID, req.DBName, workBranch, &advanceWarnings)
 
 	// Determine outcome per B-PR1 contract.
 	// "completed" requires: audit footer recorded (always true here — merge succeeded) +
 	//                       request cleared + resume branch ready.
 	// "retry_required" means audit truth exists but a postcondition failed.
-	branchReady := requestCleared && branchAdvanced
-	outcome := "completed"
+	branchReady := branchAdvanced
+	outcome := model.OperationOutcomeCompleted
+	responseMessage := "main へのマージが完了しました"
+	var retryReason string
+	retryActions := make([]model.RetryAction, 0, 2)
 	if !requestCleared || !branchAdvanced {
-		outcome = "retry_required"
+		outcome = model.OperationOutcomeRetryRequired
+		responseMessage = "main へのマージは完了しましたが、後続処理の確認に失敗しました。案内に従って再試行してください。"
+		if !requestCleared {
+			retryReason = "request_cleanup_failed"
+			retryActions = append(retryActions, model.RetryAction{
+				Action: "refresh_requests",
+				Label:  "Inbox を更新する",
+			})
+		}
+		if !branchAdvanced {
+			if retryReason == "" {
+				retryReason = "resume_branch_not_ready"
+			}
+			retryActions = append(retryActions, model.RetryAction{
+				Action: "reopen_work_branch",
+				Label:  "作業ブランチを開き直す",
+			})
+			if len(advanceWarnings) > 0 {
+				responseMessage = advanceWarnings[len(advanceWarnings)-1]
+			}
+		}
+	}
+
+	warnings := []string(nil)
+	if outcome == model.OperationOutcomeCompleted && len(advisoryWarnings) > 0 {
+		warnings = advisoryWarnings
 	}
 
 	return &model.ApproveResponse{
@@ -391,12 +430,19 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		ActiveBranch:         workBranch,
 		ActiveBranchAdvanced: branchReady,
 		ArchiveTag:           archiveTag,
-		Warnings:             warnings,
-		Outcome: outcome,
-		Completion: map[string]bool{
-			"audit_recorded":      true, // merge to main succeeded
-			"request_cleared":     requestCleared,
-			"resume_branch_ready": branchAdvanced,
+		OperationResultFields: model.OperationResultFields{
+			Outcome:      outcome,
+			Message:      responseMessage,
+			Warnings:     warnings,
+			RetryReason:  retryReason,
+			RetryActions: retryActions,
+			Completion: map[string]bool{
+				"main_merged":         true,
+				"audit_recorded":      true, // merge to main succeeded
+				"request_cleared":     requestCleared,
+				"resume_branch_ready": branchAdvanced,
+				"audit_indexed":       auditIndexed,
+			},
 		},
 	}, nil
 }
@@ -514,14 +560,14 @@ func retryExec(ctx context.Context, attempts int, delay time.Duration, fn func(c
 
 // RejectRequest deletes the request tag only.
 // Branch is kept for user to fix and re-submit.
-func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) error {
+func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) (*model.RejectResponse, error) {
 	if _, err := s.configuredDatabase(req.TargetID, req.DBName); err != nil {
-		return err
+		return nil, err
 	}
 
 	conn, err := s.repo.ConnProtectedMaintenance(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
@@ -529,15 +575,24 @@ func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) er
 	err = conn.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM dolt_tags WHERE tag_name = ?", req.RequestID).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("failed to query tag: %w", err)
+		return nil, fmt.Errorf("failed to query tag: %w", err)
 	}
 	if count == 0 {
-		return &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
+		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: "request not found"}
 	}
 
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_TAG('-d', ?)", req.RequestID); err != nil {
-		return fmt.Errorf("failed to delete tag: %w", err)
+		return nil, fmt.Errorf("failed to delete tag: %w", err)
 	}
 
-	return nil
+	return &model.RejectResponse{
+		Status: "rejected",
+		OperationResultFields: model.OperationResultFields{
+			Outcome: model.OperationOutcomeCompleted,
+			Message: "申請を却下しました",
+			Completion: map[string]bool{
+				"request_cleared": true,
+			},
+		},
+	}, nil
 }

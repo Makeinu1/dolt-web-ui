@@ -64,9 +64,9 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "ops must not be empty"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.connAllowedWorkBranchWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 

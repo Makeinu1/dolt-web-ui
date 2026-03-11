@@ -89,6 +89,34 @@ test.describe('エラー回復テスト', () => {
         await expect(page.getByRole('button', { name: '復旧付き再読み込み' })).toBeVisible({ timeout: 5000 });
     });
 
+    test('2B-2d: Submit SCHEMA_CONFLICTS_PRESENT → CLIRunbook を表示', async ({ page }) => {
+        await page.route('**/api/v1/request/submit*', async route => {
+            await route.fulfill({
+                status: 409,
+                json: {
+                    error: {
+                        code: 'SCHEMA_CONFLICTS_PRESENT',
+                        message: 'schema conflicts detected',
+                    },
+                },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+        await page.locator('.overflow-btn').click();
+        await page.locator('button', { hasText: '📤 承認を申請' }).click();
+
+        const modal = page.locator('.modal');
+        await expect(modal.locator('h2')).toHaveText('承認を申請');
+        await modal.locator('textarea').fill('schema conflict submit');
+        await modal.locator('button.primary', { hasText: '申請する' }).click();
+
+        await expect(page.getByText(/Schema Conflict Detected|スキーマコンフリクト/).first()).toBeVisible({ timeout: 5000 });
+        await expect(page.getByText(/CLI Required/)).toBeVisible({ timeout: 5000 });
+        await expect(page.getByText(/schema conflicts detected/)).toBeVisible({ timeout: 5000 });
+    });
+
     test('2B-2c: CSV Apply STALE_HEAD → StaleHeadDetected に遷移', async ({ page }) => {
         await page.route('**/api/v1/csv/preview', async route => {
             await route.fulfill({

@@ -108,9 +108,10 @@ func (h *Handler) RejectRequest(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	if err := h.svc.RejectRequest(ctx, req); err != nil {
+	result, err := h.svc.RejectRequest(ctx, req)
+	if err != nil {
 		handleServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
+	writeJSON(w, http.StatusOK, result)
 }

@@ -153,12 +153,6 @@ export const commit = (body: import("../types/api").CommitRequest) =>
     body: JSON.stringify(body),
   });
 
-export const sync = (body: import("../types/api").SyncRequest) =>
-  request<import("../types/api").SyncResponse>("/sync", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
 // Diff & History
 export const getDiffTable = (
   targetId: string,
@@ -221,7 +215,7 @@ export const getHistoryCommits = (
   filterTable = "",
   filterPk = ""
 ) =>
-  request<import("../types/api").HistoryCommit[]>(
+  request<import("../types/api").HistoryCommitsResponse>(
     `/history/commits${queryString({
       target_id: targetId,
       db_name: dbName,
@@ -277,7 +271,7 @@ export const getDiffSummaryLight = (
 
 // Requests
 export const submitRequest = (body: import("../types/api").SubmitRequestRequest) =>
-  request<import("../types/api").SubmitRequestResponse>("/request/submit", {
+  request<import("../types/api").SubmitRequestResult>("/request/submit", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -293,13 +287,13 @@ export const getRequest = (targetId: string, dbName: string, requestId: string) 
   );
 
 export const approveRequest = (body: import("../types/api").ApproveRequest) =>
-  request<import("../types/api").ApproveResponse>("/request/approve", {
+  request<import("../types/api").ApproveResult>("/request/approve", {
     method: "POST",
     body: JSON.stringify(body),
   });
 
 export const rejectRequest = (body: import("../types/api").RejectRequest) =>
-  request<{ status: string }>("/request/reject", {
+  request<import("../types/api").RejectResponse>("/request/reject", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -335,13 +329,31 @@ export const crossCopyPreview = (body: import("../types/api").CrossCopyPreviewRe
   });
 
 export const crossCopyRows = (body: import("../types/api").CrossCopyRowsRequest) =>
-  request<import("../types/api").CrossCopyRowsResponse>("/cross-copy/rows", {
+  request<import("../types/api").CrossCopyRowsResult>("/cross-copy/rows", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const crossCopyAdminPrepareRows = (body: import("../types/api").CrossCopyAdminPrepareRowsRequest) =>
+  request<import("../types/api").CrossCopyAdminPrepareRowsResult>("/cross-copy/admin/prepare-rows", {
     method: "POST",
     body: JSON.stringify(body),
   });
 
 export const crossCopyTable = (body: import("../types/api").CrossCopyTableRequest) =>
-  request<import("../types/api").CrossCopyTableResponse>("/cross-copy/table", {
+  request<import("../types/api").CrossCopyTableResult>("/cross-copy/table", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const crossCopyAdminPrepareTable = (body: import("../types/api").CrossCopyAdminPrepareTableRequest) =>
+  request<import("../types/api").CrossCopyAdminPrepareTableResult>("/cross-copy/admin/prepare-table", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const crossCopyAdminCleanupImport = (body: import("../types/api").CrossCopyAdminCleanupImportRequest) =>
+  request<import("../types/api").CrossCopyAdminCleanupImportResult>("/cross-copy/admin/cleanup-import", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -354,7 +366,7 @@ export const csvPreview = (body: import("../types/api").CSVPreviewRequest) =>
   });
 
 export const csvApply = (body: import("../types/api").CSVApplyRequest) =>
-  request<import("../types/api").CommitResponse>("/csv/apply", {
+  request<import("../types/api").CSVApplyResponse>("/csv/apply", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -368,7 +380,7 @@ export const search = (
   includeMemo = false,
   limit = 100
 ) =>
-  request<import("../types/api").SearchResponse>(
+  request<import("../types/api").SearchResultResponse>(
     `/search${queryString({
       target_id: targetId,
       db_name: dbName,

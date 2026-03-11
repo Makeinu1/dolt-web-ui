@@ -284,18 +284,18 @@ func TestHistoryRead_UsesConnRevision_ForAllowedHistoryRef(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	commits, err := svc.HistoryCommits(context.Background(), "local", "test_db", tagRef, 1, 20, "", "", "", "", "", "")
+	commitsResp, err := svc.HistoryCommits(context.Background(), "local", "test_db", tagRef, 1, 20, "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("HistoryCommits: %v", err)
 	}
-	if len(commits) != 1 {
-		t.Fatalf("expected 1 commit (legacy), got %d", len(commits))
+	if len(commitsResp.Commits) != 1 {
+		t.Fatalf("expected 1 commit (legacy), got %d", len(commitsResp.Commits))
 	}
-	if commits[0].Hash != legacyMergeHash {
-		t.Errorf("expected legacy merge hash %s, got %s", legacyMergeHash, commits[0].Hash)
+	if commitsResp.Commits[0].Hash != legacyMergeHash {
+		t.Errorf("expected legacy merge hash %s, got %s", legacyMergeHash, commitsResp.Commits[0].Hash)
 	}
-	if commits[0].MergeBranch != "wi/demo" {
-		t.Errorf("expected MergeBranch=wi/demo, got %s", commits[0].MergeBranch)
+	if commitsResp.Commits[0].MergeBranch != "wi/demo" {
+		t.Errorf("expected MergeBranch=wi/demo, got %s", commitsResp.Commits[0].MergeBranch)
 	}
 
 	wantCalls := []repoCall{

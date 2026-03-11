@@ -34,9 +34,9 @@ func ensureMemoTable(ctx context.Context, conn *sql.Conn, memoTable string) erro
 // GetMemoMap returns pk_value:column_name keys that have a memo for a table.
 // Returns empty slice if the memo table does not exist yet.
 func (s *Service) GetMemoMap(ctx context.Context, targetID, dbName, branchName, tableName string) ([]string, error) {
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -64,9 +64,9 @@ func (s *Service) GetMemoMap(ctx context.Context, targetID, dbName, branchName, 
 // GetMemo returns the memo for a specific cell.
 // Returns a MemoResponse with empty memo_text if no memo exists.
 func (s *Service) GetMemo(ctx context.Context, targetID, dbName, branchName, tableName, pkValue, columnName string) (*model.MemoResponse, error) {
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 

@@ -198,10 +198,10 @@ func (h *Handler) HistoryCommits(w http.ResponseWriter, r *http.Request) {
 	filterTable := r.URL.Query().Get("filter_table") // table name for record-level filter
 	filterPk := r.URL.Query().Get("filter_pk")       // JSON-encoded PK for record-level filter
 
-	commits, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, keyword, fromDate, toDate, searchField, filterTable, filterPk)
+	resp, err := h.svc.HistoryCommits(r.Context(), targetID, dbName, branchName, page, pageSize, keyword, fromDate, toDate, searchField, filterTable, filterPk)
 	if err != nil {
 		handleServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, commits)
+	writeJSON(w, http.StatusOK, resp)
 }

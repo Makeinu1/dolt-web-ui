@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 const TARGET_ID = "local";
@@ -139,6 +140,107 @@ export async function listRequests(request: APIRequestContext, dbName: string) {
   })}`);
   expect(res.ok()).toBeTruthy();
   return (await res.json()) as Array<{ request_id: string; work_branch: string }>;
+}
+
+export async function submitApprovalRequest(
+  request: APIRequestContext,
+  dbName: string,
+  branchName: string,
+  summaryJa: string,
+) {
+  const expectedHead = await getHead(request, dbName, branchName);
+  const res = await request.post("/api/v1/request/submit", {
+    data: {
+      target_id: TARGET_ID,
+      db_name: dbName,
+      branch_name: branchName,
+      expected_head: expectedHead,
+      summary_ja: summaryJa,
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  return (await res.json()) as {
+    request_id: string;
+    submitted_main_hash: string;
+    submitted_work_hash: string;
+    outcome: string;
+  };
+}
+
+export async function approveApprovalRequest(
+  request: APIRequestContext,
+  dbName: string,
+  requestId: string,
+  mergeMessageJa: string,
+) {
+  const res = await request.post("/api/v1/request/approve", {
+    data: {
+      target_id: TARGET_ID,
+      db_name: dbName,
+      request_id: requestId,
+      merge_message_ja: mergeMessageJa,
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  return (await res.json()) as {
+    hash: string;
+    archive_tag?: string;
+    outcome: string;
+  };
+}
+
+function escapeSQLString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
+function runDoltSQL(sql: string) {
+  execFileSync(
+    "dolt",
+    [
+      "--no-tls",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "13306",
+      "sql",
+      "-q",
+      sql,
+    ],
+    { stdio: "pipe" },
+  );
+}
+
+export function deleteTagViaDolt(dbName: string, branchName: string, tagName: string) {
+  runDoltSQL(`USE \`${dbName}/${branchName}\`; CALL DOLT_TAG('-d', '${escapeSQLString(tagName)}');`);
+}
+
+export function resetCrossCopySchemaWidth(dbName: string, width: number) {
+  runDoltSQL(
+    `USE \`${dbName}/main\`; ` +
+      `ALTER TABLE \`zz_crosscopy_schema\` MODIFY COLUMN \`name\` varchar(${width}) NOT NULL; ` +
+      `ALTER TABLE \`zz_crosscopy_schema\` MODIFY COLUMN \`notes\` varchar(${width}) NULL; ` +
+      `CALL DOLT_ADD('.'); ` +
+      `CALL DOLT_COMMIT('--allow-empty', '-m', '[real e2e] reset zz_crosscopy_schema width to ${width}');`,
+  );
+}
+
+export async function recreateBranchFromMain(
+  request: APIRequestContext,
+  dbName: string,
+  branchName: string,
+  timeoutMs = 10000,
+) {
+  const branchesRes = await request.get(`/api/v1/branches?${queryString({
+    target_id: TARGET_ID,
+    db_name: dbName,
+  })}`);
+  expect(branchesRes.ok()).toBeTruthy();
+  const branches = (await branchesRes.json()) as Array<{ name: string }>;
+  if (branches.some((branch) => branch.name === branchName)) {
+    runDoltSQL(`USE \`${dbName}/main\`; CALL DOLT_BRANCH('-D', '${escapeSQLString(branchName)}');`);
+  }
+  runDoltSQL(`USE \`${dbName}/main\`; CALL DOLT_BRANCH('${escapeSQLString(branchName)}');`);
+  await waitForBranchReady(request, dbName, branchName, timeoutMs);
 }
 
 export function testTargetId() {

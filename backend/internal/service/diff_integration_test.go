@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -84,4 +85,56 @@ func TestDiffSummaries_ReturnChangedTablesAndSchemaFlags(t *testing.T) {
 	if !foundHeavyUsers {
 		t.Fatalf("users table missing from heavy diff summary")
 	}
+}
+
+func TestDiffSummaryLight_AllowsCommitHashRefAndRejectsDisallowedBranchRef(t *testing.T) {
+	svc := newIntegrationService(t)
+	branchName := uniqueWorkBranch(t, "diff-ref-policy")
+
+	if err := svc.CreateBranch(integrationContext(t), model.CreateBranchRequest{
+		TargetID:   "local",
+		DBName:     "test_db",
+		BranchName: branchName,
+	}); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	headHash := commitRoleChange(t, svc, branchName, "diff-policy", "integration diff ref policy")
+
+	entries, err := svc.DiffSummaryLight(integrationContext(t), "local", "test_db", headHash, "main", headHash, "two_dot")
+	if err != nil {
+		t.Fatalf("diff summary with commit hash session ref: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected diff summary entries when using commit hash ref")
+	}
+
+	hiddenBranch := fmt.Sprintf("scratch-%d", time.Now().UnixNano())
+	conn, err := svc.repo.ConnProtectedMaintenance(integrationContext(t), "local", "test_db", "main")
+	if err != nil {
+		t.Fatalf("connect for hidden branch create: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(integrationContext(t), "CALL DOLT_BRANCH(?)", hiddenBranch); err != nil {
+		t.Fatalf("create hidden branch: %v", err)
+	}
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cleanupConn, err := svc.repo.ConnProtectedMaintenance(ctx, "local", "test_db", "main")
+		if err != nil {
+			t.Fatalf("connect for hidden branch cleanup: %v", err)
+		}
+		defer cleanupConn.Close()
+
+		if _, err := cleanupConn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", hiddenBranch); err != nil {
+			t.Fatalf("cleanup hidden branch: %v", err)
+		}
+	})
+
+	_, err = svc.DiffSummaryLight(integrationContext(t), "local", "test_db", branchName, "main", hiddenBranch, "three_dot")
+	expectAPIErrorCode(t, err, model.CodeForbidden)
 }

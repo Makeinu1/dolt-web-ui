@@ -30,8 +30,6 @@ function stateLabel(state: BaseState): { text: string; className: string } {
       return { text: "プレビュー中", className: "state-draft" };
     case "Committing":
       return { text: "保存中...", className: "state-draft" };
-    case "Syncing":
-      return { text: "同期中...", className: "state-draft" };
     case "SchemaConflictDetected":
       return { text: "スキーマコンフリクト", className: "state-conflict" };
     case "ConstraintViolationDetected":
@@ -295,7 +293,6 @@ function App() {
           onClick={() => setShowCommit(true)}
           disabled={
             baseState === "Committing" ||
-            baseState === "Syncing" ||
             baseState === "SchemaConflictDetected" ||
             baseState === "ConstraintViolationDetected"
           }
@@ -655,11 +652,11 @@ function App() {
           tableName={selectedTable}
           expectedHead={expectedHead}
           onClose={() => setShowCSVImport(false)}
-          onApplied={(newHash) => {
+          onApplied={(result) => {
             api.invalidateSchemaCache(targetId, dbName);
-            onCommitSuccess(newHash);
+            onCommitSuccess(result.hash);
             setShowCSVImport(false);
-            setSuccess("CSVを反映しました");
+            setSuccess(result.message || "CSVを反映しました");
           }}
         />
       )}

@@ -23,9 +23,9 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 		return nil, &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "sync on protected branch is forbidden"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.connAllowedWorkBranchWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -166,9 +166,9 @@ func (s *Service) AbortMerge(ctx context.Context, targetID, dbName, branchName s
 		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "cannot abort merge on protected branch"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, targetID, dbName, branchName)
+	conn, err := s.connAllowedWorkBranchWrite(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return err
 	}
 	defer conn.Close()
 

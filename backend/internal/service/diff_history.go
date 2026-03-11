@@ -12,6 +12,21 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
+func historyIntegrityError(commitHash string, err error) *model.APIError {
+	details := map[string]string{}
+	if commitHash != "" {
+		details["commit_hash"] = commitHash
+	}
+	if err != nil {
+		details["cause"] = err.Error()
+	}
+	return &model.APIError{
+		Status:  500,
+		Code:    model.CodeInternal,
+		Msg:     "履歴の整合性を確認できませんでした。時間をおいて再試行してください。",
+		Details: details,
+	}
+}
 
 // parsePK parses a URL-encoded JSON PK map and returns it as-is.
 // Supports both single and composite primary keys.
@@ -37,7 +52,7 @@ func parsePK(pkJSON string) (map[string]interface{}, error) {
 // fromDate/toDate: ISO date "YYYY-MM-DD" inclusive range (empty = no filter).
 // searchField: "message" (default) | "branch".
 // filterTable/filterPk: if both set, further filter to commits that changed the specific record.
-func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, keyword, fromDate, toDate, searchField, filterTable, filterPk string) ([]model.HistoryCommit, error) {
+func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, keyword, fromDate, toDate, searchField, filterTable, filterPk string) (*model.HistoryCommitsResponse, error) {
 	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
@@ -93,7 +108,7 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		switch {
 		case parseErr != nil:
 			// Footer marker present but invalid — integrity error, must not silent-skip.
-			return nil, fmt.Errorf("approval history integrity error at commit %s: %w", rc.hash, parseErr)
+			return nil, historyIntegrityError(rc.hash, parseErr)
 
 		case footer != nil:
 			// Post-cutover: footer is the primary truth.
@@ -129,7 +144,12 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	// When filtering by record, fetch a larger batch (paginate after filtering).
 	if filterTable == "" || filterPk == "" {
-		return paginateCommits(commits, page, pageSize), nil
+		return &model.HistoryCommitsResponse{
+			Commits: paginateCommits(commits, page, pageSize),
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	// record-level filter: further narrow to commits that changed a specific row.
@@ -146,7 +166,12 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	}
 
 	if len(commits) == 0 {
-		return make([]model.HistoryCommit, 0), nil
+		return &model.HistoryCommitsResponse{
+			Commits: make([]model.HistoryCommit, 0),
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	// Build IN clause for commit hashes.
@@ -184,7 +209,12 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	histRows, err := conn.QueryContext(ctx, histQuery, allHistArgs...)
 	if err != nil {
 		// If history table query fails (e.g. table not tracked), return empty gracefully.
-		return make([]model.HistoryCommit, 0), nil
+		return &model.HistoryCommitsResponse{
+			Commits: make([]model.HistoryCommit, 0),
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	histCols, err := histRows.Columns()
@@ -235,7 +265,12 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	histRows.Close()
 
 	if len(snapshots) == 0 {
-		return make([]model.HistoryCommit, 0), nil
+		return &model.HistoryCommitsResponse{
+			Commits: make([]model.HistoryCommit, 0),
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 
 	// Step 3: Find commit hashes where record values changed.
@@ -273,13 +308,23 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 
 	startIdx := (page - 1) * pageSize
 	if startIdx >= len(filtered) {
-		return make([]model.HistoryCommit, 0), nil
+		return &model.HistoryCommitsResponse{
+			Commits: make([]model.HistoryCommit, 0),
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
 	}
 	endIdx := startIdx + pageSize
 	if endIdx > len(filtered) {
 		endIdx = len(filtered)
 	}
-	return filtered[startIdx:endIdx], nil
+	return &model.HistoryCommitsResponse{
+		Commits: filtered[startIdx:endIdx],
+		ReadResultFields: model.ReadResultFields{
+			ReadIntegrity: model.ReadIntegrityComplete,
+		},
+	}, nil
 }
 
 // HistoryRow returns all historical snapshots of a specific row from dolt_history_{table}.

@@ -67,6 +67,9 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 		r.Post("/cross-copy/preview", h.CrossCopyPreview)
 		r.Post("/cross-copy/rows", h.CrossCopyRows)
 		r.Post("/cross-copy/table", h.CrossCopyTable)
+		r.Post("/cross-copy/admin/prepare-rows", h.CrossCopyAdminPrepareRows)
+		r.Post("/cross-copy/admin/prepare-table", h.CrossCopyAdminPrepareTable)
+		r.Post("/cross-copy/admin/cleanup-import", h.CrossCopyAdminCleanupImport)
 
 		// CSV Import
 		r.Post("/csv/preview", h.CSVPreview)

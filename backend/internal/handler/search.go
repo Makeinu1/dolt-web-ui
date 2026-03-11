@@ -22,7 +22,13 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if keyword == "" {
-		writeJSON(w, http.StatusOK, model.SearchResponse{Results: []model.SearchResult{}, Total: 0})
+		writeJSON(w, http.StatusOK, model.SearchResponse{
+			Results: []model.SearchResult{},
+			Total:   0,
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		})
 		return
 	}
 

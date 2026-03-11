@@ -2,11 +2,15 @@
 
 Base URL: `/api/v1`
 
+This document covers the endpoints currently registered by the server router.
+Removed legacy routes such as `/sync`, `/versions`, `/comments/*`, and `/conflicts/*`
+are intentionally omitted.
+
 ## Common Conventions
 
-### Error Response Format
+### Error Envelope
 
-All errors use the envelope format:
+All errors use the envelope format below.
 
 ```json
 {
@@ -20,49 +24,90 @@ All errors use the envelope format:
 
 ### Error Codes
 
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
+| Code | HTTP | Meaning |
+|------|------|---------|
 | `INVALID_ARGUMENT` | 400 | Missing or invalid request parameters |
 | `PK_COLLISION` | 400 | Insert would duplicate an existing primary key |
-| `FORBIDDEN` | 403 | Operation not allowed (e.g., write to main) |
+| `FORBIDDEN` | 403 | Operation is not allowed on the target ref |
 | `NOT_FOUND` | 404 | Resource not found |
-| `STALE_HEAD` | 409 | expected_head does not match current HEAD |
-| `MERGE_CONFLICTS_PRESENT` | 409 | Merge produced data conflicts |
-| `SCHEMA_CONFLICTS_PRESENT` | 409 | Merge produced schema conflicts |
-| `CONSTRAINT_VIOLATIONS_PRESENT` | 409 | Merge produced constraint violations |
-| `BRANCH_EXISTS` | 409 | Work branch already exists; open the existing branch instead of creating a new one |
-| `BRANCH_NOT_READY` | 409 | Branch was created but is not queryable yet; retry after a short delay |
-| `BRANCH_LOCKED` | 423 | Branch is locked (pending approval request exists) |
+| `STALE_HEAD` | 409 | `expected_head` did not match current HEAD |
+| `MERGE_CONFLICTS_PRESENT` | 409 | Merge produced same-cell conflicts |
+| `SCHEMA_CONFLICTS_PRESENT` | 409 | Schema conflicts detected during merge preview |
+| `CONSTRAINT_VIOLATIONS_PRESENT` | 409 | Constraint violations detected during merge |
 | `PRECONDITION_FAILED` | 412 | Precondition check failed |
+| `BRANCH_EXISTS` | 409 | Destination work branch already exists |
+| `BRANCH_NOT_READY` | 409 | Branch exists but is not queryable yet |
+| `BRANCH_LOCKED` | 423 | Work branch is locked by a pending request |
+| `COPY_DATA_ERROR` | 400 | Cross-copy / CSV write failed because of data shape |
+| `COPY_FK_ERROR` | 400 | Cross-copy / CSV write failed because of FK constraints |
 | `INTERNAL` | 500 | Internal server error |
 
-### ProtectedBranchGuard
+### Protected Branches
 
-Write operations on protected branches (`main` and `audit`) are forbidden. Affected endpoints return:
+`main` and `audit` are protected. Public write endpoints reject them with `403 FORBIDDEN`.
+
+Example:
 
 ```json
 {
   "error": {
     "code": "FORBIDDEN",
-    "message": "write operations on main branch are forbidden",
-    "details": { "reason": "main_guard", "branch": "main" }
+    "message": "write operations on protected branch are forbidden",
+    "details": {
+      "reason": "protected_branch_guard",
+      "branch": "main"
+    }
   }
 }
 ```
 
-### BranchLock
+### Operation Result Fields
 
-Work branches with a pending approval request (`req/*` tag) are locked. Commit, Sync, and Revert operations are blocked until the request is approved or rejected.
+Write endpoints that complete an application-level action return a structured result:
 
 ```json
 {
-  "error": {
-    "code": "BRANCH_LOCKED",
-    "message": "承認申請中のブランチは編集できません。却下されるとロックが解除されます。",
-    "details": { "request_tag": "req/work-1" }
-  }
+  "outcome": "completed",
+  "message": "操作が完了しました",
+  "completion": {
+    "some_step": true
+  },
+  "warnings": [],
+  "retry_reason": "",
+  "retry_actions": [
+    { "action": "refresh", "label": "更新する" }
+  ]
 }
 ```
+
+Field meaning:
+
+| Field | Meaning |
+|------|---------|
+| `outcome` | `completed`, `failed`, or `retry_required` |
+| `message` | User-facing summary string |
+| `completion` | Machine-readable completion truth for important side effects |
+| `warnings` | Advisory-only warnings. Current backend emits them only on `completed`. |
+| `retry_reason` | Stable retry classifier when `outcome=retry_required` |
+| `retry_actions` | UI hints for the retry lane |
+
+### Read Result Fields
+
+Read endpoints that need integrity signaling return:
+
+```json
+{
+  "read_integrity": "complete",
+  "message": "optional",
+  "retry_actions": []
+}
+```
+
+Current backend behavior:
+
+- Successful reads emit `read_integrity="complete"`.
+- Integrity failures do not return partial data. They fail loud with `500 INTERNAL`.
+- `read_integrity="failed"` is reserved for future compatibility and is not emitted today.
 
 ---
 
@@ -72,7 +117,7 @@ Work branches with a pending approval request (`req/*` tag) are locked. Commit, 
 
 List configured Dolt targets.
 
-**Response:**
+**Response**
 
 ```json
 [
@@ -80,19 +125,17 @@ List configured Dolt targets.
 ]
 ```
 
----
-
 ### GET /databases
 
 List allowed databases for a target.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
 
-**Response:**
+**Response**
 
 ```json
 [
@@ -100,20 +143,18 @@ List allowed databases for a target.
 ]
 ```
 
----
-
 ### GET /branches
 
 List branches for a database.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
 
-**Response:**
+**Response**
 
 ```json
 [
@@ -122,107 +163,80 @@ List branches for a database.
 ]
 ```
 
----
-
-### POST /branches/create
-
-Create a new work branch from main. **ProtectedBranchGuard applies.**
-
-**Request Body:**
-
-```json
-{
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/my-branch"
-}
-```
-
-**Response:**
-
-```json
-{ "branch_name": "wi/my-branch" }
-```
-
-**Recoverable errors:**
-
-- `409 BRANCH_EXISTS`
-
-```json
-{
-  "error": {
-    "code": "BRANCH_EXISTS",
-    "message": "ブランチ wi/my-branch は既に存在します。既存の作業ブランチを開いて続行してください。",
-    "details": {
-      "branch_name": "wi/my-branch",
-      "open_existing": true
-    }
-  }
-}
-```
-
-- `409 BRANCH_NOT_READY`
-
-```json
-{
-  "error": {
-    "code": "BRANCH_NOT_READY",
-    "message": "ブランチ wi/my-branch は作成されましたが、まだ接続準備が完了していません。少し待ってから開いてください。",
-    "details": {
-      "branch_name": "wi/my-branch",
-      "retry_after_ms": 10000
-    }
-  }
-}
-```
-
-`retry_after_ms` は固定値ではなく、`server.recovery.branch_ready_sec` と `server.recovery.branch_ready_poll_ms` に基づいて返されます。
-
----
-
 ### GET /branches/ready
 
-Check whether a branch is fully queryable before the UI opens or reopens it.
+Check whether a branch is queryable from a new session.
 
-`GET /head` の成功だけではなく、`USE db/branch` での table/schema 取得と `HASHOF(branch)` を含めて ready 判定します。
+**Query**
 
-**Query Parameters:**
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-
-**Response:**
+**Response**
 
 ```json
 { "ready": true }
 ```
 
-**Recoverable errors:**
+### POST /branches/create
 
-- `404 NOT_FOUND`
-- `409 BRANCH_NOT_READY`
+Create a writable work branch from `main`.
 
----
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/task-001"
+}
+```
+
+**Response**
+
+```json
+{ "branch_name": "wi/task-001" }
+```
+
+### POST /branches/delete
+
+Delete a work branch.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/task-001"
+}
+```
+
+**Response**
+
+```json
+{ "status": "ok" }
+```
 
 ### GET /head
 
-Get the current HEAD hash for a branch.
+Get the HEAD hash of a branch or revision.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
 
-**Response:**
+**Response**
 
 ```json
-{ "hash": "abc123def456..." }
+{ "hash": "abc123..." }
 ```
 
 ---
@@ -231,128 +245,127 @@ Get the current HEAD hash for a branch.
 
 ### GET /tables
 
-List user tables (excludes `dolt_*` system tables and `_cell_*` internal tables).
+List user tables visible on the current revision. Hidden `_memo_*`, `_cell_*`, and `dolt_*`
+tables are excluded.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
 
-**Response:**
+**Response**
 
 ```json
 [
   { "name": "items" },
-  { "name": "categories" }
+  { "name": "users" }
 ]
 ```
 
----
-
 ### GET /table/schema
 
-Get column definitions for a table.
+Get the schema for one table.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
+| `table` | Yes |
 
-**Response:**
+**Response**
 
 ```json
 {
   "table": "items",
   "columns": [
-    { "name": "id", "type": "int", "nullable": false, "primary_key": true },
-    { "name": "name", "type": "varchar(255)", "nullable": true, "primary_key": false }
+    { "name": "id", "type": "bigint", "nullable": false, "primary_key": true },
+    { "name": "status", "type": "varchar(32)", "nullable": true, "primary_key": false }
   ]
 }
 ```
 
----
-
 ### GET /table/rows
 
-Get paginated rows with optional filtering and sorting. Response is streamed row-by-row to prevent OOM on large tables.
+Get paginated table rows.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name |
-| `table` | Yes | | Table name |
-| `page` | No | `1` | Page number (must be > 0) |
-| `page_size` | No | `50` | Rows per page (1-500) |
-| `filter` | No | | Filter expression (JSON array of conditions) |
-| `sort` | No | | Sort expression |
+| Name | Required | Default | Notes |
+|------|----------|---------|-------|
+| `target_id` | Yes | | |
+| `db_name` | Yes | | |
+| `branch_name` | Yes | | |
+| `table` | Yes | | |
+| `page` | No | `1` | |
+| `page_size` | No | `50` | Max `1000` |
+| `all` | No | `false` | If `true`, forces page `1`, size `1000` |
+| `filter` | No | | JSON array of filter conditions |
+| `sort` | No | | Comma-separated columns, prefix `-` for DESC |
 
-**Filter Format:**
+`filter` example:
 
 ```json
 [
   { "column": "status", "op": "eq", "value": "active" },
-  { "column": "name", "op": "contains", "value": "test" }
+  { "column": "name", "op": "contains", "value": "foo" }
 ]
 ```
 
-Supported operators: `eq`, `contains`, `in`. Multiple conditions are combined with AND.
+Supported filter ops: `eq`, `neq`, `contains`, `startsWith`, `endsWith`, `blank`,
+`notBlank`, `in`.
 
-**Response:**
+**Response**
 
 ```json
 {
   "rows": [
-    { "id": 1, "name": "Item A", "status": "active" }
+    { "id": 1, "status": "active" }
   ],
   "page": 1,
   "page_size": 50,
-  "total_count": 128
+  "total_count": 1
 }
 ```
 
----
-
 ### GET /table/row
 
-Get a single row by primary key.
+Get a single row by primary key. `pk` is a JSON object so composite PKs are supported.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `pk` | Yes | Primary key value |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
+| `table` | Yes |
+| `pk` | Yes |
 
-**Response:**
+Example:
+
+`pk=%7B%22id%22%3A42%7D`
+
+**Response**
 
 ```json
-{ "id": 1, "name": "Item A", "status": "active" }
+{ "id": 42, "status": "active" }
 ```
 
 ---
 
-## Preview Operations
-
-All preview endpoints generate `CommitOp` arrays that can be applied to a draft without writing to the database. **ProtectedBranchGuard does not apply** (preview is read-only).
+## Preview
 
 ### POST /preview/clone
 
-Clone a template row with new primary key values. Supports single and composite PKs.
+Preview row clone operations without writing.
 
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -360,36 +373,13 @@ Clone a template row with new primary key values. Supports single and composite 
   "db_name": "psx_data",
   "branch_name": "wi/work-1",
   "table": "items",
-  "template_pk": { "region": "JP", "circuit_id": 100 },
-  "vary_column": "circuit_id",
-  "new_values": [201, 202, 203],
-  "change_column": "status",
-  "change_value": "draft"
+  "template_pk": { "id": 100 },
+  "vary_column": "id",
+  "new_values": [101, 102]
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `template_pk` | Yes | PK map of the row to clone from. All PK columns required for composite PK. |
-| `vary_column` | Conditional | PK column whose value differs in each cloned row. Required for composite PK; auto-detected for single PK. |
-| `new_values` | Yes | Array of new values for `vary_column` in each cloned row. |
-| `new_pks` | No | Deprecated alias for `new_values` (single-PK backward compat). |
-| `change_column` | No | Non-PK column to override uniformly in all cloned rows. |
-| `change_value` | No | Value for `change_column` (required if `change_column` is set). |
-
-**Validation:**
-- `template_pk` must not be empty
-- `new_values` (or `new_pks`) must not be empty
-- `vary_column` must be present in `template_pk`
-- For composite PK tables, `vary_column` is required
-- Collisions are detected at commit time via `PK_COLLISION` (not at preview time)
-- `change_column` must exist in the table
-
-**Response:**
+**Response**
 
 ```json
 {
@@ -397,137 +387,11 @@ Clone a template row with new primary key values. Supports single and composite 
     {
       "type": "insert",
       "table": "items",
-      "values": { "region": "JP", "circuit_id": 201, "name": "...", "status": "draft" }
+      "values": { "id": 101, "status": "draft" }
     }
   ],
   "warnings": [],
   "errors": []
-}
-```
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - Invalid parameters, vary_column not in template_pk, change_column not found
-- `404 NOT_FOUND` - Template row not found
-
----
-
-### POST /preview/batch_generate
-
-Similar to `/preview/clone` but supports per-row `change_column` values.
-
-**Request Body:**
-
-```json
-{
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "table": "items",
-  "template_pk": { "region": "JP", "circuit_id": 100 },
-  "vary_column": "circuit_id",
-  "new_values": [201, 202, 203],
-  "change_column": "status",
-  "change_values": ["draft", "active", "pending"]
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `template_pk` | Yes | PK map of the row to clone from |
-| `vary_column` | Conditional | PK column to vary (required for composite PK) |
-| `new_values` | Yes | Array of new values for `vary_column` |
-| `new_pks` | No | Deprecated alias for `new_values` |
-| `change_column` | No | Column to vary per row |
-| `change_values` | No | Per-row values for `change_column` (length must match `new_values`) |
-
-**Response:** Same format as `/preview/clone`.
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - change_values length mismatch, invalid column names, vary_column not in template_pk
-
----
-
-### POST /preview/bulk_update
-
-Generate update ops from TSV data. Supports composite PK tables.
-
-**Request Body:**
-
-```json
-{
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "table": "circuits",
-  "tsv_data": "region\tcircuit_id\tstatus\nJP\t100\tactive\nEU\t200\tdraft"
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `tsv_data` | Yes | Tab-separated values. Header row required. |
-
-**TSV Format:**
-- First row: column headers (tab-separated)
-- First N columns: must match the table's PK columns **in schema order** (N ≥ 1)
-- Remaining columns: update target columns (must not include PK columns)
-- PK columns are determined from the table schema at request time
-
-**Example (composite PK: region + circuit_id):**
-```
-region\tcircuit_id\tstatus\tname
-JP\t100\tactive\tSuzuka
-EU\t200\tdraft\tMonza
-```
-
-**Validation:**
-- TSV must have header and at least one data row
-- First N headers must match schema PK column names in order
-- Update columns must exist in the table and must not be PK columns
-- Duplicate PK combinations are not allowed within the TSV
-- All PK combinations must exist in the table (bulk_update is update-only)
-
-**Response:**
-
-```json
-{
-  "ops": [
-    {
-      "type": "update",
-      "table": "circuits",
-      "values": { "status": "active", "name": "Suzuka" },
-      "pk": { "region": "JP", "circuit_id": "100" }
-    }
-  ],
-  "warnings": [],
-  "errors": []
-}
-```
-
-### PreviewError Format
-
-When the `errors` array is non-empty, individual row errors are returned:
-
-```json
-{
-  "ops": [],
-  "warnings": ["Some PKs may have stale data"],
-  "errors": [
-    {
-      "row_index": 2,
-      "code": "INVALID_ARGUMENT",
-      "message": "Column 'xyz' does not exist",
-      "details": null
-    }
-  ]
 }
 ```
 
@@ -537,11 +401,9 @@ When the `errors` array is non-empty, individual row errors are returned:
 
 ### POST /commit
 
-Apply draft operations to a branch. **ProtectedBranchGuard applies.** **BranchLock applies.**
+Commit inserts, updates, and deletes to a work branch.
 
-Uses optimistic locking: `expected_head` must match the branch's current HEAD hash, otherwise `STALE_HEAD` is returned.
-
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -549,13 +411,8 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
   "db_name": "psx_data",
   "branch_name": "wi/work-1",
   "expected_head": "abc123...",
-  "commit_message": "Add new items",
+  "commit_message": "Update item status",
   "ops": [
-    {
-      "type": "insert",
-      "table": "items",
-      "values": { "id": 201, "name": "New Item", "status": "draft" }
-    },
     {
       "type": "update",
       "table": "items",
@@ -566,102 +423,31 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
 }
 ```
 
-**CommitOp Types:**
-
-| Type | Description | Fields |
-|------|-------------|--------|
-| `insert` | Insert a new row | `table`, `values` (must include PK) |
-| `update` | Update an existing row | `table`, `values` (changed columns only), `pk` |
-| `delete` | Delete an existing row | `table`, `pk` |
-
-**Validation:**
-- `ops` must not be empty (`400 INVALID_ARGUMENT` if empty array is sent)
-- For `update` and `delete`: `pk` must contain exactly one key-value pair
-- For `delete`: `values` field is ignored
-
-**Response:**
+**Response**
 
 ```json
 { "hash": "newcommithash123..." }
 ```
 
-**Errors:**
-- `400 INVALID_ARGUMENT` - Empty ops array, invalid table/column name, or empty pk
-- `403 FORBIDDEN` - ProtectedBranchGuard (write to main/audit)
-- `404 NOT_FOUND` - Row not found (update/delete with non-existent pk)
-- `409 STALE_HEAD` - expected_head mismatch
-- `423 BRANCH_LOCKED` - Branch has pending approval request
+### POST /merge/abort
 
----
+Abort a stuck merge state on a work branch.
 
-### POST /sync
-
-Merge main branch into work branch (two-stage merge). **ProtectedBranchGuard applies.** **BranchLock applies.**
-
-**Request Body:**
+**Request**
 
 ```json
 {
   "target_id": "production",
   "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "expected_head": "abc123..."
+  "branch_name": "wi/work-1"
 }
 ```
 
-**Response (success):**
+**Response**
 
 ```json
-{ "hash": "newmergehash123..." }
+{ "status": "ok" }
 ```
-
-**Errors:**
-- `403 FORBIDDEN` - ProtectedBranchGuard
-- `409 STALE_HEAD` - expected_head mismatch
-- `409 MERGE_CONFLICTS_PRESENT` - Data conflicts detected
-- `423 BRANCH_LOCKED` - Branch has pending approval request
-- `409 SCHEMA_CONFLICTS_PRESENT` - Schema conflicts detected (requires CLI intervention)
-- `409 CONSTRAINT_VIOLATIONS_PRESENT` - Constraint violations detected (requires CLI intervention)
-
----
-
-### POST /revert
-
-Revert a specific commit on a work branch. Creates a new revert commit. **ProtectedBranchGuard applies.** **BranchLock applies.**
-
-Uses optimistic locking: `expected_head` must match the branch's current HEAD hash.
-
-**Request Body:**
-
-```json
-{
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "expected_head": "abc123...",
-  "revert_hash": "def456..."
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `expected_head` | Yes | Expected HEAD hash for optimistic locking |
-| `revert_hash` | Yes | Hash of the commit to revert |
-
-**Response:**
-
-```json
-{ "hash": "newheadhash123..." }
-```
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - Empty `revert_hash`
-- `403 FORBIDDEN` - ProtectedBranchGuard (write to main/audit)
-- `409 STALE_HEAD` - expected_head mismatch
-- `423 BRANCH_LOCKED` - Branch has pending approval request
 
 ---
 
@@ -669,248 +455,203 @@ Uses optimistic locking: `expected_head` must match the branch's current HEAD ha
 
 ### GET /diff/table
 
-Get row-level diff between two refs for a table. Supports pagination.
+Get row-level diff for one table.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name (connection context) |
-| `table` | Yes | | Table name |
-| `from_ref` | Yes | | Source ref (e.g., `main`) |
-| `to_ref` | Yes | | Target ref (e.g., `wi/work-1`) |
-| `mode` | No | `two_dot` | `two_dot` or `three_dot` |
-| `skinny` | No | `false` | If `true`, return PK-only diffs |
-| `diff_type` | No | | Filter by type: `added`, `modified`, or `removed` |
-| `page` | No | `1` | Page number (must be > 0) |
-| `page_size` | No | `50` | Rows per page (1-200) |
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `table` | Yes | |
+| `from_ref` | Yes | |
+| `to_ref` | Yes | |
+| `mode` | No | `two_dot` |
+| `skinny` | No | `false` |
+| `diff_type` | No | |
+| `page` | No | `1` |
+| `page_size` | No | `50` |
 
-**Response:**
+**Response**
 
 ```json
 {
   "rows": [
     {
-      "diff_type": "added",
-      "from": {},
-      "to": { "id": 201, "name": "New Item" }
-    },
-    {
       "diff_type": "modified",
       "from": { "id": 100, "status": "draft" },
       "to": { "id": 100, "status": "active" }
-    },
-    {
-      "diff_type": "removed",
-      "from": { "id": 50, "name": "Deleted Item" },
-      "to": {}
     }
   ],
-  "total_count": 42,
+  "total_count": 1,
   "page": 1,
   "page_size": 50
 }
 ```
 
----
+### GET /diff/summary/light
 
-### GET /diff/export-zip
+Get a lightweight changed-table summary.
 
-Export all diff rows across all tables as a ZIP archive containing per-table, per-diff-type CSV files.
+**Query**
 
-**Query Parameters:**
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `from_ref` | No | `main` |
+| `to_ref` | No | `branch_name` |
+| `mode` | No | `three_dot` |
 
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name (connection context) |
-| `from_ref` | Yes | | Source ref |
-| `to_ref` | Yes | | Target ref |
-| `mode` | No | `three_dot` | `two_dot` or `three_dot` |
-
-**Response:**
-
-Binary ZIP file with `Content-Type: application/zip` and `Content-Disposition: attachment; filename="diff-{from}-{to}.zip"`.
-
-**ZIP contents:**
-
-| File | Contents |
-|------|----------|
-| `{table}_insert.csv` | Added rows (new values only) |
-| `{table}_update.csv` | Modified rows (new values only; old values not included) |
-| `{table}_delete.csv` | Removed rows (old values) |
-
-Files for unchanged tables or empty diff types are omitted.
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - Missing required parameters or invalid ref format
-
----
-
-### GET /history/commits
-
-Get commit history for a branch. Supports filtering by commit type.
-
-**Query Parameters:**
-
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name |
-| `page` | No | `1` | Page number (must be > 0) |
-| `page_size` | No | `20` | Commits per page (1-100) |
-| `filter` | No | `all` | See filter values below |
-| `keyword` | No | | Substring match on commit message (e.g., `TR-9999`) |
-| `from_date` | No | | Start date inclusive (`YYYY-MM-DD`) |
-| `to_date` | No | | End date inclusive (`YYYY-MM-DD`) |
-
-**Filter Values:**
-
-| Value | Description |
-|-------|-------------|
-| `all` | All commits (default) |
-| `merges_only` | Merge commits only (useful for main branch) |
-| `exclude_auto_merge` | Exclude auto-sync merge commits (useful for work branches) |
-| `exclude_comments` | Exclude `[comment]`-prefixed commits created by the cell comment feature |
-| `exclude_auto_merge_and_comments` | Combine `exclude_auto_merge` + `exclude_comments` (default filter in the HistoryTab UI) |
-
-**Response:**
-
-```json
-[
-  {
-    "hash": "abc123...",
-    "author": "user",
-    "message": "Add new items",
-    "timestamp": "2026-02-12T10:30:00Z"
-  }
-]
-```
-
----
-
-### GET /history/row
-
-Get change history for a specific row.
-
-**Query Parameters:**
-
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name |
-| `table` | Yes | | Table name |
-| `pk` | Yes | | Primary key value |
-| `limit` | No | `20` | Max entries (1-100) |
-
-**Response:**
-
-Array of historical row states with commit metadata.
-
----
-
-## Conflict Resolution
-
-### GET /conflicts
-
-Get conflict summary for a branch.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-
-**Response:**
-
-```json
-[
-  {
-    "table": "items",
-    "data_conflicts": 3,
-    "schema_conflicts": 0
-  }
-]
-```
-
-> **Note:** `data_conflicts` and `schema_conflicts` correspond to Dolt v1.x `DOLT_PREVIEW_MERGE_CONFLICTS_SUMMARY` columns `num_data_conflicts` and `num_schema_conflicts`. There is no `constraint_violations` field.
-
----
-
-### GET /conflicts/table
-
-Get detailed conflicts for a specific table.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-
-**Response:**
-
-```json
-[
-  {
-    "base": { "id": 100, "status": "original" },
-    "ours": { "id": 100, "status": "our-change" },
-    "theirs": { "id": 100, "status": "their-change" }
-  }
-]
-```
-
----
-
-### POST /conflicts/resolve
-
-Resolve all conflicts in a table using a strategy. **ProtectedBranchGuard applies.**
-
-**Request Body:**
+**Response**
 
 ```json
 {
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "expected_head": "abc123...",
-  "table": "items",
-  "strategy": "ours"
+  "changed_table_count": 1,
+  "tables": [
+    {
+      "table": "items",
+      "has_data_change": true,
+      "has_schema_change": false
+    }
+  ]
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `strategy` | Yes | `ours` (keep work branch changes) or `theirs` (accept main changes) |
+### GET /diff/summary
 
-**Response:**
+Get per-table row-count diff summary.
+
+**Query**
+
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `from_ref` | No | `main` |
+| `to_ref` | No | `branch_name` |
+| `mode` | No | `three_dot` |
+
+**Response**
 
 ```json
-{ "hash": "newcommithash123..." }
+{
+  "entries": [
+    { "table": "items", "added": 1, "modified": 2, "removed": 0 }
+  ]
+}
+```
+
+### GET /diff/export-zip
+
+Export all table diffs as ZIP files split by table and diff type.
+
+**Query**
+
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `from_ref` | Yes | |
+| `to_ref` | Yes | |
+| `mode` | No | `three_dot` |
+
+**Response**
+
+Binary ZIP with `Content-Type: application/zip`.
+
+### GET /history/commits
+
+Get approval history commits for the selected revision.
+
+Primary truth is the footer-bearing merge commit on `main`. `merged/*` tags are used
+only as a legacy adapter for pre-cutover history that has no footer.
+
+**Query**
+
+| Name | Required | Default | Notes |
+|------|----------|---------|-------|
+| `target_id` | Yes | | |
+| `db_name` | Yes | | |
+| `branch_name` | Yes | | Can be `main`, a tag, or a commit hash used as revision context |
+| `page` | No | `1` | |
+| `page_size` | No | `20` | Max `100` |
+| `keyword` | No | | |
+| `from_date` | No | | `YYYY-MM-DD` inclusive |
+| `to_date` | No | | `YYYY-MM-DD` inclusive |
+| `search_field` | No | `message` | `message` or `branch` |
+| `filter_table` | No | | Record-level filter |
+| `filter_pk` | No | | JSON PK object for `filter_table` |
+
+**Response**
+
+```json
+{
+  "commits": [
+    {
+      "hash": "abc123...",
+      "author": "user",
+      "message": "承認マージ: アイテム更新",
+      "timestamp": "2026-03-11T10:30:00Z",
+      "merge_branch": "wi/work-1"
+    }
+  ],
+  "read_integrity": "complete"
+}
+```
+
+**Integrity behavior**
+
+- Invalid approval footers do not get skipped. The endpoint fails loud with `500 INTERNAL`.
+- Missing `merged/*` tags do not break post-cutover history if the main merge footer exists.
+
+### GET /history/row
+
+Get historical snapshots for a specific record.
+
+**Query**
+
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `table` | Yes | |
+| `pk` | Yes | |
+| `limit` | No | `30` |
+
+**Response**
+
+```json
+{
+  "snapshots": [
+    {
+      "commit_hash": "abc123...",
+      "commit_date": "2026-03-11T10:30:00Z",
+      "committer": "user",
+      "row": { "id": 42, "status": "active" }
+    }
+  ]
+}
 ```
 
 ---
 
-## Request / Approval Workflow
+## Request / Approval
 
 ### POST /request/submit
 
-Submit a work branch for review. **ProtectedBranchGuard applies.**
+Submit a work branch for approval.
 
-**Auto-sync behavior**: Before creating the `req/` tag, this endpoint automatically merges `main` into the work branch (`DOLT_MERGE('main')`). If the merge produces conflicts, `409 MERGE_CONFLICTS_PRESENT` is returned and no tag is created. The caller must resolve conflicts and retry.
+Before recording the request tag, the backend performs the existing auto-sync flow
+from `main` into the work branch. If merge preview or merge execution fails, no request
+is recorded.
 
-Creates a Dolt tag with prefix `req/` containing the submission metadata.
-
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -922,38 +663,35 @@ Creates a Dolt tag with prefix `req/` containing the submission metadata.
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `expected_head` | Yes | Expected HEAD hash for optimistic locking |
-| `summary_ja` | Yes | Change summary in Japanese |
-
-**Response:**
+**Response**
 
 ```json
 {
   "request_id": "req/work-1",
   "submitted_main_hash": "mainhead123...",
-  "submitted_work_hash": "workhead123..."
+  "submitted_work_hash": "workhead123...",
+  "outcome": "completed",
+  "message": "承認を申請しました",
+  "completion": {
+    "request_recorded": true,
+    "lock_observable": true,
+    "work_head_synced": true
+  }
 }
 ```
 
----
-
 ### GET /requests
 
-List pending approval requests.
+List pending requests.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
 
-**Response:**
+**Response**
 
 ```json
 [
@@ -963,42 +701,43 @@ List pending approval requests.
     "submitted_main_hash": "mainhead123...",
     "submitted_work_hash": "workhead123...",
     "summary_ja": "アイテムのステータスを更新しました",
-    "submitted_at": "2026-02-12T10:30:00Z"
+    "submitted_at": "2026-03-11T10:30:00Z"
   }
 ]
 ```
 
----
+If a legacy `req/*` message JSON is unreadable, the backend still lists the request
+using recoverable fields from the tag name and hash.
 
 ### GET /request
 
-Get a specific request's details.
+Get one request summary.
 
-**Query Parameters:**
+**Query**
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `request_id` | Yes | Request ID |
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `request_id` | Yes |
 
-**Response:** Same structure as individual item in `/requests`.
+**Response**
 
----
+Same shape as one item from `GET /requests`.
 
 ### POST /request/approve
 
-Approve a request and merge into main via **3-way merge** (Dolt cell-level merge).
+Approve a request and merge the work branch into `main`.
 
-On success:
-- Creates `merged/{item}/{round}` audit tag
-- Deletes the pending request tag (`req/{item}`)
-- Advances the existing work branch (`wi/{item}`) to the new main HEAD
-- Returns the new main HEAD hash, the active work branch, archive tag, and any warnings
+Current contract:
 
-**No freeze gate**: multiple branches can be approved concurrently. Dolt's cell-level 3-way merge automatically resolves non-overlapping changes. Only same-cell conflicts cause an abort.
+- The canonical audit truth is the merge commit on `main` with an approval footer.
+- `merged/*` archive tags are a secondary index only.
+- `outcome=completed` means main merge succeeded and postconditions were confirmed.
+- `outcome=retry_required` means main merge succeeded, but request cleanup or work-branch
+  re-open readiness could not be confirmed.
 
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -1009,14 +748,7 @@ On success:
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `request_id` | Yes | Request ID to approve |
-| `merge_message_ja` | Yes | Merge commit message |
-
-**Response:**
+**Response**
 
 ```json
 {
@@ -1024,33 +756,35 @@ On success:
   "active_branch": "wi/work-1",
   "active_branch_advanced": true,
   "archive_tag": "merged/work-1/01",
-  "warnings": []
+  "outcome": "completed",
+  "message": "main へのマージが完了しました",
+  "completion": {
+    "main_merged": true,
+    "audit_recorded": true,
+    "request_cleared": true,
+    "resume_branch_ready": true,
+    "audit_indexed": true
+  }
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `hash` | New main HEAD hash after merge |
-| `active_branch` | Existing work branch name retained for subsequent work |
-| `active_branch_advanced` | Whether the work branch was successfully advanced to the new main HEAD |
-| `archive_tag` | Audit tag created for this approved merge (e.g., `merged/foo/01`) |
-| `warnings` | Non-fatal follow-up issues, such as branch realignment failure |
+Retry example fields:
 
-**Errors:**
-
-| Code | HTTP | Condition |
-|------|------|-----------|
-| `PRECONDITION_FAILED` | 412 | Work branch HEAD has changed since submission |
-| `MERGE_CONFLICTS_PRESENT` | 409 | Same-cell conflict detected; merge was aborted, branch is intact |
-| `NOT_FOUND` | 404 | Request ID not found |
-
----
+```json
+{
+  "outcome": "retry_required",
+  "retry_reason": "request_cleanup_failed",
+  "retry_actions": [
+    { "action": "refresh_requests", "label": "Inbox を更新する" }
+  ]
+}
+```
 
 ### POST /request/reject
 
-Reject a request. Removes the `req/` tag. **The work branch is preserved** so the assignee can make corrections and re-submit.
+Reject a request and delete the `req/*` tag. The work branch is preserved.
 
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -1060,319 +794,89 @@ Reject a request. Removes the `req/` tag. **The work branch is preserved** so th
 }
 ```
 
-**Response:**
+**Response**
 
 ```json
-{ "status": "rejected" }
-```
-
----
-
-## Version History
-
-### GET /versions
-
-List all approved merge versions, derived from `merged/*` Dolt tags. Used by the History tab to populate the version selector for comparing two points in time.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `project` | No | Filter by project name (e.g., `ProjectA`) |
-
-**Response:**
-
-```json
-[
-  {
-    "tag_name": "merged/ProjectA/01",
-    "tag_hash": "abc123...",
-    "message": "承認マージ: ProjectA round 1"
-  },
-  {
-    "tag_name": "merged/ProjectB/01",
-    "tag_hash": "def456...",
-    "message": "承認マージ: ProjectB round 1"
+{
+  "status": "rejected",
+  "outcome": "completed",
+  "message": "申請を却下しました",
+  "completion": {
+    "request_cleared": true
   }
-]
-```
-
-Returns an empty array `[]` if no merged versions exist.
-
----
-
-### GET /diff/summary
-
-Get a DB-wide change summary across all tables between two refs. Used by the History tab and approver inbox to show high-level impact before drilling into row-level diffs.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `from_ref` | Yes | Source ref (commit hash, tag name, or branch name) |
-| `to_ref` | Yes | Target ref |
-
-**Query Parameters (full list):**
-
-| Name | Required | Default | Description |
-|------|----------|---------|-------------|
-| `target_id` | Yes | | Target ID |
-| `db_name` | Yes | | Database name |
-| `branch_name` | Yes | | Branch name (connection context) |
-| `from_ref` | No | `main` | Source ref |
-| `to_ref` | No | `branch_name` | Target ref |
-| `mode` | No | `three_dot` | `two_dot` or `three_dot` |
-
-**Response:**
-
-```json
-{
-  "entries": [
-    { "table": "Test1", "added": 3, "modified": 5, "removed": 1 },
-    { "table": "Test2", "added": 0, "modified": 2, "removed": 0 }
-  ]
-}
-```
-
-Returns an `entries` array with one entry per table. Tables with zero changes are included if they appear in the diff. Returns `{"entries": []}` if no changes.
-
----
-
-## Cell Comments
-
-Stores per-cell notes (table + PK + column) in a `_cell_comments` Dolt table on the branch. Each add/delete operation creates an immediate Dolt commit with the `[comment]` prefix. UUID primary keys prevent merge conflicts between parallel branches.
-
-**Comment object:**
-
-```json
-{
-  "comment_id": "550e8400-e29b-41d4-a716-446655440000",
-  "table_name": "items",
-  "pk_value": "42",
-  "column_name": "price",
-  "comment_text": "REQ-123: 帯域制限を200Mbpsに変更",
-  "created_at": "2026-02-20T14:30:00Z"
 }
 ```
 
 ---
 
-### GET /comments
+## Memo
 
-Get all comments for a specific cell (table + PK + column combination), sorted oldest-first.
+### GET /memo/map
 
-**Query Parameters:**
+Return the set of `pk:column` cells that have memo text for a table.
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `pk` | Yes | Primary key value |
-| `column` | Yes | Column name |
+**Query**
 
-**Response:**
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
+| `table` | Yes |
 
-```json
-[
-  {
-    "comment_id": "550e8400-...",
-    "table_name": "items",
-    "pk_value": "42",
-    "column_name": "price",
-    "comment_text": "初期設定値",
-    "created_at": "2026-02-15T09:15:00Z"
-  }
-]
-```
-
-Returns `[]` if no comments exist or if the `_cell_comments` table does not exist yet.
-
----
-
-### GET /comments/map
-
-Get the set of cells that have at least one comment for a given table. Used by the frontend to render amber triangle markers on commented cells.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-
-**Response:**
+**Response**
 
 ```json
 { "cells": ["42:price", "55:name"] }
 ```
 
-Each entry is formatted as `"{pk_value}:{column_name}"`. Returns `{"cells": []}` if no comments exist.
+If the hidden memo table does not exist, the response is `{"cells": []}`.
 
----
+### GET /memo
 
-### POST /comments
+Get the memo for one cell.
 
-Add a new comment to a cell. **ProtectedBranchGuard applies.**
+**Query**
 
-Creates an immediate Dolt commit with the message `[comment] {table}/{pk}/{column}`.
+| Name | Required |
+|------|----------|
+| `target_id` | Yes |
+| `db_name` | Yes |
+| `branch_name` | Yes |
+| `table` | Yes |
+| `pk` | Yes |
+| `column` | Yes |
 
-**Request Body:**
+**Response**
 
 ```json
 {
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "table_name": "items",
   "pk_value": "42",
   "column_name": "price",
-  "comment_text": "REQ-123: 帯域制限を200Mbpsに変更"
+  "memo_text": "REQ-123",
+  "updated_at": "2026-03-11T10:30:00"
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table_name` | Yes | Table name (validated identifier) |
-| `pk_value` | Yes | Primary key value as string |
-| `column_name` | Yes | Column name (validated identifier) |
-| `comment_text` | Yes | Comment content (1–5000 characters) |
-
-**Response:**
-
-```json
-{ "comment_id": "550e8400-e29b-41d4-a716-446655440000" }
-```
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - Empty or oversized `comment_text`, invalid table/column name
-- `403 FORBIDDEN` - ProtectedBranchGuard (write to main)
-
-**Note:** Row existence is not validated. Comments can be written to any table/PK/column combination. If the referenced row is later deleted, the comment is automatically cascade-deleted.
-
----
-
-### POST /comments/delete
-
-Delete a comment by ID. **ProtectedBranchGuard applies.**
-
-Creates an immediate Dolt commit with message `[comment] deleted`. Deletion is idempotent — if the comment ID does not exist, the operation succeeds with 0 rows deleted.
-
-**Request Body:**
-
-```json
-{
-  "target_id": "production",
-  "db_name": "psx_data",
-  "branch_name": "wi/work-1",
-  "comment_id": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-**Response:**
-
-```json
-{ "status": "deleted" }
-```
-
-**Errors:**
-- `403 FORBIDDEN` - ProtectedBranchGuard (write to main)
-
----
-
-### GET /comments/search
-
-Search comments by keyword within a branch (partial match, case-sensitive `LIKE`). Returns results sorted newest-first.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `q` | Yes | Search keyword (non-empty) |
-
-**Response:**
-
-Array of comment objects sorted by `created_at DESC`.
-
-```json
-[
-  {
-    "comment_id": "...",
-    "table_name": "items",
-    "pk_value": "42",
-    "column_name": "price",
-    "comment_text": "REQ-123: 帯域制限を200Mbpsに変更",
-    "created_at": "2026-02-20T14:30:00Z"
-  }
-]
-```
-
-Returns `[]` if no matches or if `_cell_comments` does not exist.
-
-**Errors:**
-- `400 INVALID_ARGUMENT` - Empty `q` parameter
-
----
-
-### GET /comments/for-pks
-
-Batch-fetch all comments for a set of primary key values in a single table. Used by `DiffCommentsPanel` to display comments for changed rows in a diff view.
-
-**Query Parameters:**
-
-| Name | Required | Description |
-|------|----------|-------------|
-| `target_id` | Yes | Target ID |
-| `db_name` | Yes | Database name |
-| `branch_name` | Yes | Branch name |
-| `table` | Yes | Table name |
-| `pks` | Yes | Comma-separated PK values (e.g., `42,55,99`). Empty string returns `[]`. |
-
-**Response:**
-
-Array of comment objects for the given PKs (all columns), sorted by `pk_value`, then `column_name`, then `created_at`.
-
-Returns `[]` if no comments exist or `pks` is empty.
+If no memo exists, the endpoint still returns `200 OK` with `memo_text: ""`.
 
 ---
 
 ## Cross-DB Copy
 
-Cross-DB copy imports committed data from a protected source branch into a destination work branch.
+### Source Ref Policy
 
-### Source Branch Policy
+Cross-copy source refs are fixed to protected truth only.
 
-- `source_branch` is still required on the wire.
+- `source_branch` is required on the wire.
 - Allowed values are only `main` and `audit`.
-- `wi/*` or any other work branch returns:
-
-```json
-{
-  "error": {
-    "code": "INVALID_ARGUMENT",
-    "message": "コピー元ブランチは main または audit のみです"
-  }
-}
-```
+- Any `wi/*` or other ref returns `400 INVALID_ARGUMENT`.
 
 ### POST /cross-copy/preview
 
-Preview selected rows from `source_db/source_branch` into `dest_db/dest_branch`.
+Preview row copy from `source_db/source_branch` into `dest_db/dest_branch`.
 
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -1386,28 +890,68 @@ Preview selected rows from `source_db/source_branch` into `dest_db/dest_branch`.
 }
 ```
 
-**Notes:**
+**Response**
 
-- `dest_branch` must be a writable work branch.
-- The preview is read-only and reports `insert` / `update` outcomes plus schema warnings.
+```json
+{
+  "shared_columns": ["id", "name"],
+  "source_only_columns": [],
+  "dest_only_columns": ["updated_at"],
+  "warnings": [],
+  "rows": [
+    {
+      "source_row": { "id": 1, "name": "Alice" },
+      "dest_row": { "id": 1, "name": "Alicia" },
+      "action": "update"
+    }
+  ],
+  "expand_columns": []
+}
+```
+
+If `expand_columns` is non-empty, normal flow must stop and schema prep is required.
+Use the admin lane below to widen destination `main` before retrying copy.
 
 ### POST /cross-copy/rows
 
-Copy selected rows from `source_db/source_branch` into `dest_db/dest_branch`.
+Copy selected rows into an existing destination work branch.
 
-**Request Body:** same shape as `/cross-copy/preview`
+**Request**
 
-**Notes:**
+Same shape as `POST /cross-copy/preview`.
 
-- `source_branch` must be `main` or `audit`.
-- `dest_branch` must not be `main` or `audit`.
-- The destination branch receives a normal commit and stays reusable for later work.
+**Response**
+
+```json
+{
+  "hash": "abc123...",
+  "inserted": 3,
+  "updated": 1,
+  "total": 4,
+  "outcome": "completed",
+  "message": "他DBへ行をコピーしました",
+  "completion": {
+    "destination_committed": true,
+    "destination_branch_ready": true,
+    "protected_refs_clean": true
+  }
+}
+```
+
+Behavior:
+
+- If preview would require schema widening, the endpoint fails before writes with
+  `412 PRECONDITION_FAILED` and `details.expand_columns`.
+- Schema prep for this case is handled by `POST /cross-copy/admin/prepare-rows`.
+- `retry_required` is used when the destination commit may exist but branch readiness
+  could not be confirmed.
+- Normal flow does not mutate `main` or other protected refs.
 
 ### POST /cross-copy/table
 
-Copy the full source table into a long-lived import branch in the destination DB.
+Copy a full table into a destination import branch.
 
-**Request Body:**
+**Request**
 
 ```json
 {
@@ -1419,7 +963,7 @@ Copy the full source table into a long-lived import branch in the destination DB
 }
 ```
 
-**Response:**
+**Response**
 
 ```json
 {
@@ -1428,55 +972,306 @@ Copy the full source table into a long-lived import branch in the destination DB
   "row_count": 123,
   "shared_columns": ["id", "name"],
   "source_only_columns": [],
-  "dest_only_columns": []
+  "dest_only_columns": [],
+  "outcome": "completed",
+  "message": "他DBへテーブルをコピーしました",
+  "completion": {
+    "destination_committed": true,
+    "destination_branch_ready": true,
+    "protected_refs_clean": true
+  }
 }
 ```
 
-**Notes:**
+Behavior:
 
-- `source_branch` must be `main` or `audit`.
-- The destination branch is created as `wi/import-<sourceDB>-<table>`.
-- Re-running the same copy returns `409 BRANCH_EXISTS` so the UI can reopen the existing import branch.
+- Import branch name is `wi/import-<source_db>-<table>`.
+- If the branch already exists, the endpoint returns `409 BRANCH_EXISTS`.
+- If schema widening is required, the endpoint returns `412 PRECONDITION_FAILED`.
+- Schema prep for this case is handled by `POST /cross-copy/admin/prepare-table`.
+- Stale deterministic import branches can be cleared by
+  `POST /cross-copy/admin/cleanup-import`.
+- If import-lane setup fails and cleanup succeeds, the response is `outcome=failed`.
+- If cleanup fails, or commit/readiness is uncertain, the response is `outcome=retry_required`.
+
+### POST /cross-copy/admin/prepare-rows
+
+Prepare destination `main` for a row copy, then sync `main` into the destination
+`wi/*` branch so the next normal copy can proceed.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "source_db": "source_db",
+  "source_branch": "main",
+  "source_table": "users",
+  "dest_db": "dest_db",
+  "dest_branch": "wi/work-1"
+}
+```
+
+**Response**
+
+```json
+{
+  "main_hash": "abc123...",
+  "branch_hash": "def456...",
+  "prepared_columns": [
+    {
+      "name": "name",
+      "src_type": "varchar(255)",
+      "dst_type": "varchar(50)"
+    }
+  ],
+  "overwritten_tables": ["users"],
+  "outcome": "completed",
+  "message": "cross-copy 用の schema prep を完了しました",
+  "completion": {
+    "protected_schema_prepared": true,
+    "destination_branch_synced": true,
+    "destination_branch_ready": true,
+    "protected_refs_clean": true
+  }
+}
+```
+
+Behavior:
+
+- Schema comparison is against destination `main`, not destination `dest_branch`.
+- If destination `main` was already wide enough, the endpoint may return an empty
+  `prepared_columns` list and still sync `main -> dest_branch`.
+- If protected schema prep committed but branch sync or readiness is uncertain, the
+  endpoint returns `outcome=retry_required` instead of a raw blocking error.
+- Maintenance commits are operational only. They do not write approval footers and do
+  not affect MergeLog / approval history truth.
+
+### POST /cross-copy/admin/prepare-table
+
+Prepare destination `main` for a full-table copy. This endpoint does not create the
+import branch.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "source_db": "source_db",
+  "source_branch": "main",
+  "source_table": "users",
+  "dest_db": "dest_db"
+}
+```
+
+**Response**
+
+```json
+{
+  "main_hash": "abc123...",
+  "prepared_columns": [
+    {
+      "name": "name",
+      "src_type": "varchar(255)",
+      "dst_type": "varchar(50)"
+    }
+  ],
+  "outcome": "completed",
+  "message": "table copy 用の schema prep を完了しました",
+  "completion": {
+    "protected_schema_prepared": true,
+    "protected_refs_clean": true
+  }
+}
+```
+
+Behavior:
+
+- This endpoint only widens destination `main`. Users must retry
+  `POST /cross-copy/table` explicitly after it succeeds.
+- `prepared_columns` reports the widening work applied to destination `main`.
+- If the protected maintenance commit becomes ambiguous, the endpoint returns
+  `outcome=retry_required`.
+
+### POST /cross-copy/admin/cleanup-import
+
+Delete a deterministic stale import branch before retrying a full-table copy.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "dest_db": "dest_db",
+  "branch_name": "wi/import-source_db-users"
+}
+```
+
+**Response**
+
+```json
+{
+  "branch_name": "wi/import-source_db-users",
+  "outcome": "completed",
+  "message": "stale import branch を掃除しました",
+  "completion": {
+    "destination_branch_removed": true,
+    "protected_refs_clean": true
+  }
+}
+```
+
+Behavior:
+
+- Only system-owned deterministic import branches matching `wi/import-*` are accepted.
+- Missing branches are treated as `outcome=completed` no-op.
+- If delete verification is ambiguous, the endpoint returns `outcome=retry_required`
+  with `retry_reason=destination_branch_cleanup_failed`.
+
+### Cross-Copy Admin Result Keys
+
+Stable completion keys used by the admin lane:
+
+- `protected_schema_prepared`
+- `destination_branch_synced`
+- `destination_branch_ready`
+- `destination_branch_removed`
+- `protected_refs_clean`
+
+Stable retry reasons currently used by the admin lane:
+
+- `destination_branch_sync_requires_manual_recovery`
+- `destination_branch_not_ready`
+- `destination_branch_sync_uncertain`
+- `protected_schema_commit_uncertain`
+- `destination_branch_cleanup_failed`
 
 ---
 
-## Health Check
+## CSV
+
+### POST /csv/preview
+
+Preview CSV-style bulk apply against a work branch.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/work-1",
+  "table": "items",
+  "rows": [
+    { "id": 1, "status": "active" }
+  ]
+}
+```
+
+**Response**
+
+```json
+{
+  "inserts": 1,
+  "updates": 0,
+  "skips": 0,
+  "errors": 0,
+  "sample_diffs": [
+    {
+      "action": "insert",
+      "row": { "id": 1, "status": "active" }
+    }
+  ]
+}
+```
+
+### POST /csv/apply
+
+Apply CSV rows to a work branch and create one commit.
+
+**Request**
+
+```json
+{
+  "target_id": "production",
+  "db_name": "psx_data",
+  "branch_name": "wi/work-1",
+  "table": "items",
+  "expected_head": "abc123...",
+  "commit_message": "[CSV] items: 一括更新",
+  "rows": [
+    { "id": 1, "status": "active" }
+  ]
+}
+```
+
+**Response**
+
+```json
+{
+  "hash": "abc123...",
+  "outcome": "completed",
+  "message": "CSV を適用しました",
+  "completion": {
+    "destination_committed": true
+  }
+}
+```
+
+---
+
+## Search
+
+### GET /search
+
+Search across table values and, optionally, memo text.
+
+**Query**
+
+| Name | Required | Default |
+|------|----------|---------|
+| `target_id` | Yes | |
+| `db_name` | Yes | |
+| `branch_name` | Yes | |
+| `keyword` | Yes | |
+| `include_memo` | No | `false` |
+| `limit` | No | `100` |
+
+**Response**
+
+```json
+{
+  "results": [
+    {
+      "table": "items",
+      "pk": "42",
+      "column": "status",
+      "value": "active",
+      "match_type": "value"
+    }
+  ],
+  "total": 1,
+  "read_integrity": "complete"
+}
+```
+
+Behavior:
+
+- Empty `keyword` returns `200 OK` with `results: []`, `total: 0`, and `read_integrity: "complete"`.
+- Partial reads are not silently dropped. Table discovery, column discovery, row scans,
+  memo scans, and iterator errors all fail loud with `500 INTERNAL`.
+- Search timeout returns `408 PRECONDITION_FAILED` with a retry hint in `details.timeout`.
+
+---
+
+## Health
 
 ### GET /health
 
-> **Note:** This endpoint is at the root path `/health`, **not** under `/api/v1/health`.
+This endpoint is outside `/api/v1`.
 
-**Response:**
+**Response**
 
 ```json
 { "status": "ok" }
 ```
-
----
-
-## UI State Machine
-
-The frontend manages a state machine with the following states:
-
-| State | Description | Allowed Actions |
-|-------|-------------|-----------------|
-| `Idle` | Ready, no pending changes | Edit, Sync, Submit Request |
-| `DraftEditing` | Unsaved draft operations in sessionStorage | Edit, Commit |
-| `Previewing` | Preview modal active | Apply/Cancel preview |
-| `Committing` | Commit in progress | Wait |
-| `Syncing` | Sync in progress | Wait |
-| `MergeConflictsPresent` | Data conflicts after sync | Resolve conflicts |
-| `SchemaConflictDetected` | Schema conflicts after sync | CLI intervention required |
-| `ConstraintViolationDetected` | Constraint violations after sync | CLI intervention required |
-| `StaleHeadDetected` | HEAD hash mismatch | Refresh HEAD / recovery reload |
-
-**Orthogonal Counter:** `requestCount` (number) - count of pending approval requests. Auto-fetched on app load and context switch. `0` means none pending.
-
-### UI Guards
-
-- **ProtectedBranchGuard**: All editing, clone, bulk update, commit, sync, and submit operations are disabled on protected branches (`main` and `audit`).
-- **Protected Cross-DB Copy**: Cross-DB row/table copy is available from protected branches as a read-only import flow into destination `wi/*` branches.
-- **BranchLockGuard**: Commit, Sync, and Revert operations are blocked while a pending approval request (`req/*` tag) exists for the branch.
-- **DraftGuard**: Sync and Submit Request are disabled while draft operations exist.
-- **ConflictGuard**: All editing, clone, bulk update, commit, sync, and submit are disabled while in any conflict state (`MergeConflictsPresent`, `SchemaConflictDetected`, `ConstraintViolationDetected`).
-- **StaleHeadGuard**: Commit is disabled when HEAD is stale. User must refresh HEAD first.

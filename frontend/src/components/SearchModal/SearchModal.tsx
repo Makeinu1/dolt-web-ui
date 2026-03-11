@@ -3,6 +3,7 @@ import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { SearchResult } from "../../types/api";
+import { readIntegrityMessage } from "../../utils/apiResult";
 
 interface SearchModalProps {
   onClose: () => void;
@@ -27,6 +28,12 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
     setError(null);
     try {
       const res = await api.search(targetId, dbName, branchName, kw, includeMemo, 100);
+      const integrityError = readIntegrityMessage(res, "検索結果の整合性を確認できませんでした");
+      if (integrityError) {
+        setResults(null);
+        setError(integrityError);
+        return;
+      }
       setResults(res.results);
       setSearchedKeyword(kw);
     } catch (err) {

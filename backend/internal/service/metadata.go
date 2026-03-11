@@ -30,9 +30,9 @@ func (s *Service) ListDatabases(targetID string) ([]model.DatabaseResponse, erro
 }
 
 func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]model.BranchResponse, error) {
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -50,17 +50,25 @@ func (s *Service) ListBranches(ctx context.Context, targetID, dbName string) ([]
 		}
 		branches = append(branches, b)
 	}
-	return branches, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.filterAllowedBranches(targetID, dbName, branches)
 }
 
 func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchRequest) error {
-	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
+	if err := s.ensureAllowedWorkBranchWrite(req.TargetID, req.DBName, req.BranchName); err != nil {
+		return err
+	}
+
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
-	// ConnDB already sets USE db/main, so single-arg form creates from main HEAD.
+	// The protected maintenance session is checked out on main, so single-arg
+	// DOLT_BRANCH creates from main HEAD.
 	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH(?)", req.BranchName)
 	if err != nil {
 		return classifyBranchCreateError(ctx, conn, req.BranchName, err)
@@ -68,9 +76,9 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 
 	// Verify the branch is queryable on a fresh connection (USE db/branch).
 	// Dolt may need a moment to propagate the branch across connections.
-	queryability := s.verifyBranchQueryable(ctx, req.TargetID, req.DBName, req.BranchName)
-	if !queryability.Ready {
-		logBranchQueryabilityFailure("create_branch_not_ready", req.TargetID, req.DBName, req.BranchName, queryability)
+	readiness := s.branchReadiness(ctx, req.TargetID, req.DBName, req.BranchName)
+	if !readiness.Ready {
+		logBranchQueryabilityFailure("create_branch_not_ready", req.TargetID, req.DBName, req.BranchName, readiness)
 
 		// If the branch exists on the creating connection, USE db/branch is simply lagging.
 		// Surface a recoverable state instead of returning opaque INTERNAL.
@@ -80,7 +88,7 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 		}
 
 		// Fall back to a fresh connection check if the creating connection cannot confirm.
-		checkConn, checkErr := s.repo.ConnDB(context.Background(), req.TargetID, req.DBName)
+		checkConn, checkErr := s.repo.ConnRevision(context.Background(), req.TargetID, req.DBName, "main")
 		if checkErr == nil {
 			defer checkConn.Close()
 			exists, existsErr = branchExists(context.Background(), checkConn, req.BranchName)
@@ -88,15 +96,19 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 				return newBranchNotReadyError(req.BranchName, s.branchReadyRetryAfterMS())
 			}
 		}
-		return fmt.Errorf("branch created but not yet queryable via USE: %w", queryability.Err(req.BranchName))
+		return fmt.Errorf("branch created but not yet queryable via USE: %w", readiness.Err(req.BranchName))
 	}
 	return nil
 }
 
 func (s *Service) GetBranchReady(ctx context.Context, targetID, dbName, branchName string) (*model.BranchReadyResponse, error) {
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	if err := s.ensureAllowedBranchRef(targetID, dbName, branchName); err != nil {
+		return nil, err
+	}
+
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -108,7 +120,8 @@ func (s *Service) GetBranchReady(ctx context.Context, targetID, dbName, branchNa
 		return nil, &model.APIError{Status: 404, Code: model.CodeNotFound, Msg: fmt.Sprintf("branch %s not found", branchName)}
 	}
 
-	if err := s.checkBranchQueryableOnce(ctx, targetID, dbName, branchName); err != nil {
+	readiness := s.branchReadiness(ctx, targetID, dbName, branchName)
+	if !readiness.Ready {
 		return nil, newBranchNotReadyError(branchName, s.branchReadyRetryAfterMS())
 	}
 
@@ -120,7 +133,11 @@ func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchReques
 		return &model.APIError{Status: 403, Code: model.CodeForbidden, Msg: "protected branch cannot be deleted"}
 	}
 
-	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
+	if err := s.ensureAllowedWorkBranchWrite(req.TargetID, req.DBName, req.BranchName); err != nil {
+		return err
+	}
+
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
@@ -138,9 +155,13 @@ func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchReques
 }
 
 func (s *Service) GetHead(ctx context.Context, targetID, dbName, branchName string) (*model.HeadResponse, error) {
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	if err := s.ensureAllowedBranchRef(targetID, dbName, branchName); err != nil {
+		return nil, err
+	}
+
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 

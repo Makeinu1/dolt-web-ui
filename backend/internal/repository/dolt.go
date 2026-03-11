@@ -41,56 +41,25 @@ func New(cfg *config.Config) (*Repository, error) {
 	return r, nil
 }
 
-// Conn acquires a connection for a specific target, database, and branch.
-// We use Dolt's revision specifier in the USE statement: USE `db/branch`
-// This makes the connection stateless and safe for pooling.
-func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
-	if err := validation.ValidateDBName(dbName); err != nil {
-		return nil, fmt.Errorf("invalid db name: %w", err)
-	}
-	if err := validation.ValidateBranchName(branchName); err != nil {
-		return nil, fmt.Errorf("invalid branch name: %w", err)
-	}
-
+func (r *Repository) poolForTarget(targetID string) (*sql.DB, error) {
 	r.mu.RLock()
 	pool, ok := r.pools[targetID]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("target %q not found", targetID)
 	}
-
-	conn, err := pool.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get connection: %w", err)
-	}
-
-	// Reset any DOLT_CHECKOUT state left by a previous ConnWrite() on this pooled connection.
-	// Without this, USE `db/branch` (revision specifier) conflicts with a lingering DOLT_CHECKOUT
-	// session and causes HY000 errors on SHOW COLUMNS / SHOW TABLES.
-	resetStmt := fmt.Sprintf("USE `%s`", dbName)
-	if _, err := conn.ExecContext(ctx, resetStmt); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to reset db context %s: %w", dbName, err)
-	}
-
-	// USE `dbName/branchName` is the standard Dolt way to specify a revision database.
-	// This avoids stateful CALL DOLT_CHECKOUT(?) which pollutes the connection pool.
-	revisionDb := fmt.Sprintf("%s/%s", dbName, branchName)
-	useStmt := fmt.Sprintf("USE `%s`", revisionDb)
-
-	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to set db context %s: %w", revisionDb, err)
-	}
-
-	return conn, nil
+	return pool, nil
 }
 
-// ConnWrite acquires a writable connection for a specific target, database, and branch.
-// Uses USE + DOLT_CHECKOUT to ensure the session is on the correct branch.
-// Required for write operations: INSERT, UPDATE, DELETE, DOLT_COMMIT, DOLT_ADD, etc.
-// Read-only queries should use Conn() which uses stateless revision specifiers.
-func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+func (r *Repository) resetDatabaseContext(ctx context.Context, conn *sql.Conn, dbName string) error {
+	resetStmt := fmt.Sprintf("USE `%s`", dbName)
+	if _, err := conn.ExecContext(ctx, resetStmt); err != nil {
+		return fmt.Errorf("failed to reset db context %s: %w", dbName, err)
+	}
+	return nil
+}
+
+func (r *Repository) checkoutSession(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
 	if err := validation.ValidateDBName(dbName); err != nil {
 		return nil, fmt.Errorf("invalid db name: %w", err)
 	}
@@ -98,13 +67,10 @@ func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName
 		return nil, fmt.Errorf("invalid branch name: %w", err)
 	}
 
-	r.mu.RLock()
-	pool, ok := r.pools[targetID]
-	r.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("target %q not found", targetID)
+	pool, err := r.poolForTarget(targetID)
+	if err != nil {
+		return nil, err
 	}
-
 	conn, err := pool.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
@@ -124,10 +90,60 @@ func (r *Repository) ConnWrite(ctx context.Context, targetID, dbName, branchName
 	return conn, nil
 }
 
-// ConnDB acquires a connection for a specific target and database on main branch.
-// Used for operations that don't target a specific work branch.
-func (r *Repository) ConnDB(ctx context.Context, targetID, dbName string) (*sql.Conn, error) {
-	return r.ConnWrite(ctx, targetID, dbName, "main")
+// ConnRevision acquires a read-only revision connection for a specific ref.
+// We use Dolt's revision specifier in the USE statement: USE `db/ref`.
+func (r *Repository) ConnRevision(ctx context.Context, targetID, dbName, refName string) (*sql.Conn, error) {
+	if err := validation.ValidateDBName(dbName); err != nil {
+		return nil, fmt.Errorf("invalid db name: %w", err)
+	}
+	if err := validation.ValidateRevisionRef(refName); err != nil {
+		return nil, fmt.Errorf("invalid ref: %w", err)
+	}
+
+	pool, err := r.poolForTarget(targetID)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection: %w", err)
+	}
+
+	// Reset any DOLT_CHECKOUT state left by a previous write session on this pooled connection.
+	if err := r.resetDatabaseContext(ctx, conn, dbName); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	revisionDb := fmt.Sprintf("%s/%s", dbName, refName)
+	useStmt := fmt.Sprintf("USE `%s`", revisionDb)
+	if _, err := conn.ExecContext(ctx, useStmt); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to set db context %s: %w", revisionDb, err)
+	}
+
+	return conn, nil
+}
+
+// ConnWorkBranchWrite acquires a writable session for wi/* work branches only.
+func (r *Repository) ConnWorkBranchWrite(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	if !validation.IsWorkBranchName(branchName) {
+		return nil, fmt.Errorf("work branch write session requires wi/* branch: %s", branchName)
+	}
+	return r.checkoutSession(ctx, targetID, dbName, branchName)
+}
+
+// ConnProtectedMaintenance acquires a writable session on a protected branch.
+func (r *Repository) ConnProtectedMaintenance(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	if !validation.IsProtectedBranch(branchName) {
+		return nil, fmt.Errorf("protected maintenance session requires protected branch: %s", branchName)
+	}
+	return r.checkoutSession(ctx, targetID, dbName, branchName)
+}
+
+// Conn is the legacy alias for a read-only revision session.
+func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName string) (*sql.Conn, error) {
+	return r.ConnRevision(ctx, targetID, dbName, branchName)
 }
 
 func (r *Repository) Close() {

@@ -7,10 +7,13 @@ import { ApiError } from "../../api/errors";
 import type {
   Database,
   Branch,
+  CrossCopyAdminPrepareRowsResult,
   CrossCopyPreviewResponse,
-  CrossCopyRowsResponse,
+  CrossCopyRowsResult,
 } from "../../types/api";
 import { getBranchErrorDetails, waitForBranchReady } from "../../utils/branchRecovery";
+import { isCompleted, operationMessage } from "../../utils/apiResult";
+import { CrossCopyAdminPanel } from "./CrossCopyAdminPanel";
 
 interface CrossCopyRowsModalProps {
   tableName: string;
@@ -59,7 +62,9 @@ export function CrossCopyRowsModal({
   const [preview, setPreview] = useState<CrossCopyPreviewResponse | null>(null);
 
   // Result data
-  const [result, setResult] = useState<CrossCopyRowsResponse | null>(null);
+  const [result, setResult] = useState<CrossCopyRowsResult | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminResult, setAdminResult] = useState<CrossCopyAdminPrepareRowsResult | null>(null);
 
   const fullDestBranchName = destWorkItemName.trim() ? `wi/${destWorkItemName.trim()}` : "";
   const destWorkItemValid =
@@ -116,6 +121,10 @@ export function CrossCopyRowsModal({
   useEffect(() => {
     setDestWorkItemName(defaultDestWorkItem);
   }, [defaultDestWorkItem]);
+
+  useEffect(() => {
+    setAdminResult(null);
+  }, [destDB, destBranch]);
 
   const selectExistingDestBranch = async (existingBranchName: string) => {
     refreshDestBranches(existingBranchName).catch(() => undefined);
@@ -205,27 +214,56 @@ export function CrossCopyRowsModal({
     }
   };
 
+  const loadPreview = async () => {
+    const res = await api.crossCopyPreview({
+      target_id: targetId,
+      source_db: dbName,
+      source_branch: sourceBranch,
+      source_table: tableName,
+      source_pks: selectedPKs,
+      dest_db: destDB,
+      dest_branch: destBranch,
+    });
+    setPreview(res);
+    setStep("preview");
+    return res;
+  };
+
   const handlePreview = async () => {
     setLoading(true);
     setError(null);
+    setAdminResult(null);
     try {
-      const res = await api.crossCopyPreview({
-        target_id: targetId,
-        source_db: dbName,
-        source_branch: sourceBranch,
-        source_table: tableName,
-        source_pks: selectedPKs,
-        dest_db: destDB,
-        dest_branch: destBranch,
-      });
-      setPreview(res);
-      setStep("preview");
+      await loadPreview();
     } catch (err: unknown) {
       const msg =
         err instanceof ApiError ? err.message : "プレビューに失敗しました";
       setError(msg);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAdminPrepare = async () => {
+    setAdminLoading(true);
+    setError(null);
+    try {
+      const res = await api.crossCopyAdminPrepareRows({
+        target_id: targetId,
+        source_db: dbName,
+        source_branch: sourceBranch,
+        source_table: tableName,
+        dest_db: destDB,
+        dest_branch: destBranch,
+      });
+      setAdminResult(res);
+      if (isCompleted(res)) {
+        await loadPreview();
+      }
+    } catch (err: unknown) {
+      setError(err instanceof ApiError ? err.message : "schema prep に失敗しました");
+    } finally {
+      setAdminLoading(false);
     }
   };
 
@@ -244,7 +282,11 @@ export function CrossCopyRowsModal({
       });
       setResult(res);
       setStep("done");
-      setSuccess("他DBへ行をコピーしました");
+      if (isCompleted(res)) {
+        setSuccess(operationMessage(res, "他DBへ行をコピーしました"));
+      } else {
+        setError(operationMessage(res, "コピーを完了できませんでした"));
+      }
     } catch (err: unknown) {
       const msg =
         err instanceof ApiError ? err.message : "コピーに失敗しました";
@@ -253,6 +295,11 @@ export function CrossCopyRowsModal({
       setLoading(false);
     }
   };
+
+  const adminPreparedColumns =
+    preview?.expand_columns && preview.expand_columns.length > 0
+      ? preview.expand_columns
+      : adminResult?.prepared_columns ?? [];
 
   const handleSwitchContext = async () => {
     if (useDraftStore.getState().hasDraft()) {
@@ -478,7 +525,7 @@ export function CrossCopyRowsModal({
                 className="primary"
                 onClick={handlePreview}
                 disabled={
-                  loading || !destDB || !destBranch || databases.length === 0
+                  loading || adminLoading || !destDB || !destBranch || databases.length === 0
                 }
                 style={{ padding: "6px 16px", fontSize: 13 }}
               >
@@ -504,17 +551,32 @@ export function CrossCopyRowsModal({
               共有カラム: {preview.shared_columns.join(", ")}
             </div>
 
-            {/* Auto-expand columns notification */}
-            {preview.expand_columns && preview.expand_columns.length > 0 && (
-              <div style={{ fontSize: 12, marginBottom: 4, padding: "6px 8px", background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, border: "1px solid #bfdbfe" }}>
-                以下のカラムを自動拡張します（DDL）:
-                <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                  {preview.expand_columns.map((ec, i) => (
-                    <li key={i}><strong>{ec.name}</strong>: {ec.dst_type} → {ec.src_type}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {(preview.expand_columns && preview.expand_columns.length > 0) || adminResult ? (
+              <CrossCopyAdminPanel
+                title={preview.expand_columns && preview.expand_columns.length > 0 ? "schema prep が必要" : "管理レーンの結果"}
+                description={
+                  preview.expand_columns && preview.expand_columns.length > 0
+                    ? "normal flow はここで止まります。管理レーンで destination main を準備し、宛先 wi/* を同期してから再試行してください。"
+                    : "管理レーンの結果を反映済みです。プレビューを確認してからコピーを再実行してください。"
+                }
+                preparedColumns={adminPreparedColumns}
+                result={adminResult}
+                actions={
+                  preview.expand_columns && preview.expand_columns.length > 0 ? (
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        className="primary"
+                        onClick={() => void handleAdminPrepare()}
+                        disabled={loading || adminLoading}
+                        style={{ padding: "6px 12px", fontSize: 12 }}
+                      >
+                        {adminLoading ? "schema prep 中..." : "管理レーンで schema を準備"}
+                      </button>
+                    </div>
+                  ) : undefined
+                }
+              />
+            ) : null}
 
             {/* Warnings */}
             {preview.warnings.map((w, i) => (
@@ -652,6 +714,7 @@ export function CrossCopyRowsModal({
                 onClick={() => {
                   setStep("select");
                   setPreview(null);
+                  setAdminResult(null);
                 }}
                 style={{
                   padding: "6px 16px",
@@ -668,12 +731,14 @@ export function CrossCopyRowsModal({
               <button
                 className="primary"
                 onClick={handleExecute}
-                disabled={loading || preview.rows.length === 0}
+                disabled={loading || adminLoading || preview.rows.length === 0 || (preview.expand_columns?.length ?? 0) > 0}
                 style={{ padding: "6px 16px", fontSize: 13 }}
               >
                 {loading
                   ? "コピー中..."
-                  : `コピー実行 (${preview.rows.length}件)`}
+                  : (preview.expand_columns?.length ?? 0) > 0
+                    ? "schema prep が必要"
+                    : `コピー実行 (${preview.rows.length}件)`}
               </button>
             </div>
           </div>
@@ -685,15 +750,19 @@ export function CrossCopyRowsModal({
             <div
               style={{
                 padding: "12px 16px",
-                background: "#f0fdf4",
+                background: isCompleted(result) ? "#f0fdf4" : "#eff6ff",
                 borderRadius: 4,
                 marginBottom: 12,
                 fontSize: 13,
-                color: "#166534",
+                color: isCompleted(result) ? "#166534" : "#1d4ed8",
               }}
             >
-              {result.total}件コピーしました（挿入: {result.inserted}, 更新:{" "}
-              {result.updated}）
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {operationMessage(result, isCompleted(result) ? "他DBへ行をコピーしました" : "コピーを完了できませんでした")}
+              </div>
+              <div>
+                {result.total}件コピー対象（挿入: {result.inserted}, 更新: {result.updated}）
+              </div>
             </div>
 
             <div

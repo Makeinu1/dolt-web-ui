@@ -115,11 +115,6 @@ export async function setupBaseMocks(page: Page) {
         await route.fulfill({ json: MOCK_ROWS_USERS });
     });
 
-    // Conflicts
-    await page.route('**/api/v1/conflicts*', async route => {
-        await route.fulfill({ json: [] });
-    });
-
     // Requests list
     await page.route('**/api/v1/requests*', async route => {
         await route.fulfill({ json: MOCK_REQUESTS });

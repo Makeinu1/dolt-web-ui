@@ -77,7 +77,21 @@ test.describe('Workflow Tests', () => {
 
         // Mock submit response
         await page.route('**/api/v1/request/submit*', async route => {
-            await route.fulfill({ status: 200, json: { request_id: 'req/feat-a', submitted_main_hash: 'hx', submitted_work_hash: 'hy' } });
+            await route.fulfill({
+                status: 200,
+                json: {
+                    request_id: 'req/feat-a',
+                    submitted_main_hash: 'hx',
+                    submitted_work_hash: 'hy',
+                    outcome: 'completed',
+                    message: '承認を申請しました',
+                    completion: {
+                        request_recorded: true,
+                        lock_observable: true,
+                        work_head_synced: true,
+                    },
+                },
+            });
         });
 
         // Fill input and submit
@@ -127,7 +141,25 @@ test.describe('Workflow Tests', () => {
         // Mock approve response
         await page.route('**/api/v1/request/approve*', async route => {
             requestApproved = true;
-            await route.fulfill({ status: 200, json: { hash: 'hash-a', active_branch: 'wi/feat-b', active_branch_advanced: true, archive_tag: 'merged/feat-b/01', warnings: [] } });
+            await route.fulfill({
+                status: 200,
+                json: {
+                    hash: 'hash-a',
+                    active_branch: 'wi/feat-b',
+                    active_branch_advanced: true,
+                    archive_tag: 'merged/feat-b/01',
+                    outcome: 'completed',
+                    message: 'main へのマージが完了しました',
+                    completion: {
+                        main_merged: true,
+                        audit_recorded: true,
+                        request_cleared: true,
+                        resume_branch_ready: true,
+                        audit_indexed: true,
+                    },
+                    warnings: [],
+                },
+            });
         });
 
         // Click 承認してマージ
@@ -139,7 +171,7 @@ test.describe('Workflow Tests', () => {
         await inboxModal.locator('button', { hasText: '✕' }).click();
     });
 
-    test('should fall back to main and show warnings when approve cannot advance the work branch', async ({ page }) => {
+    test('should keep the approve modal open and show retry guidance when approve returns retry_required', async ({ page }) => {
         await selectContextInUI(page, 'local', 'test_db', 'main');
 
         const approverBadge = page.locator('.approver-badge');
@@ -156,7 +188,6 @@ test.describe('Workflow Tests', () => {
         });
 
         await page.route('**/api/v1/request/approve*', async route => {
-            requestApproved = true;
             await route.fulfill({
                 status: 200,
                 json: {
@@ -164,7 +195,19 @@ test.describe('Workflow Tests', () => {
                     active_branch: 'wi/feat-b',
                     active_branch_advanced: false,
                     archive_tag: 'merged/feat-b/01',
-                    warnings: ['mainへの反映は完了しましたが、作業ブランチを進められませんでした。'],
+                    outcome: 'retry_required',
+                    message: '作業ブランチ wi/feat-b は更新済みですが、接続反映を確認できませんでした。時間をおいて再度開いてください。',
+                    retry_reason: 'resume_branch_not_ready',
+                    retry_actions: [
+                        { action: 'reopen_work_branch', label: '作業ブランチを開き直す' },
+                    ],
+                    completion: {
+                        main_merged: true,
+                        audit_recorded: true,
+                        request_cleared: true,
+                        resume_branch_ready: false,
+                        audit_indexed: true,
+                    },
                 },
             });
         });
@@ -173,9 +216,11 @@ test.describe('Workflow Tests', () => {
         const approveModal = page.locator('.modal').last();
         await approveModal.locator('button.primary', { hasText: '承認してマージ' }).click();
 
+        await expect(approveModal).toBeVisible();
+        await expect(approveModal.locator('.error-banner')).toContainText('接続反映を確認できませんでした');
+        await expect(inboxModal).toContainText('テストリクエスト');
         await expect(page.locator('.context-bar select')).toHaveValue('main');
-        await expect(page.locator('.success-toast')).toContainText('main へのマージが完了しました');
-        await expect(page.locator('.error-banner')).toContainText('作業ブランチを進められませんでした');
+        await expect(page.locator('.success-toast')).toHaveCount(0);
     });
 
     test('should show success when rejecting a request', async ({ page }) => {
@@ -196,7 +241,17 @@ test.describe('Workflow Tests', () => {
 
         await page.route('**/api/v1/request/reject*', async route => {
             requestRejected = true;
-            await route.fulfill({ status: 200, json: { status: 'ok' } });
+            await route.fulfill({
+                status: 200,
+                json: {
+                    status: 'rejected',
+                    outcome: 'completed',
+                    message: '申請を却下しました',
+                    completion: {
+                        request_cleared: true,
+                    },
+                },
+            });
         });
 
         await inboxModal.locator('button.danger', { hasText: '却下' }).click();

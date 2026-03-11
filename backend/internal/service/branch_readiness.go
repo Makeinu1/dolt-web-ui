@@ -14,6 +14,8 @@ type branchQueryabilityResult struct {
 	LastErr  error
 }
 
+type branchReadinessProbe func(ctx context.Context, targetID, dbName, branch string) branchQueryabilityResult
+
 func (s *Service) branchReadyTimeout() time.Duration {
 	return time.Duration(s.cfg.Server.Recovery.BranchReadySec) * time.Second
 }
@@ -55,7 +57,7 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 }
 
 func (s *Service) checkBranchQueryableOnce(ctx context.Context, targetID, dbName, branch string) error {
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branch)
+	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branch)
 	if err != nil {
 		return err
 	}
@@ -69,7 +71,7 @@ func (s *Service) checkBranchQueryableOnce(ctx context.Context, targetID, dbName
 		return err
 	}
 
-	headConn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	headConn, err := s.repo.ConnRevision(ctx, targetID, dbName, "main")
 	if err != nil {
 		return err
 	}
@@ -85,7 +87,11 @@ func (s *Service) checkBranchQueryableOnce(ctx context.Context, targetID, dbName
 	return nil
 }
 
-func (s *Service) verifyBranchQueryable(ctx context.Context, targetID, dbName, branch string) branchQueryabilityResult {
+func (s *Service) branchReadiness(ctx context.Context, targetID, dbName, branch string) branchQueryabilityResult {
+	return s.branchReadinessProbe(ctx, targetID, dbName, branch)
+}
+
+func (s *Service) probeBranchReadiness(ctx context.Context, targetID, dbName, branch string) branchQueryabilityResult {
 	start := time.Now()
 	attempts := s.branchReadyAttempts()
 	poll := s.branchReadyPollInterval()

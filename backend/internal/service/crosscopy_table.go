@@ -10,35 +10,79 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
-func crossCopyFailure(err error, expanded bool) error {
-	if !expanded {
-		return err
-	}
-	const warning = "。main に反映済みのスキーマ拡張は自動では元に戻りません"
-	if apiErr, ok := err.(*model.APIError); ok {
-		cloned := *apiErr
-		cloned.Msg += warning
-		return &cloned
-	}
-	return fmt.Errorf("%w%s", err, warning)
-}
-
-func (s *Service) cleanupCrossCopyBranch(ctx context.Context, targetID, dbName, branchName string) {
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+func (s *Service) cleanupCrossCopyBranch(ctx context.Context, targetID, dbName, branchName string) error {
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		log.Printf("WARN: failed to open cleanup connection for branch %s: %v", branchName, err)
-		return
+		return fmt.Errorf("failed to open cleanup connection for branch %s: %w", branchName, err)
 	}
 	defer conn.Close()
 
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branchName); err != nil {
-		log.Printf("WARN: failed to cleanup branch %s after cross-copy failure: %v", branchName, err)
+		return fmt.Errorf("failed to cleanup branch %s after cross-copy failure: %w", branchName, err)
+	}
+	return nil
+}
+
+func crossCopyTableFailureResponse(branchName string, shared, srcOnly, dstOnly []string, cleanupErr error) *model.CrossCopyTableResponse {
+	outcome := model.OperationOutcomeFailed
+	message := "インポートブランチの準備に失敗しました。残留ブランチは掃除済みです。"
+	retryReason := ""
+	retryActions := []model.RetryAction(nil)
+	responseBranchName := ""
+
+	if cleanupErr != nil {
+		outcome = model.OperationOutcomeRetryRequired
+		message = "インポートブランチの準備に失敗し、後片付けを完了できませんでした。確認して再試行してください。"
+		retryReason = "destination_branch_cleanup_failed"
+		responseBranchName = branchName
+		retryActions = []model.RetryAction{
+			{Action: "open_import_branch", Label: "インポートブランチを確認する"},
+		}
+	}
+
+	return &model.CrossCopyTableResponse{
+		BranchName:     responseBranchName,
+		SharedColumns:  shared,
+		SourceOnlyCols: srcOnly,
+		DestOnlyCols:   dstOnly,
+		OperationResultFields: model.OperationResultFields{
+			Outcome:      outcome,
+			Message:      message,
+			RetryReason:  retryReason,
+			RetryActions: retryActions,
+			Completion: map[string]bool{
+				"destination_committed":    false,
+				"destination_branch_ready": false,
+				"protected_refs_clean":     true,
+			},
+		},
+	}
+}
+
+func crossCopyTableRetryResponse(branchName, hash string, rowCount int, shared, srcOnly, dstOnly []string, message, retryReason string, retryActions []model.RetryAction) *model.CrossCopyTableResponse {
+	return &model.CrossCopyTableResponse{
+		Hash:           hash,
+		BranchName:     branchName,
+		RowCount:       rowCount,
+		SharedColumns:  shared,
+		SourceOnlyCols: srcOnly,
+		DestOnlyCols:   dstOnly,
+		OperationResultFields: model.OperationResultFields{
+			Outcome:      model.OperationOutcomeRetryRequired,
+			Message:      message,
+			RetryReason:  retryReason,
+			RetryActions: retryActions,
+			Completion: map[string]bool{
+				"destination_committed":    hash != "",
+				"destination_branch_ready": false,
+				"protected_refs_clean":     true,
+			},
+		},
 	}
 }
 
 // CrossCopyTable copies an entire table from source DB to a new branch in dest DB.
 func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRequest) (*model.CrossCopyTableResponse, error) {
-	// Validate inputs
 	if err := validation.ValidateDBName(req.SourceDB); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースDB名"}
 	}
@@ -48,17 +92,16 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	if err := validation.ValidateBranchName(req.SourceBranch); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なソースブランチ名"}
 	}
-	if err := validateProtectedCopySource(req.SourceBranch); err != nil {
+	if err := s.ensureCrossCopySourceRef(req.TargetID, req.SourceDB, req.SourceBranch); err != nil {
 		return nil, err
 	}
 	if err := validation.ValidateIdentifier("table", req.SourceTable); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "無効なテーブル名"}
 	}
 
-	// Get source schema (using read-only conn)
-	srcConn, err := s.repo.Conn(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
+	srcConn, err := s.connCrossCopySourceRevision(ctx, req.TargetID, req.SourceDB, req.SourceBranch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to source: %w", err)
+		return nil, err
 	}
 	srcCols, err := getSchemaColumns(ctx, srcConn, req.SourceTable)
 	srcConn.Close()
@@ -66,10 +109,9 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		return nil, err
 	}
 
-	// Get dest schema on main (to verify table exists and compute shared columns)
-	dstConnCheck, err := s.repo.Conn(ctx, req.TargetID, req.DestDB, "main")
+	dstConnCheck, err := s.connMetadataRevision(ctx, req.TargetID, req.DestDB)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to dest: %w", err)
+		return nil, err
 	}
 	dstCols, err := getSchemaColumns(ctx, dstConnCheck, req.SourceTable)
 	dstConnCheck.Close()
@@ -82,40 +124,12 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "共有カラムがありません"}
 	}
 
-	// Build column maps for expansion check (used in DDL phase and later)
-	srcColMap := make(map[string]model.ColumnSchema, len(srcCols))
-	for _, c := range srcCols {
-		srcColMap[c.Name] = c
-	}
-	dstColMapTable := make(map[string]model.ColumnSchema, len(dstCols))
-	for _, c := range dstCols {
-		dstColMapTable[c.Name] = c
+	expandColumns := expandColumnsForShared(srcCols, dstCols, shared)
+	if len(expandColumns) > 0 {
+		return nil, crossCopySchemaPreconditionError(expandColumns)
 	}
 
-	// DDL先行コミット: Apply schema expansion to main BEFORE creating the work branch.
-	// This ensures the work branch inherits the updated schema, so the diff only shows
-	// data changes (not spurious "all rows changed" due to schema mismatch).
-	mainWriteConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, "main")
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to main for DDL: %w", err)
-	}
-	expanded, err := applyExpandColumns(ctx, mainWriteConn, req.SourceTable, srcColMap, dstColMapTable, shared)
-	if err != nil {
-		mainWriteConn.Close()
-		return nil, fmt.Errorf("failed to expand columns on main: %w", err)
-	}
-	if expanded {
-		schemaMsg := fmt.Sprintf("schema: %s カラム型を拡張（クロスコピー前）", req.SourceTable)
-		mainWriteConn.ExecContext(ctx, "CALL DOLT_ADD('.')") //nolint:errcheck
-		if _, cerr := mainWriteConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", schemaMsg); cerr != nil {
-			mainWriteConn.Close()
-			return nil, fmt.Errorf("failed to commit DDL to main: %w", cerr)
-		}
-	}
-	mainWriteConn.Close()
-
-	// Reuse a single long-lived import branch per source DB + table.
-	dstConnDB, err := s.repo.ConnDB(ctx, req.TargetID, req.DestDB)
+	dstConnDB, err := s.connMetadataRevision(ctx, req.TargetID, req.DestDB)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to dest DB: %w", err)
 	}
@@ -129,51 +143,50 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		dstConnDB.Close()
 		return nil, newBranchExistsError(newBranchName)
 	}
-	shouldCleanupBranch := false
 
-	// Create new branch from main
 	if _, err := dstConnDB.ExecContext(ctx, "CALL DOLT_BRANCH(?)", newBranchName); err != nil {
 		classifiedErr := classifyBranchCreateError(ctx, dstConnDB, newBranchName, err)
 		dstConnDB.Close()
 		return nil, classifiedErr
 	}
-	shouldCleanupBranch = true
 	dstConnDB.Close()
 
-	defer func() {
-		if shouldCleanupBranch {
-			s.cleanupCrossCopyBranch(context.Background(), req.TargetID, req.DestDB, newBranchName)
+	cleanupIfNeeded := func() error {
+		cleanupErr := s.cleanupCrossCopyBranch(context.Background(), req.TargetID, req.DestDB, newBranchName)
+		if cleanupErr != nil {
+			log.Printf("WARN: %v", cleanupErr)
 		}
-	}()
-
-	// Verify branch is queryable before getting writable connection.
-	// Guards against Dolt propagation lag (same pattern as CreateBranch).
-	queryability := s.verifyBranchQueryable(ctx, req.TargetID, req.DestDB, newBranchName)
-	if !queryability.Ready {
-		logBranchQueryabilityFailure("cross_copy_branch_not_ready", req.TargetID, req.DestDB, newBranchName, queryability)
-		return nil, crossCopyFailure(fmt.Errorf("failed to verify branch %s: %w", newBranchName, queryability.Err(newBranchName)), expanded)
+		return cleanupErr
 	}
 
-	// Get writable connection on the new branch
-	dstConn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DestDB, newBranchName)
+	readiness := s.branchReadiness(ctx, req.TargetID, req.DestDB, newBranchName)
+	if !readiness.Ready {
+		logBranchQueryabilityFailure("cross_copy_branch_not_ready", req.TargetID, req.DestDB, newBranchName, readiness)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
+	}
+
+	dstConn, err := s.repo.ConnWorkBranchWrite(ctx, req.TargetID, req.DestDB, newBranchName)
 	if err != nil {
-		return nil, crossCopyFailure(fmt.Errorf("failed to connect to new branch: %w", err), expanded)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 	defer dstConn.Close()
 
-	// START TRANSACTION
 	if _, err := dstConn.ExecContext(ctx, "START TRANSACTION"); err != nil {
-		return nil, crossCopyFailure(fmt.Errorf("failed to start transaction: %w", err), expanded)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 
-	// DELETE FROM table (within transaction — will be rolled back on error)
 	if _, err := dstConn.ExecContext(ctx, fmt.Sprintf("DELETE FROM `%s`", req.SourceTable)); err != nil {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
-		return nil, crossCopyFailure(fmt.Errorf("failed to delete dest data: %w", err), expanded)
+		safeRollback(dstConn)
+		if apiErr := parseCopyError(err); apiErr != nil {
+			cleanupErr := cleanupIfNeeded()
+			if cleanupErr != nil {
+				return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupErr), nil
+			}
+			return nil, apiErr
+		}
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 
-	// INSERT INTO dest(shared_cols) SELECT shared_cols FROM `source_db/source_branch`.table
-	// Use Dolt revision specifier for cross-DB SELECT
 	quotedCols := make([]string, len(shared))
 	for i, c := range shared {
 		quotedCols[i] = fmt.Sprintf("`%s`", c)
@@ -186,43 +199,73 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 
 	result, err := dstConn.ExecContext(ctx, insertQuery)
 	if err != nil {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
+		safeRollback(dstConn)
 		if apiErr := parseCopyError(err); apiErr != nil {
-			return nil, crossCopyFailure(apiErr, expanded)
+			cleanupErr := cleanupIfNeeded()
+			if cleanupErr != nil {
+				return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupErr), nil
+			}
+			return nil, apiErr
 		}
-		return nil, crossCopyFailure(fmt.Errorf("failed to copy table data: %w", err), expanded)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 
 	rowCount, _ := result.RowsAffected()
 
-	// DOLT_VERIFY_CONSTRAINTS
 	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_VERIFY_CONSTRAINTS()"); err != nil {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
-		return nil, crossCopyFailure(fmt.Errorf("failed to verify constraints: %w", err), expanded)
+		safeRollback(dstConn)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 	var violationCount int
 	if err := dstConn.QueryRowContext(ctx, "SELECT COUNT(*) FROM dolt_constraint_violations").Scan(&violationCount); err == nil && violationCount > 0 {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
-		return nil, crossCopyFailure(&model.APIError{Status: 400, Code: model.CodeCopyFKError, Msg: "制約違反が検出されました"}, expanded)
+		safeRollback(dstConn)
+		cleanupErr := cleanupIfNeeded()
+		if cleanupErr != nil {
+			return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupErr), nil
+		}
+		return nil, &model.APIError{Status: 400, Code: model.CodeCopyFKError, Msg: "制約違反が検出されました"}
 	}
 
-	// DOLT_ADD + DOLT_COMMIT
 	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_ADD('.')"); err != nil {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
-		return nil, crossCopyFailure(fmt.Errorf("failed to dolt add: %w", err), expanded)
+		safeRollback(dstConn)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
 
 	commitMsg := fmt.Sprintf("[cross-copy] %sから%sテーブルを全件コピー（%d行）", req.SourceDB, req.SourceTable, rowCount)
 	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", commitMsg); err != nil {
-		dstConn.ExecContext(context.Background(), "ROLLBACK")
-		return nil, crossCopyFailure(fmt.Errorf("failed to commit: %w", err), expanded)
+		safeRollback(dstConn)
+		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
 	}
-	shouldCleanupBranch = false
 
-	// Get new HEAD
 	var newHead string
 	if err := dstConn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {
-		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
+		return crossCopyTableRetryResponse(
+			newBranchName,
+			"",
+			int(rowCount),
+			shared,
+			srcOnly,
+			dstOnly,
+			"コピーコミットは作成された可能性がありますが、確認に失敗しました。インポートブランチを確認して再試行してください。",
+			"destination_commit_uncertain",
+			[]model.RetryAction{{Action: "open_import_branch", Label: "インポートブランチを確認する"}},
+		), nil
+	}
+
+	readiness = s.branchReadiness(ctx, req.TargetID, req.DestDB, newBranchName)
+	if !readiness.Ready {
+		logBranchQueryabilityFailure("cross_copy_committed_branch_not_ready", req.TargetID, req.DestDB, newBranchName, readiness)
+		return crossCopyTableRetryResponse(
+			newBranchName,
+			newHead,
+			int(rowCount),
+			shared,
+			srcOnly,
+			dstOnly,
+			"コピーコミットは作成されましたが、インポートブランチの接続反映を確認できませんでした。時間をおいて開き直してください。",
+			"destination_branch_not_ready",
+			[]model.RetryAction{{Action: "open_import_branch", Label: "インポートブランチを開き直す"}},
+		), nil
 	}
 
 	return &model.CrossCopyTableResponse{
@@ -232,5 +275,14 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 		SharedColumns:  shared,
 		SourceOnlyCols: srcOnly,
 		DestOnlyCols:   dstOnly,
+		OperationResultFields: model.OperationResultFields{
+			Outcome: model.OperationOutcomeCompleted,
+			Message: "他DBへテーブルをコピーしました",
+			Completion: map[string]bool{
+				"destination_committed":    true,
+				"destination_branch_ready": true,
+				"protected_refs_clean":     true,
+			},
+		},
 	}, nil
 }

@@ -37,6 +37,14 @@ CREATE TABLE settings (
 INSERT INTO settings VALUES
   ('mode', 'default'),
   ('region', 'lab');
+CREATE TABLE zz_crosscopy_schema (
+  id INT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  notes VARCHAR(255)
+);
+INSERT INTO zz_crosscopy_schema VALUES
+  (1, 'Source Alpha', 'wide source row'),
+  (2, 'Source Beta', 'second source row');
 CALL DOLT_ADD('.');
 CALL DOLT_COMMIT('-am', 'seed fixture: test_db main');
 SQL
@@ -63,6 +71,13 @@ CREATE TABLE settings (
 INSERT INTO settings VALUES
   ('mode', 'dest'),
   ('region', 'backup');
+CREATE TABLE zz_crosscopy_schema (
+  id INT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  notes VARCHAR(50)
+);
+INSERT INTO zz_crosscopy_schema VALUES
+  (1, 'Dest Alpha', 'narrow dest row');
 CALL DOLT_ADD('.');
 CALL DOLT_COMMIT('-am', 'seed fixture: dest_db main');
 SQL

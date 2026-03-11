@@ -3,13 +3,14 @@ import { useContextStore } from "../../store/context";
 import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { CSVPreviewResponse } from "../../types/api";
+import type { CSVApplyResponse, CSVPreviewResponse } from "../../types/api";
+import { isCompleted, operationMessage } from "../../utils/apiResult";
 
 interface CSVImportModalProps {
   tableName: string;
   expectedHead: string;
   onClose: () => void;
-  onApplied: (newHash: string) => void;
+  onApplied: (result: CSVApplyResponse) => void;
 }
 
 type Step = "select" | "preview" | "done";
@@ -146,7 +147,11 @@ export function CSVImportModal({
         commit_message: commitMessage || `[CSV] ${tableName}: 一括更新`,
         rows: csvRows,
       });
-      onApplied(result.hash);
+      if (!isCompleted(result)) {
+        setError(operationMessage(result, "CSV を適用できませんでした"));
+        return;
+      }
+      onApplied(result);
       setStep("done");
     } catch (err) {
       if (err instanceof ApiError && err.code === "STALE_HEAD") {

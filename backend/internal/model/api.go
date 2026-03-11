@@ -63,6 +63,35 @@ type BranchReadyResponse struct {
 	Ready bool `json:"ready"`
 }
 
+type RetryAction struct {
+	Action string `json:"action"`
+	Label  string `json:"label"`
+}
+
+const (
+	OperationOutcomeCompleted     = "completed"
+	OperationOutcomeFailed        = "failed"
+	OperationOutcomeRetryRequired = "retry_required"
+
+	ReadIntegrityComplete = "complete"
+	ReadIntegrityFailed   = "failed"
+)
+
+type OperationResultFields struct {
+	Outcome      string          `json:"outcome"`
+	Message      string          `json:"message"`
+	Completion   map[string]bool `json:"completion"`
+	Warnings     []string        `json:"warnings,omitempty"`
+	RetryReason  string          `json:"retry_reason,omitempty"`
+	RetryActions []RetryAction   `json:"retry_actions,omitempty"`
+}
+
+type ReadResultFields struct {
+	ReadIntegrity string        `json:"read_integrity"`
+	Message       string        `json:"message,omitempty"`
+	RetryActions  []RetryAction `json:"retry_actions,omitempty"`
+}
+
 // CreateBranchRequest represents a request to create a work branch.
 type CreateBranchRequest struct {
 	TargetID   string `json:"target_id"`
@@ -191,6 +220,7 @@ type SubmitRequestResponse struct {
 	SubmittedMainHash string             `json:"submitted_main_hash"`
 	SubmittedWorkHash string             `json:"submitted_work_hash"`
 	OverwrittenTables []OverwrittenTable `json:"overwritten_tables,omitempty"`
+	OperationResultFields
 }
 
 // RequestSummary represents a pending approval request.
@@ -273,11 +303,16 @@ type PreviewResponse struct {
 
 // ApproveResponse represents the result of an approval.
 type ApproveResponse struct {
-	Hash                 string   `json:"hash"`
-	ActiveBranch         string   `json:"active_branch"`
-	ActiveBranchAdvanced bool     `json:"active_branch_advanced"`
-	ArchiveTag           string   `json:"archive_tag,omitempty"`
-	Warnings             []string `json:"warnings,omitempty"`
+	Hash                 string `json:"hash"`
+	ActiveBranch         string `json:"active_branch"`
+	ActiveBranchAdvanced bool   `json:"active_branch_advanced"`
+	ArchiveTag           string `json:"archive_tag,omitempty"`
+	OperationResultFields
+}
+
+type RejectResponse struct {
+	Status string `json:"status"`
+	OperationResultFields
 }
 
 // DiffSummaryEntry represents the row-count diff for one table.
@@ -319,6 +354,11 @@ type HistoryRowSnapshot struct {
 // HistoryRowResponse is the response for GET /history/row.
 type HistoryRowResponse struct {
 	Snapshots []HistoryRowSnapshot `json:"snapshots"`
+}
+
+type HistoryCommitsResponse struct {
+	Commits []HistoryCommit `json:"commits"`
+	ReadResultFields
 }
 
 // --- Cell Memos ---
@@ -386,6 +426,26 @@ type CrossCopyRowsResponse struct {
 	Inserted int    `json:"inserted"`
 	Updated  int    `json:"updated"`
 	Total    int    `json:"total"`
+	OperationResultFields
+}
+
+// CrossCopyAdminPrepareRowsRequest prepares destination main and syncs the destination work branch.
+type CrossCopyAdminPrepareRowsRequest struct {
+	TargetID     string `json:"target_id"`
+	SourceDB     string `json:"source_db"`
+	SourceBranch string `json:"source_branch"`
+	SourceTable  string `json:"source_table"`
+	DestDB       string `json:"dest_db"`
+	DestBranch   string `json:"dest_branch"`
+}
+
+// CrossCopyAdminPrepareRowsResponse reports the result of the rows admin lane.
+type CrossCopyAdminPrepareRowsResponse struct {
+	MainHash          string             `json:"main_hash"`
+	BranchHash        string             `json:"branch_hash"`
+	PreparedColumns   []ExpandColumn     `json:"prepared_columns"`
+	OverwrittenTables []OverwrittenTable `json:"overwritten_tables,omitempty"`
+	OperationResultFields
 }
 
 // CrossCopyTableRequest represents a request to copy an entire table across databases.
@@ -405,6 +465,36 @@ type CrossCopyTableResponse struct {
 	SharedColumns  []string `json:"shared_columns"`
 	SourceOnlyCols []string `json:"source_only_columns"`
 	DestOnlyCols   []string `json:"dest_only_columns"`
+	OperationResultFields
+}
+
+// CrossCopyAdminPrepareTableRequest prepares destination main for a subsequent table copy retry.
+type CrossCopyAdminPrepareTableRequest struct {
+	TargetID     string `json:"target_id"`
+	SourceDB     string `json:"source_db"`
+	SourceBranch string `json:"source_branch"`
+	SourceTable  string `json:"source_table"`
+	DestDB       string `json:"dest_db"`
+}
+
+// CrossCopyAdminPrepareTableResponse reports the result of the table admin lane.
+type CrossCopyAdminPrepareTableResponse struct {
+	MainHash        string         `json:"main_hash"`
+	PreparedColumns []ExpandColumn `json:"prepared_columns"`
+	OperationResultFields
+}
+
+// CrossCopyAdminCleanupImportRequest removes a deterministic import branch.
+type CrossCopyAdminCleanupImportRequest struct {
+	TargetID   string `json:"target_id"`
+	DestDB     string `json:"dest_db"`
+	BranchName string `json:"branch_name"`
+}
+
+// CrossCopyAdminCleanupImportResponse reports the result of import branch cleanup.
+type CrossCopyAdminCleanupImportResponse struct {
+	BranchName string `json:"branch_name"`
+	OperationResultFields
 }
 
 // --- CSV Import ---
@@ -452,6 +542,11 @@ type CSVApplyRequest struct {
 	Rows          []map[string]interface{} `json:"rows"`
 }
 
+type CSVApplyResponse struct {
+	Hash string `json:"hash"`
+	OperationResultFields
+}
+
 // --- Search ---
 
 // SearchResult represents a single search hit.
@@ -467,4 +562,5 @@ type SearchResult struct {
 type SearchResponse struct {
 	Results []SearchResult `json:"results"`
 	Total   int            `json:"total"`
+	ReadResultFields
 }
