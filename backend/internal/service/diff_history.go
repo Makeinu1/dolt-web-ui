@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
+
 
 // parsePK parses a URL-encoded JSON PK map and returns it as-is.
 // Supports both single and composite primary keys.
@@ -24,109 +26,113 @@ func parsePK(pkJSON string) (map[string]interface{}, error) {
 	return pkMap, nil
 }
 
-// HistoryCommits returns the merge history by querying dolt_tags (merged/* tags).
-// Each merged/* tag is created during ApproveRequest with the merge commit hash and message.
-// keyword: substring match on message or tag_name (empty = no filter).
+// HistoryCommits returns the approval merge history.
+//
+// B-PR2 (footer-first read): primary source is the main branch commit history.
+// Commits that carry a valid Dolt-Approval-Schema footer are returned as approval records.
+// Commits without a footer fall back to the merged/* legacy adapter (pre-cutover).
+// An invalid footer (schema present but fields wrong) returns an integrity error.
+//
+// keyword: substring match on message or work branch (empty = no filter).
 // fromDate/toDate: ISO date "YYYY-MM-DD" inclusive range (empty = no filter).
-// searchField: "message" (default) | "branch" — controls keyword matching target.
+// searchField: "message" (default) | "branch".
 // filterTable/filterPk: if both set, further filter to commits that changed the specific record.
 func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchName string, page, pageSize int, keyword, fromDate, toDate, searchField, filterTable, filterPk string) ([]model.HistoryCommit, error) {
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
-	offset := (page - 1) * pageSize
-
-	// Build WHERE conditions for dolt_tags query
-	var conditions []string
-	var args []interface{}
-
-	conditions = append(conditions, "tag_name LIKE 'merged/%'")
-
-	// Optional keyword filter
-	if keyword != "" {
-		normalizedKeyword := normalizeWorkItemSearchKeyword(keyword)
-		escapedKw := strings.ReplaceAll(keyword, "|", "||")
-		escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
-		escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
-		if searchField == "branch" {
-			if normalizedKeyword == "" {
-				normalizedKeyword = keyword
-			}
-			escapedKw = strings.ReplaceAll(normalizedKeyword, "|", "||")
-			escapedKw = strings.ReplaceAll(escapedKw, "%", "|%")
-			escapedKw = strings.ReplaceAll(escapedKw, "_", "|_")
-			// Search by work item name: merged/{keyword}/NN
-			conditions = append(conditions, "tag_name LIKE ? ESCAPE '|'")
-			args = append(args, "merged/"+escapedKw+"/%")
-		} else {
-			// Search by message
-			conditions = append(conditions, "message LIKE ? ESCAPE '|'")
-			args = append(args, "%"+escapedKw+"%")
-		}
-	}
-
-	// Optional date range filters
-	if fromDate != "" {
-		conditions = append(conditions, "date >= ?")
-		args = append(args, fromDate)
-	}
-	if toDate != "" {
-		conditions = append(conditions, "date <= ?")
-		args = append(args, toDate+" 23:59:59")
-	}
-
-	// When filtering by record, fetch a larger batch (paginate after filtering).
-	fetchLimit := pageSize
-	fetchOffset := offset
-	if filterTable != "" && filterPk != "" {
-		fetchLimit = 500
-		fetchOffset = 0
-	}
-
-	query := "SELECT tag_name, tag_hash, tagger, message, date FROM dolt_tags"
-	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND ")
-	}
-	query += " ORDER BY date DESC LIMIT ? OFFSET ?"
-	args = append(args, fetchLimit, fetchOffset)
-
-	rows, err := conn.QueryContext(ctx, query, args...)
+	// --- Step 1: build a merged/* tag index for legacy adapter lookups ---
+	// mergedTagIndex maps merge commit hash → workItem name.
+	mergedTagIndex, err := buildMergedTagIndex(ctx, conn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query merge tags: %w", err)
+		return nil, fmt.Errorf("failed to build merged/* tag index: %w", err)
 	}
 
-	// Collect commits — must close rows explicitly before any potential record filter query.
-	commits := make([]model.HistoryCommit, 0)
-	for rows.Next() {
-		var tagName, tagHash, tagger, message, date string
-		if err := rows.Scan(&tagName, &tagHash, &tagger, &message, &date); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("failed to scan tag: %w", err)
-		}
-		c := model.HistoryCommit{
-			Hash:      tagHash,
-			Author:    tagger,
-			Message:   message,
-			Timestamp: date,
-		}
-		if workItem, _, ok := parseArchiveTag(tagName); ok {
-			c.MergeBranch = "wi/" + workItem
-		}
-		commits = append(commits, c)
+	// --- Step 2: walk main commit history and classify each commit ---
+	//
+	// We use dolt_log on the effective branch (branchName resolves to main or a
+	// tag/hash for history read). We collect all candidates and then apply
+	// keyword / date filters in Go so that footer fields are searchable.
+	//
+	// dolt_log columns: commit_hash, committer, committer_email, date, message.
+	logQuery := "SELECT commit_hash, committer, date, message FROM dolt_log ORDER BY date DESC LIMIT 2000"
+	logRows, err := conn.QueryContext(ctx, logQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query commit log: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+
+	type rawCommit struct {
+		hash      string
+		committer string
+		date      string
+		message   string
+	}
+	var rawCommits []rawCommit
+	for logRows.Next() {
+		var rc rawCommit
+		if err := logRows.Scan(&rc.hash, &rc.committer, &rc.date, &rc.message); err != nil {
+			logRows.Close()
+			return nil, fmt.Errorf("failed to scan commit log: %w", err)
+		}
+		rawCommits = append(rawCommits, rc)
+	}
+	if err := logRows.Err(); err != nil {
+		logRows.Close()
 		return nil, err
 	}
-	rows.Close() // Explicit close BEFORE potential record filter query on same connection.
+	logRows.Close()
 
-	// If no record filter, return with pagination already applied by the query.
-	if filterTable == "" || filterPk == "" {
-		return commits, nil
+	// --- Step 3: classify each commit and build the history list ---
+	commits := make([]model.HistoryCommit, 0)
+	for _, rc := range rawCommits {
+		footer, parseErr := parseApprovalFooter(rc.message)
+
+		switch {
+		case parseErr != nil:
+			// Footer marker present but invalid — integrity error, must not silent-skip.
+			return nil, fmt.Errorf("approval history integrity error at commit %s: %w", rc.hash, parseErr)
+
+		case footer != nil:
+			// Post-cutover: footer is the primary truth.
+			c := model.HistoryCommit{
+				Hash:        rc.hash,
+				Author:      rc.committer,
+				Message:     humanSubjectFromApprovalMessage(rc.message),
+				Timestamp:   rc.date,
+				MergeBranch: footer.WorkBranch,
+			}
+			commits = append(commits, c)
+
+		default:
+			// No footer — check merged/* legacy adapter (pre-cutover).
+			legacyWorkItem, hasLegacy := mergedTagIndex[rc.hash]
+			if !hasLegacy {
+				// Normal (non-approval) commit — skip.
+				continue
+			}
+			c := model.HistoryCommit{
+				Hash:        rc.hash,
+				Author:      rc.committer,
+				Message:     rc.message,
+				Timestamp:   rc.date,
+				MergeBranch: "wi/" + legacyWorkItem,
+			}
+			commits = append(commits, c)
+		}
 	}
+
+	// --- Step 4: apply keyword / date filters in Go ---
+	commits = filterHistoryCommits(commits, keyword, fromDate, toDate, searchField)
+
+	// When filtering by record, fetch a larger batch (paginate after filtering).
+	if filterTable == "" || filterPk == "" {
+		return paginateCommits(commits, page, pageSize), nil
+	}
+
+	// record-level filter: further narrow to commits that changed a specific row.
 
 	// Steps 2-4: Further filter to commits that changed the specific record.
 
@@ -303,9 +309,9 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 		whereArgs = append(whereArgs, v)
 	}
 
-	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -371,4 +377,104 @@ func (s *Service) HistoryRow(ctx context.Context, targetID, dbName, branchName, 
 	}
 
 	return &model.HistoryRowResponse{Snapshots: snapshots}, nil
+}
+
+// --- B-PR2 helpers ---
+
+// buildMergedTagIndex queries all merged/* tags and returns a map from
+// tag_hash (approval merge commit hash) to workItem name.
+// This is used as a legacy adapter for pre-cutover approvals that do not
+// carry a Dolt-Approval-Schema footer on the main commit.
+func buildMergedTagIndex(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, "SELECT tag_name, tag_hash FROM dolt_tags WHERE tag_name LIKE 'merged/%'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	idx := make(map[string]string) // hash → workItem
+	for rows.Next() {
+		var tagName, tagHash string
+		if err := rows.Scan(&tagName, &tagHash); err != nil {
+			return nil, err
+		}
+		workItem, _, ok := parseArchiveTag(tagName)
+		if !ok {
+			continue
+		}
+		idx[tagHash] = workItem
+	}
+	return idx, rows.Err()
+}
+
+// humanSubjectFromApprovalMessage extracts the first line (human-readable subject)
+// from an approval commit message that also carries a footer trailer block.
+func humanSubjectFromApprovalMessage(msg string) string {
+	for _, line := range strings.SplitN(msg, "\n", 2) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return msg
+}
+
+// filterHistoryCommits applies keyword and date filters to a list of history commits.
+// Filtering is done in Go so that footer-derived fields (MergeBranch, Message) are searchable.
+func filterHistoryCommits(commits []model.HistoryCommit, keyword, fromDate, toDate, searchField string) []model.HistoryCommit {
+	if keyword == "" && fromDate == "" && toDate == "" {
+		return commits
+	}
+	normalizedKw := ""
+	if keyword != "" {
+		normalizedKw = normalizeWorkItemSearchKeyword(keyword)
+		if normalizedKw == "" {
+			normalizedKw = keyword
+		}
+	}
+	filtered := make([]model.HistoryCommit, 0, len(commits))
+	for _, c := range commits {
+		// Keyword filter
+		if keyword != "" {
+			var haystack string
+			if searchField == "branch" {
+				haystack = strings.ToLower(c.MergeBranch)
+			} else {
+				haystack = strings.ToLower(c.Message)
+			}
+			needle := strings.ToLower(normalizedKw)
+			if !strings.Contains(haystack, needle) {
+				continue
+			}
+		}
+		// Date filter — Timestamp is "YYYY-MM-DD HH:MM:SS" or RFC3339.
+		ts := c.Timestamp
+		if len(ts) >= 10 {
+			dateOnly := ts[:10]
+			if fromDate != "" && dateOnly < fromDate {
+				continue
+			}
+			if toDate != "" && dateOnly > toDate {
+				continue
+			}
+		}
+		filtered = append(filtered, c)
+	}
+	return filtered
+}
+
+// paginateCommits returns the page-sized slice of commits for the given 1-based page.
+func paginateCommits(commits []model.HistoryCommit, page, pageSize int) []model.HistoryCommit {
+	if page < 1 {
+		page = 1
+	}
+	start := (page - 1) * pageSize
+	if start >= len(commits) {
+		return make([]model.HistoryCommit, 0)
+	}
+	end := start + pageSize
+	if end > len(commits) {
+		end = len(commits)
+	}
+	return commits[start:end]
 }

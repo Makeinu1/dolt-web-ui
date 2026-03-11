@@ -33,9 +33,9 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid work branch name"}
 	}
 
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, req.BranchName)
+	conn, err := s.connAllowedWorkBranchWrite(ctx, req.TargetID, req.DBName, req.BranchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -132,9 +132,9 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 // ListRequests returns all pending approval requests.
 // This API is read-only and never performs cleanup.
 func (s *Service) ListRequests(ctx context.Context, targetID, dbName string) ([]model.RequestSummary, error) {
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -187,9 +187,9 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid request_id format"}
 	}
 
-	conn, err := s.repo.ConnDB(ctx, targetID, dbName)
+	conn, err := s.connMetadataRevision(ctx, targetID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -230,7 +230,11 @@ func (s *Service) GetRequest(ctx context.Context, targetID, dbName, requestID st
 // archives the approval cycle, clears the request tag, and advances the same work
 // branch to main HEAD for the next editing session.
 func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) (*model.ApproveResponse, error) {
-	conn, err := s.repo.ConnWrite(ctx, req.TargetID, req.DBName, "main")
+	if _, err := s.configuredDatabase(req.TargetID, req.DBName); err != nil {
+		return nil, err
+	}
+
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
@@ -250,7 +254,11 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 
 	var meta map[string]string
 	if err := json.Unmarshal([]byte(message), &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse tag message: %w", err)
+		// B-PR2: req/* JSON 破損でも tag_hash から続行可能。footer required fields
+		// (Request-Id, Work-Item, Work-Branch, Submitted-Work-Hash) は request_id と
+		// tag_hash から再構成できる。optional fields は省略する。
+		log.Printf("WARN: failed to parse req/* message JSON for %s (degraded): %v", req.RequestID, err)
+		meta = map[string]string{}
 	}
 
 	workBranch := meta["work_branch"]
@@ -280,10 +288,32 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	}
 	defer conn.ExecContext(context.Background(), "SET autocommit=0")
 
+	// B-PR2: Build the approval footer before merging so that the merge commit
+	// on main carries machine-readable audit metadata. This makes main the
+	// primary audit truth, independent of merged/* tags.
+	workItemForFooter, ok := workItemFromWorkBranch(workBranch)
+	if !ok {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid work branch name"}
+	}
+	footerPayload := approvalFooter{
+		Schema:            "v1",
+		RequestID:         req.RequestID,
+		WorkItem:          workItemForFooter,
+		WorkBranch:        workBranch,
+		SubmittedWorkHash: submittedWorkHash,
+	}
+	if v := meta["submitted_main_hash"]; v != "" {
+		footerPayload.SubmittedMainHash = v
+	}
+	if v := meta["submitted_at"]; v != "" {
+		footerPayload.RequestSubmittedAt = v
+	}
+	commitMessage := buildApprovalFooter(req.MergeMessageJa, footerPayload)
+
 	var mergeHash string
 	var fastForward, conflicts int
 	var mergeMessage string
-	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE(?, '-m', ?)", workBranch, req.MergeMessageJa).
+	err = conn.QueryRowContext(ctx, "CALL DOLT_MERGE(?, '-m', ?)", workBranch, commitMessage).
 		Scan(&mergeHash, &fastForward, &conflicts, &mergeMessage)
 	if err != nil {
 		if strings.Contains(err.Error(), "Merge conflict detected") || strings.Contains(err.Error(), "conflict") {
@@ -320,24 +350,21 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	}
 
 	bgCtx := context.Background()
-	workItem, ok := workItemFromWorkBranch(workBranch)
-	if !ok {
-		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid work branch name"}
-	}
+	workItem := workItemForFooter // already validated above
 
 	warnings := make([]string, 0)
-	archiveTag, archiveErr := s.createArchiveTag(bgCtx, conn, workItem, req.MergeMessageJa)
+
+	// Secondary index (merged/* tag) — failure does not block audit truth.
+	archiveTag, archiveErr := s.approveCreateSecondaryIndexHook(bgCtx, conn, workItem, req.MergeMessageJa)
 	if archiveErr != nil {
 		log.Printf("WARN: failed to create archive tag for %s: %v", workBranch, archiveErr)
 		warnings = append(warnings, "mainへの反映は完了しましたが、履歴タグの保存に失敗しました。")
 		archiveTag = ""
 	}
 
+	// Postcondition 1: delete the request tag (release the lock).
 	requestCleared := true
-	if err := retryExec(bgCtx, s.cfg.Server.Retries.TagRetryAttempts, s.tagRetryDelay(), func(execCtx context.Context) error {
-		_, err := conn.ExecContext(execCtx, "CALL DOLT_TAG('-d', ?)", req.RequestID)
-		return err
-	}); err != nil {
+	if err := s.approveDeleteRequestTagHook(bgCtx, req.TargetID, req.DBName, req.RequestID); err != nil {
 		log.Printf("WARN: failed to delete request tag %s: %v", req.RequestID, err)
 		requestCleared = false
 		warnings = append(warnings, "mainへの反映は完了しましたが、申請タグの解除に失敗しました。Inbox から再試行または却下を行ってください。")
@@ -346,17 +373,18 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 	connClosed = true
 	conn.Close()
 
-	branchAdvanced := false
-	branchConn, err := s.repo.ConnDB(bgCtx, req.TargetID, req.DBName)
-	if err != nil {
-		log.Printf("WARN: failed to open branch maintenance connection for %s: %v", workBranch, err)
-		warnings = append(warnings, fmt.Sprintf("作業ブランチ %s を main 最新位置へ進められませんでした。次回は main から同期して再開してください。", workBranch))
-	} else {
-		defer branchConn.Close()
-		branchAdvanced = s.advanceWorkBranch(bgCtx, branchConn, req.TargetID, req.DBName, workBranch, &warnings)
-	}
+	// Postcondition 2: advance the work branch to main HEAD.
+	branchAdvanced := s.approveAdvanceWorkBranchHook(bgCtx, req.TargetID, req.DBName, workBranch, &warnings)
 
+	// Determine outcome per B-PR1 contract.
+	// "completed" requires: audit footer recorded (always true here — merge succeeded) +
+	//                       request cleared + resume branch ready.
+	// "retry_required" means audit truth exists but a postcondition failed.
 	branchReady := requestCleared && branchAdvanced
+	outcome := "completed"
+	if !requestCleared || !branchAdvanced {
+		outcome = "retry_required"
+	}
 
 	return &model.ApproveResponse{
 		Hash:                 newHead,
@@ -364,7 +392,40 @@ func (s *Service) ApproveRequest(ctx context.Context, req model.ApproveRequest) 
 		ActiveBranchAdvanced: branchReady,
 		ArchiveTag:           archiveTag,
 		Warnings:             warnings,
+		Outcome: outcome,
+		Completion: map[string]bool{
+			"audit_recorded":      true, // merge to main succeeded
+			"request_cleared":     requestCleared,
+			"resume_branch_ready": branchAdvanced,
+		},
 	}, nil
+}
+
+// defaultDeleteRequestTag opens its own protected-maintenance connection and retries
+// deleting the request tag. Extracted so it can be replaced by a test hook.
+func (s *Service) defaultDeleteRequestTag(ctx context.Context, targetID, dbName, requestID string) error {
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, targetID, dbName, "main")
+	if err != nil {
+		return fmt.Errorf("failed to connect for tag delete: %w", err)
+	}
+	defer conn.Close()
+	return retryExec(ctx, s.cfg.Server.Retries.TagRetryAttempts, s.tagRetryDelay(), func(execCtx context.Context) error {
+		_, err := conn.ExecContext(execCtx, "CALL DOLT_TAG('-d', ?)", requestID)
+		return err
+	})
+}
+
+// defaultAdvanceWorkBranchForApprove opens its own protected-maintenance connection and
+// advances the work branch to main HEAD. Extracted so it can be replaced by a test hook.
+func (s *Service) defaultAdvanceWorkBranchForApprove(ctx context.Context, targetID, dbName, workBranch string, warnings *[]string) bool {
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, targetID, dbName, "main")
+	if err != nil {
+		log.Printf("WARN: failed to open branch maintenance connection for %s: %v", workBranch, err)
+		*warnings = append(*warnings, fmt.Sprintf("作業ブランチ %s を main 最新位置へ進められませんでした。次回は main から同期して再開してください。", workBranch))
+		return false
+	}
+	defer conn.Close()
+	return s.advanceWorkBranch(ctx, conn, targetID, dbName, workBranch, warnings)
 }
 
 func (s *Service) createArchiveTag(ctx context.Context, conn *sql.Conn, workItem, mergeMessage string) (string, error) {
@@ -417,9 +478,9 @@ func (s *Service) advanceWorkBranch(ctx context.Context, conn *sql.Conn, targetI
 		return false
 	}
 
-	queryability := s.verifyBranchQueryable(ctx, targetID, dbName, workBranch)
-	if !queryability.Ready {
-		logBranchQueryabilityFailure("advance_work_branch_not_ready", targetID, dbName, workBranch, queryability)
+	readiness := s.branchReadiness(ctx, targetID, dbName, workBranch)
+	if !readiness.Ready {
+		logBranchQueryabilityFailure("advance_work_branch_not_ready", targetID, dbName, workBranch, readiness)
 		*warnings = append(*warnings, fmt.Sprintf("作業ブランチ %s は更新済みですが、接続反映を確認できませんでした。時間をおいて再度開いてください。", workBranch))
 		return false
 	}
@@ -454,7 +515,11 @@ func retryExec(ctx context.Context, attempts int, delay time.Duration, fn func(c
 // RejectRequest deletes the request tag only.
 // Branch is kept for user to fix and re-submit.
 func (s *Service) RejectRequest(ctx context.Context, req model.RejectRequest) error {
-	conn, err := s.repo.ConnDB(ctx, req.TargetID, req.DBName)
+	if _, err := s.configuredDatabase(req.TargetID, req.DBName); err != nil {
+		return err
+	}
+
+	conn, err := s.repo.ConnProtectedMaintenance(ctx, req.TargetID, req.DBName, "main")
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
