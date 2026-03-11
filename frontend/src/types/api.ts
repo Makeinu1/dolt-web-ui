@@ -213,6 +213,17 @@ export interface DiffSummaryResponse {
   entries: DiffSummaryEntry[];
 }
 
+export interface DiffSummaryLightEntry {
+  table: string;
+  has_data_change: boolean;
+  has_schema_change: boolean;
+}
+
+export interface DiffSummaryLightResponse {
+  changed_table_count: number;
+  tables: DiffSummaryLightEntry[];
+}
+
 // --- Cross-DB Copy ---
 
 export interface ExpandColumn {

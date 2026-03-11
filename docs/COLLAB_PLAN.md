@@ -8,9 +8,24 @@
 
 ## 現在のプロジェクト状態
 
-**最終更新**: 2026-03-09
-**最終コミット**: feat: ユーザ不満5件対応 UX改善（リフレッシュ修正/ドラフトフィルタ/コピーボタン統合/ソースブランチ選択/一括編集拡張）
+**最終更新**: 2026-03-11
+**最終コミット**: `a4becef` Harden branch readiness recovery
 **ブランチ**: `master`（直接プッシュ運用）
+
+## 現行プロダクト方針
+
+プロダクト原則は [product-principles.md](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/docs/product-principles.md) を正とします。
+
+- `Core`: 業務ユーザが安全に main 反映まで進める主導線
+- `Advanced`: cross-DB / CSV / bulk / deep history など、日常的にも使われる強力な機能
+- `Admin / escape hatch`: recovery reload, merge abort, CLI runbook などの復旧導線
+
+今後のレビューと改修は、機能追加よりも以下を優先します。
+
+1. 普通の業務ユーザが永続的に詰まらない
+2. `main` / `audit` を常に信頼できる
+3. 成功・失敗・要再試行が UI で明確に分かる
+4. 強力な機能の到達性を落とさずに安全・完了・復旧を明確にする
 
 ---
 

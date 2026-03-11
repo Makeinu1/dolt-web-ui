@@ -690,7 +690,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       );
       return items;
     },
-    [isProtected, editingBlocked, canCrossCopyRows, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, tableName, rowHasDraft]
+    [isProtected, editingBlocked, canCrossCopyRows, pkCols, selectedRows, rowPkId, handleCloneRows, handleDeleteRows, onCrossCopyRows, rowHasDraft]
   );
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON.
@@ -896,7 +896,6 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
                 {(cloning || fetchingAll) ? "コピー中..." : `コピー (${selectedRows.length})`}
               </button>
             )}
-            {/* P5: 一括置換 — all selected rows */}
             {canEditRows && pkCols.length > 0 && (
               <button
                 onClick={() => { setBulkEditTargetRows(selectedRows); setShowBulkEditModal(true); }}

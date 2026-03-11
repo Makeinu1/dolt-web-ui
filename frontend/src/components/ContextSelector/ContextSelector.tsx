@@ -13,6 +13,7 @@ export function ContextSelector() {
   const { targetId, dbName, branchName, branchRefreshKey, setTarget, setDatabase, setBranch } =
     useContextStore();
   const setError = useUIStore((s) => s.setError);
+  const setSuccess = useUIStore((s) => s.setSuccess);
   const hasDraft = useDraftStore((s) => s.hasDraft);
 
   const [targets, setTargets] = useState<Target[]>([]);
@@ -167,6 +168,7 @@ export function ContextSelector() {
       setWorkItemName("");
       setShowCreate(false);
       setCreateInfo(null);
+      setSuccess("作業ブランチを作成しました");
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
         const details = getBranchErrorDetails(err);
@@ -196,6 +198,7 @@ export function ContextSelector() {
           setShowCreate(false);
           setCreateError(null);
           setCreateInfo(null);
+          setSuccess("作業ブランチを作成しました");
         }
       } else {
         setCreateInfo(null);

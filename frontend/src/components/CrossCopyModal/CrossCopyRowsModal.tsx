@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
+import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type {
@@ -34,6 +35,7 @@ export function CrossCopyRowsModal({
   onClose,
 }: CrossCopyRowsModalProps) {
   const { targetId, dbName, branchName } = useContextStore();
+  const setSuccess = useUIStore((s) => s.setSuccess);
   const sourceBranch = branchName;
   const defaultDestWorkItem = useMemo(
     () => sanitizeWorkItemName(`copy-${dbName}-${tableName}`),
@@ -242,6 +244,7 @@ export function CrossCopyRowsModal({
       });
       setResult(res);
       setStep("done");
+      setSuccess("他DBへ行をコピーしました");
     } catch (err: unknown) {
       const msg =
         err instanceof ApiError ? err.message : "コピーに失敗しました";

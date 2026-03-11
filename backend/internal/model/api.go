@@ -293,6 +293,19 @@ type DiffSummaryResponse struct {
 	Entries []DiffSummaryEntry `json:"entries"`
 }
 
+// DiffSummaryLightEntry is the lightweight per-table change summary.
+type DiffSummaryLightEntry struct {
+	Table           string `json:"table"`
+	HasDataChange   bool   `json:"has_data_change"`
+	HasSchemaChange bool   `json:"has_schema_change"`
+}
+
+// DiffSummaryLightResponse is the response for GET /diff/summary/light.
+type DiffSummaryLightResponse struct {
+	ChangedTableCount int                     `json:"changed_table_count"`
+	Tables            []DiffSummaryLightEntry `json:"tables"`
+}
+
 // --- Row History ---
 
 // HistoryRowSnapshot represents a single historical snapshot of a row.

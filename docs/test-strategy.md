@@ -3,6 +3,9 @@
 長寿命 Work Branch 方式への切り替え後の回帰を、4 層のテストで管理するための運用ドキュメントです。  
 manual checklist を source-of-truth としつつ、fast suite と real Dolt suite を明確に分離します。
 
+プロダクト原則は [docs/product-principles.md](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/docs/product-principles.md) を参照してください。  
+このテスト戦略では、`Core` を壊さないこと、日常的に使う強力な機能の到達性を落とさないこと、`Recovery` が normal user に届くことを優先します。
+
 ## 4 Layers
 
 | Layer | 主目的 | 実行コマンド | Gate |
@@ -34,6 +37,15 @@ manual checklist を source-of-truth としつつ、fast suite と real Dolt sui
 
 `@quarantine` は既知不整合の期待仕様を固定するために使います。  
 PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行します。
+
+## Product-Led Acceptance Lens
+
+| Lens | 受け入れ条件 |
+|---|---|
+| `Core smoke` | 業務ユーザが `create/edit/commit/submit/approve/reject/reopen/recover` だけで main 反映まで完結できる |
+| `Advanced regression` | cross-DB / CSV / bulk / deep history が直接使えて、かつ安全制約と完了表示が壊れない |
+| `Recovery regression` | `branch not ready` / `stale head` / `lock` / `recovery reload` で復旧不能にならない |
+| `Heavy-screen safety` | 一覧画面が巨大DBで勝手に重い diff を走らせない |
 
 ## Implemented Branch Lifecycle Coverage
 

@@ -2,7 +2,8 @@ import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { HistoryCommit, DiffSummaryEntry } from "../../types/api";
+import type { DiffSummaryEntry, DiffSummaryLightEntry, HistoryCommit } from "../../types/api";
+import { mergeDiffSummaryEntries } from "../../utils/diffSummary";
 
 // ─── MergeLog ────────────────────────────────────────────────────────────────
 //
@@ -27,8 +28,15 @@ interface CommitDiff {
     error: string | null;
 }
 
-const VISIBLE_PRELOAD_COUNT = 5;
-const PRELOAD_CONCURRENCY = 2;
+interface CommitLightSummary {
+    changedTableCount: number;
+    tables: DiffSummaryLightEntry[];
+    loading: boolean;
+    error: string | null;
+}
+
+const LIGHT_PRELOAD_CONCURRENCY = 4;
+const SUMMARY_CHIP_PREVIEW_COUNT = 3;
 
 function formatTimestamp(ts: string): string {
     if (!ts) return "—";
@@ -51,12 +59,13 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
     const [page, setPage] = useState(1);
     const pageSize = 30;
 
-    // DiffSummary per commit (auto-loaded)
-    const [diffMap, setDiffMap] = useState<Record<string, CommitDiff>>({});
-    const diffStatusRef = useRef<Record<string, "loading" | "loaded">>({});
+    const [lightDiffMap, setLightDiffMap] = useState<Record<string, CommitLightSummary>>({});
+    const [heavyDiffMap, setHeavyDiffMap] = useState<Record<string, CommitDiff>>({});
+    const lightStatusRef = useRef<Record<string, "loading" | "loaded">>({});
+    const heavyStatusRef = useRef<Record<string, "loading" | "loaded">>({});
     const searchVersionRef = useRef(0);
 
-    // Expanded table (within a commit)
+    const [expandedCommitHash, setExpandedCommitHash] = useState<string | null>(null);
     const [expandedTableKey, setExpandedTableKey] = useState<string | null>(null);
     const [exportingZip, setExportingZip] = useState(false);
     const [zipError, setZipError] = useState<string | null>(null);
@@ -69,14 +78,76 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
     const [compareError, setCompareError] = useState<string | null>(null);
     const [compareTableKey, setCompareTableKey] = useState<string | null>(null);
 
-    const loadDiffSummary = useCallback(async (hash: string, version = searchVersionRef.current) => {
+    const loadLightSummary = useCallback(async (hash: string, version = searchVersionRef.current) => {
         if (searchVersionRef.current !== version) return;
 
-        const status = diffStatusRef.current[hash];
+        const status = lightStatusRef.current[hash];
         if (status === "loading" || status === "loaded") return;
 
-        diffStatusRef.current[hash] = "loading";
-        setDiffMap((prev) => ({
+        lightStatusRef.current[hash] = "loading";
+        setLightDiffMap((prev) => ({
+            ...prev,
+            [hash]: {
+                changedTableCount: prev[hash]?.changedTableCount || 0,
+                tables: prev[hash]?.tables || [],
+                loading: true,
+                error: null,
+            },
+        }));
+
+        try {
+            const res = await api.getDiffSummaryLight(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
+            if (searchVersionRef.current !== version) return;
+            lightStatusRef.current[hash] = "loaded";
+            setLightDiffMap((prev) => ({
+                ...prev,
+                [hash]: {
+                    changedTableCount: res.changed_table_count || 0,
+                    tables: res.tables || [],
+                    loading: false,
+                    error: null,
+                },
+            }));
+        } catch {
+            if (searchVersionRef.current !== version) return;
+            delete lightStatusRef.current[hash];
+            setLightDiffMap((prev) => ({
+                ...prev,
+                [hash]: {
+                    changedTableCount: 0,
+                    tables: [],
+                    loading: false,
+                    error: "変更テーブルの読み込みに失敗しました",
+                },
+            }));
+        }
+    }, [targetId, dbName]);
+
+    const preloadLightSummaries = useCallback(async (hashes: string[], version: number) => {
+        if (hashes.length === 0) return;
+
+        let nextIndex = 0;
+        const workerCount = Math.min(LIGHT_PRELOAD_CONCURRENCY, hashes.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (searchVersionRef.current === version) {
+                const currentIndex = nextIndex;
+                nextIndex += 1;
+                if (currentIndex >= hashes.length) return;
+                await loadLightSummary(hashes[currentIndex], version);
+            }
+        });
+
+        await Promise.all(workers);
+    }, [loadLightSummary]);
+
+    const loadHeavySummary = useCallback(async (hash: string, version = searchVersionRef.current) => {
+        if (searchVersionRef.current !== version) return;
+
+        const status = heavyStatusRef.current[hash];
+        if (status === "loading" || status === "loaded") return;
+
+        heavyStatusRef.current[hash] = "loading";
+        setHeavyDiffMap((prev) => ({
             ...prev,
             [hash]: { entries: prev[hash]?.entries || [], loading: true, error: null },
         }));
@@ -84,48 +155,35 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
         try {
             const res = await api.getDiffSummary(targetId, dbName, "main", `${hash}^`, hash, "two_dot");
             if (searchVersionRef.current !== version) return;
-            diffStatusRef.current[hash] = "loaded";
-            setDiffMap((prev) => ({
+            heavyStatusRef.current[hash] = "loaded";
+            setHeavyDiffMap((prev) => ({
                 ...prev,
                 [hash]: { entries: res.entries || [], loading: false, error: null },
             }));
-        } catch {
+        } catch (err) {
             if (searchVersionRef.current !== version) return;
-            delete diffStatusRef.current[hash];
-            setDiffMap((prev) => ({
+            delete heavyStatusRef.current[hash];
+            const message = err instanceof ApiError ? err.message : "件数集計に失敗しました";
+            setHeavyDiffMap((prev) => ({
                 ...prev,
-                [hash]: { entries: [], loading: false, error: "差分の読み込みに失敗しました" },
+                [hash]: { entries: [], loading: false, error: message },
             }));
         }
     }, [targetId, dbName]);
-
-    const preloadVisibleDiffs = useCallback(async (hashes: string[], version: number) => {
-        if (hashes.length === 0) return;
-
-        let nextIndex = 0;
-        const workerCount = Math.min(PRELOAD_CONCURRENCY, hashes.length);
-        const workers = Array.from({ length: workerCount }, async () => {
-            while (searchVersionRef.current === version) {
-                const currentIndex = nextIndex;
-                nextIndex += 1;
-                if (currentIndex >= hashes.length) return;
-                await loadDiffSummary(hashes[currentIndex], version);
-            }
-        });
-
-        await Promise.all(workers);
-    }, [loadDiffSummary]);
 
     const handleSearch = useCallback(async (p = 1) => {
         if (!targetId || !dbName) return;
         const version = searchVersionRef.current + 1;
         searchVersionRef.current = version;
-        diffStatusRef.current = {};
+        lightStatusRef.current = {};
+        heavyStatusRef.current = {};
         setLoading(true);
         setSearched(false);
         setSearchError(null);
         setZipWarning(null);
-        setDiffMap({});
+        setLightDiffMap({});
+        setHeavyDiffMap({});
+        setExpandedCommitHash(null);
         setExpandedTableKey(null);
         setCompareHashes([]);
         setCompareResult(null);
@@ -149,10 +207,7 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
             setCommits(result || []);
             setPage(p);
             setSearched(true);
-            void preloadVisibleDiffs(
-                (result || []).slice(0, VISIBLE_PRELOAD_COUNT).map((c) => c.hash),
-                version
-            );
+            void preloadLightSummaries((result || []).map((c) => c.hash), version);
         } catch (err) {
             if (searchVersionRef.current !== version) return;
             const msg = err instanceof ApiError ? err.message : "マージログの読み込みに失敗しました";
@@ -164,7 +219,7 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                 setLoading(false);
             }
         }
-    }, [targetId, dbName, keyword, fromDate, toDate, searchField, filterTable, filterPk, preloadVisibleDiffs]);
+    }, [targetId, dbName, keyword, fromDate, toDate, searchField, filterTable, filterPk, preloadLightSummaries]);
 
     // Auto-load on open
     useEffect(() => {
@@ -173,10 +228,19 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
     }, []);
 
     // Toggle InlineDiff visibility (DiffSummary is always shown)
-    const handleToggleInlineDiff = async (hash: string, table: string) => {
-        await loadDiffSummary(hash);
+    const handleToggleInlineDiff = (hash: string, table: string) => {
         const tableKey = `${hash}::${table}`;
         setExpandedTableKey((prev) => prev === tableKey ? null : tableKey);
+    };
+
+    const handleToggleCommit = (hash: string) => {
+        const nextHash = expandedCommitHash === hash ? null : hash;
+        setExpandedCommitHash(nextHash);
+        setExpandedTableKey(null);
+        if (nextHash === hash) {
+            void loadLightSummary(hash);
+            void loadHeavySummary(hash);
+        }
     };
 
     const handleExportZip = async (hash: string) => {
@@ -451,12 +515,15 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                         </div>
                     )}
 
-                    {commits.map((c, index) => {
-                        const diff = diffMap[c.hash];
-                        const isVisiblePreload = index < VISIBLE_PRELOAD_COUNT;
+                    {commits.map((c) => {
+                        const light = lightDiffMap[c.hash];
+                        const heavy = heavyDiffMap[c.hash];
                         const msgLines = c.message.split("\n");
                         const firstLine = msgLines[0];
                         const isChecked = compareHashes.includes(c.hash);
+                        const isCommitExpanded = expandedCommitHash === c.hash;
+                        const mergedEntries = mergeDiffSummaryEntries(light?.tables || [], heavy?.entries || []);
+                        const previewTables = (light?.tables || []).slice(0, SUMMARY_CHIP_PREVIEW_COUNT);
 
                         return (
                             <div
@@ -475,13 +542,18 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                         justifyContent: "space-between",
                                         alignItems: "flex-start",
                                         padding: "8px 12px",
+                                        cursor: "pointer",
                                     }}
+                                    onClick={() => handleToggleCommit(c.hash)}
                                 >
                                     {/* 2b: checkbox */}
                                     <input
                                         type="checkbox"
                                         checked={isChecked}
-                                        onChange={() => toggleCompareHash(c.hash)}
+                                        onChange={(e) => {
+                                            e.stopPropagation();
+                                            toggleCompareHash(c.hash);
+                                        }}
                                         title="比較対象として選択"
                                         style={{ marginRight: 8, marginTop: 3, flexShrink: 0, cursor: "pointer" }}
                                     />
@@ -504,12 +576,55 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                         )}
                                         <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 2 }}>
                                             {firstLine}
-                                            {diff && !diff.loading && diff.entries.length > 0 && (
+                                            {light && !light.loading && light.changedTableCount > 0 && (
                                                 <span style={{ fontSize: 11, color: "#888", fontWeight: 400, marginLeft: 8 }}>
-                                                    ({diff.entries.length} テーブル)
+                                                    ({light.changedTableCount}テーブル変更)
                                                 </span>
                                             )}
                                         </div>
+                                        {light?.loading && (
+                                            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                                                変更テーブルを確認中...
+                                            </div>
+                                        )}
+                                        {light?.error && (
+                                            <div style={{ fontSize: 11, color: "#991b1b", marginTop: 2 }}>
+                                                {light.error}
+                                            </div>
+                                        )}
+                                        {!light?.loading && !light?.error && light && light.changedTableCount > 0 && (
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                                                <span style={{ fontSize: 11, color: "#475569" }}>
+                                                    {light.changedTableCount}テーブル変更
+                                                </span>
+                                                {previewTables.map((tableEntry) => (
+                                                    <span
+                                                        key={`${c.hash}-${tableEntry.table}`}
+                                                        style={{
+                                                            display: "inline-flex",
+                                                            alignItems: "center",
+                                                            gap: 4,
+                                                            padding: "1px 8px",
+                                                            background: "#f1f5f9",
+                                                            borderRadius: 999,
+                                                            fontSize: 10,
+                                                            color: "#334155",
+                                                            fontFamily: "monospace",
+                                                        }}
+                                                    >
+                                                        {tableEntry.table}
+                                                        {tableEntry.has_schema_change && (
+                                                            <span style={{ color: "#1d4ed8" }}>schema</span>
+                                                        )}
+                                                    </span>
+                                                ))}
+                                                {light.changedTableCount > SUMMARY_CHIP_PREVIEW_COUNT && (
+                                                    <span style={{ fontSize: 10, color: "#64748b" }}>
+                                                        +{light.changedTableCount - SUMMARY_CHIP_PREVIEW_COUNT}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                         <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
                                             📅 {formatTimestamp(c.timestamp)}
                                             {c.author ? `　👤 ${c.author}` : ""}
@@ -533,117 +648,124 @@ export function MergeLog({ onClose, onPreviewCommit, filterTable, filterPk }: Pr
                                                 📋 閲覧
                                             </button>
                                         )}
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleToggleCommit(c.hash);
+                                            }}
+                                            style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, color: "#334155", cursor: "pointer", whiteSpace: "nowrap" }}
+                                        >
+                                            {isCommitExpanded ? "詳細を閉じる" : "詳細を表示"}
+                                        </button>
                                     </div>
                                 </div>
 
-                                {/* 差分サマリー（常時表示） */}
-                                <div style={{
-                                    borderTop: "1px solid #e2e8f0",
-                                    padding: "8px 12px",
-                                    background: "#f8fafc",
-                                }}>
-                                    {diff?.loading && (
-                                        <div style={{ fontSize: 12, color: "#888" }}>差分を読み込み中...</div>
-                                    )}
-                                    {diff?.error && (
-                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                            <div style={{ fontSize: 12, color: "#991b1b" }}>{diff.error}</div>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); void loadDiffSummary(c.hash); }}
-                                                style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer", color: "#334155" }}
-                                            >
-                                                再試行
-                                            </button>
-                                        </div>
-                                    )}
-                                    {diff && !diff.loading && !diff.error && diff.entries.length === 0 && (
-                                        <div style={{ fontSize: 12, color: "#888" }}>テーブル変更なし</div>
-                                    )}
-                                    {diff && !diff.loading && diff.entries.length > 0 && (
-                                        <>
-                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                                                <span style={{ fontSize: 11, color: "#666" }}>テーブル別変更数（クリックで詳細）</span>
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); handleExportZip(c.hash); }}
-                                                    disabled={exportingZip}
-                                                    style={{ fontSize: 11, padding: "2px 8px", background: "#f0f4ff", border: "1px solid #4361ee", borderRadius: 4, color: "#4361ee", cursor: "pointer" }}
-                                                >
-                                                    {exportingZip ? "生成中..." : "📥 ZIP"}
-                                                </button>
-                                            </div>
-                                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                                                <thead>
-                                                    <tr style={{ borderBottom: "1px solid #d0d0d8", color: "#666" }}>
-                                                        <th style={{ textAlign: "left", padding: "3px 8px" }}>テーブル</th>
-                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>+追加</th>
-                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>~変更</th>
-                                                        <th style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>-削除</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {diff.entries.map((e) => {
-                                                        const tableKey = `${c.hash}::${e.table}`;
-                                                        const isTableExpanded = expandedTableKey === tableKey;
-                                                        return (
-                                                            <tr
-                                                                key={e.table}
-                                                                style={{
-                                                                    borderBottom: "1px solid #f0f0f5",
-                                                                    cursor: "pointer",
-                                                                    background: isTableExpanded ? "#e0e7ff" : undefined,
-                                                                }}
-                                                                onClick={(ev) => {
-                                                                    ev.stopPropagation();
-                                                                    handleToggleInlineDiff(c.hash, e.table);
-                                                                }}
-                                                            >
-                                                                <td style={{ padding: "3px 8px", fontFamily: "monospace", fontWeight: 500 }}>
-                                                                    {e.table}{isTableExpanded ? " ▲" : " ▶"}
-                                                                </td>
-                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>
-                                                                    {e.added > 0 ? `+${e.added}` : "—"}
-                                                                </td>
-                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>
-                                                                    {e.modified > 0 ? `~${e.modified}` : "—"}
-                                                                </td>
-                                                                <td style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>
-                                                                    {e.removed > 0 ? `-${e.removed}` : "—"}
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-
-                                            {/* Inline DiffTableDetail for expanded table */}
-                                            {expandedTableKey && expandedTableKey.startsWith(`${c.hash}::`) && (
-                                                <InlineDiff
-                                                    targetId={targetId}
-                                                    dbName={dbName}
-                                                    branchName="main"
-                                                    table={expandedTableKey.split("::")[1]}
-                                                    fromRef={`${c.hash}^`}
-                                                    toRef={c.hash}
-                                                />
-                                            )}
-                                        </>
-                                    )}
-                                    {!diff && (
-                                        isVisiblePreload ? (
-                                            <div style={{ fontSize: 12, color: "#888" }}>差分を読み込み中...</div>
-                                        ) : (
+                                {isCommitExpanded && (
+                                    <div style={{
+                                        borderTop: "1px solid #e2e8f0",
+                                        padding: "8px 12px",
+                                        background: "#f8fafc",
+                                    }}>
+                                        {light?.loading && (
+                                            <div style={{ fontSize: 12, color: "#888" }}>変更テーブルを読み込み中...</div>
+                                        )}
+                                        {light?.error && (
                                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                                <div style={{ fontSize: 12, color: "#888" }}>差分サマリーは必要時に読み込みます</div>
+                                                <div style={{ fontSize: 12, color: "#991b1b" }}>{light.error}</div>
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); void loadDiffSummary(c.hash); }}
+                                                    onClick={(e) => { e.stopPropagation(); void loadLightSummary(c.hash); }}
                                                     style={{ fontSize: 11, padding: "2px 8px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, cursor: "pointer", color: "#334155" }}
                                                 >
-                                                    差分を表示
+                                                    再試行
                                                 </button>
                                             </div>
-                                        )
-                                    )}
-                                </div>
+                                        )}
+                                        {light && !light.loading && !light.error && light.changedTableCount === 0 && (
+                                            <div style={{ fontSize: 12, color: "#888" }}>テーブル変更なし</div>
+                                        )}
+                                        {light && !light.loading && !light.error && light.changedTableCount > 0 && (
+                                            <>
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                                        <span style={{ fontSize: 11, color: "#666" }}>変更テーブル一覧</span>
+                                                        {heavy?.loading && (
+                                                            <span style={{ fontSize: 11, color: "#888" }}>件数を集計中...</span>
+                                                        )}
+                                                        {heavy?.error && (
+                                                            <span style={{ fontSize: 11, color: "#92400e" }}>
+                                                                ⚠ 件数集計に失敗したため、変更テーブル一覧のみ表示しています。
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleExportZip(c.hash); }}
+                                                        disabled={exportingZip}
+                                                        style={{ fontSize: 11, padding: "2px 8px", background: "#f0f4ff", border: "1px solid #4361ee", borderRadius: 4, color: "#4361ee", cursor: "pointer" }}
+                                                    >
+                                                        {exportingZip ? "生成中..." : "📥 ZIP"}
+                                                    </button>
+                                                </div>
+                                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                                    <thead>
+                                                        <tr style={{ borderBottom: "1px solid #d0d0d8", color: "#666" }}>
+                                                            <th style={{ textAlign: "left", padding: "3px 8px" }}>テーブル</th>
+                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>+追加</th>
+                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>~変更</th>
+                                                            <th style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>-削除</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {mergedEntries.map((entry) => {
+                                                            const tableKey = `${c.hash}::${entry.table}`;
+                                                            const isTableExpanded = expandedTableKey === tableKey;
+                                                            return (
+                                                                <tr
+                                                                    key={entry.table}
+                                                                    style={{
+                                                                        borderBottom: "1px solid #f0f0f5",
+                                                                        cursor: "pointer",
+                                                                        background: isTableExpanded ? "#e0e7ff" : undefined,
+                                                                    }}
+                                                                    onClick={(ev) => {
+                                                                        ev.stopPropagation();
+                                                                        handleToggleInlineDiff(c.hash, entry.table);
+                                                                    }}
+                                                                >
+                                                                    <td style={{ padding: "3px 8px", fontFamily: "monospace", fontWeight: 500 }}>
+                                                                        {entry.table}{isTableExpanded ? " ▲" : " ▶"}
+                                                                        {entry.hasSchemaChange && (
+                                                                            <span style={{ marginLeft: 8, fontSize: 10, color: "#1d4ed8" }}>schema</span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#065f46" }}>
+                                                                        {entry.added > 0 ? `+${entry.added}` : "—"}
+                                                                    </td>
+                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#92400e" }}>
+                                                                        {entry.modified > 0 ? `~${entry.modified}` : "—"}
+                                                                    </td>
+                                                                    <td style={{ textAlign: "right", padding: "3px 6px", color: "#991b1b" }}>
+                                                                        {entry.removed > 0 ? `-${entry.removed}` : "—"}
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+
+                                                {expandedTableKey && expandedTableKey.startsWith(`${c.hash}::`) && (
+                                                    <InlineDiff
+                                                        targetId={targetId}
+                                                        dbName={dbName}
+                                                        branchName="main"
+                                                        table={expandedTableKey.split("::")[1]}
+                                                        fromRef={`${c.hash}^`}
+                                                        toRef={c.hash}
+                                                    />
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

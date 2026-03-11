@@ -281,6 +281,32 @@
   cursor: pointer;
 }
 
+.success-toast {
+  position: fixed;
+  top: 48px;
+  right: 16px;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 14px;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #6ee7b7;
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.14);
+  font-size: 12px;
+}
+
+.success-toast button {
+  font-size: 14px;
+  background: none;
+  border: none;
+  color: #065f46;
+  cursor: pointer;
+}
+
 /* ========== Modal (shared) ========== */
 .modal-overlay {
   position: fixed;

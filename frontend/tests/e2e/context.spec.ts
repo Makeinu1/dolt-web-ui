@@ -82,6 +82,7 @@ test.describe('ContextSelector Tests', () => {
 
         await expect(branchSelect).toHaveValue('wi/test-feature');
         await expect(branchInput).not.toBeVisible();
+        await expect(page.locator('.success-toast')).toContainText('作業ブランチを作成しました');
     });
 
     test('should reopen an existing work branch without calling create again', async ({ page }) => {
@@ -236,5 +237,6 @@ test.describe('ContextSelector Tests', () => {
         await expect(contextBar).toContainText('ブランチの接続反映を確認しています...');
         await expect(contextBar.locator('select')).toHaveValue('wi/slow-branch');
         expect(readyCalls).toBeGreaterThanOrEqual(3);
+        await expect(page.locator('.success-toast')).toContainText('作業ブランチを作成しました');
     });
 });

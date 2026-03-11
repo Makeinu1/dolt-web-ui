@@ -37,7 +37,7 @@ test.describe('Workflow Tests', () => {
 
         // Make mock API for commit succeed
         await page.route('**/api/v1/commit*', async route => {
-            await route.fulfill({ status: 200, json: { commit_hash: 'new-hash-001' } });
+            await route.fulfill({ status: 200, json: { hash: 'new-hash-001' } });
         });
 
         // Click save button (no textarea in current CommitDialog)
@@ -46,6 +46,7 @@ test.describe('Workflow Tests', () => {
         // Verify dialog closed and draft cleared
         await expect(modal).not.toBeVisible();
         await expect(commitBtn).not.toBeVisible();
+        await expect(page.locator('.success-toast')).toContainText('保存が完了しました');
     });
 
     test('should allow submitting branch and opening diffs', async ({ page }) => {
@@ -86,6 +87,7 @@ test.describe('Workflow Tests', () => {
 
         // Dialog closes
         await expect(modal).not.toBeVisible();
+        await expect(page.locator('.success-toast')).toContainText('承認を申請しました');
     });
 
     test('should allow opening approver inbox and viewing requests', async ({ page }) => {
@@ -133,6 +135,7 @@ test.describe('Workflow Tests', () => {
 
         // Wait for empty state
         await expect(inboxModal).toContainText('承認待ちのリクエストはありません');
+        await expect(page.locator('.success-toast')).toContainText('main へのマージが完了しました');
         await inboxModal.locator('button', { hasText: '✕' }).click();
     });
 
@@ -171,6 +174,36 @@ test.describe('Workflow Tests', () => {
         await approveModal.locator('button.primary', { hasText: '承認してマージ' }).click();
 
         await expect(page.locator('.context-bar select')).toHaveValue('main');
+        await expect(page.locator('.success-toast')).toContainText('main へのマージが完了しました');
         await expect(page.locator('.error-banner')).toContainText('作業ブランチを進められませんでした');
+    });
+
+    test('should show success when rejecting a request', async ({ page }) => {
+        await selectContextInUI(page, 'local', 'test_db', 'main');
+
+        const approverBadge = page.locator('.approver-badge');
+        await expect(approverBadge).toBeVisible({ timeout: 10000 });
+        await approverBadge.click();
+
+        const inboxModal = page.locator('.modal').first();
+        await expect(inboxModal).toContainText('テストリクエスト');
+
+        await page.unroute('**/api/v1/requests*');
+        let requestRejected = false;
+        await page.route('**/api/v1/requests*', async route => {
+            await route.fulfill({ json: requestRejected ? [] : MOCK_REQUESTS });
+        });
+
+        await page.route('**/api/v1/request/reject*', async route => {
+            requestRejected = true;
+            await route.fulfill({ status: 200, json: { status: 'ok' } });
+        });
+
+        await inboxModal.locator('button.danger', { hasText: '却下' }).click();
+        const rejectModal = page.locator('.modal').last();
+        await rejectModal.locator('button.danger', { hasText: '却下する' }).click();
+
+        await expect(inboxModal).toContainText('承認待ちのリクエストはありません');
+        await expect(page.locator('.success-toast')).toContainText('申請を却下しました');
     });
 });

@@ -41,6 +41,13 @@ export const MOCK_DIFF_SUMMARY = {
     ]
 };
 
+export const MOCK_DIFF_SUMMARY_LIGHT = {
+    changed_table_count: 1,
+    tables: [
+        { table: 'users', has_data_change: true, has_schema_change: false }
+    ]
+};
+
 export const MOCK_DIFF_TABLE_USERS = {
     rows: [
         { diff_type: 'added', from: null, to: { id: 4, name: 'Dave', role: 'user' } },
@@ -126,6 +133,9 @@ export async function setupBaseMocks(page: Page) {
     // Diff
     await page.route('**/api/v1/diff/summary*', async route => {
         await route.fulfill({ json: MOCK_DIFF_SUMMARY });
+    });
+    await page.route('**/api/v1/diff/summary/light*', async route => {
+        await route.fulfill({ json: MOCK_DIFF_SUMMARY_LIGHT });
     });
     await page.route('**/api/v1/diff/table*', async route => {
         await route.fulfill({ json: MOCK_DIFF_TABLE_USERS });

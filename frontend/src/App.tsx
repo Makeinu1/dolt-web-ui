@@ -16,7 +16,7 @@ import { CrossCopyRowsModal } from "./components/CrossCopyModal/CrossCopyRowsMod
 import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableModal";
 import { CSVImportModal } from "./components/CSVImportModal/CSVImportModal";
 import { SearchModal } from "./components/SearchModal/SearchModal";
-import { UI_ERROR_AUTO_CLEAR_MS } from "./constants/ui";
+import { UI_ERROR_AUTO_CLEAR_MS, UI_SUCCESS_AUTO_CLEAR_MS } from "./constants/ui";
 import { performRecoveryReload } from "./utils/recoveryReload";
 import "./App.css";
 
@@ -43,7 +43,16 @@ function stateLabel(state: BaseState): { text: string; className: string } {
 
 function App() {
   const { targetId, dbName, branchName, branchRefreshKey, setBranch, triggerBranchRefresh } = useContextStore();
-  const { baseState, requestCount, error, setBaseState, setRequestCount, setError } = useUIStore();
+  const {
+    baseState,
+    requestCount,
+    error,
+    success,
+    setBaseState,
+    setRequestCount,
+    setError,
+    setSuccess,
+  } = useUIStore();
 
   const [tables, setTables] = useState<Table[]>([]);
   const [tablesLoading, setTablesLoading] = useState(false);
@@ -157,6 +166,12 @@ function App() {
     return () => clearTimeout(timer);
   }, [error, setError]);
 
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => setSuccess(null), UI_SUCCESS_AUTO_CLEAR_MS);
+    return () => clearTimeout(timer);
+  }, [success, setSuccess]);
+
   // C-1: Delegate HEAD management to the useHeadSync hook
   const { expectedHead, setExpectedHead, refreshHead } = useHeadSync({
     targetId,
@@ -219,6 +234,7 @@ function App() {
       setBranch("main");
       triggerBranchRefresh();
       setShowDeleteConfirm(false);
+      setSuccess("ブランチを削除しました");
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
       setError("ブランチの削除に失敗しました" + (msg ? ": " + msg : ""));
@@ -230,6 +246,7 @@ function App() {
   const onCommitSuccess = (newHash: string) => {
     setExpectedHead(newHash);
     setRefreshKey((k) => k + 1);
+    setSuccess("保存が完了しました");
   };
 
   // Close overflow menu on outside click
@@ -496,6 +513,15 @@ function App() {
         </div>
       )}
 
+      {success && (
+        <div className="success-toast" role="status" aria-live="polite">
+          <span>{success}</span>
+          <button type="button" onClick={() => setSuccess(null)} aria-label="成功メッセージを閉じる">
+            ✕
+          </button>
+        </div>
+      )}
+
       {!isContextReady ? (
         <div className="empty-state">
           ターゲット、データベース、ブランチを選択してください。
@@ -633,6 +659,7 @@ function App() {
             api.invalidateSchemaCache(targetId, dbName);
             onCommitSuccess(newHash);
             setShowCSVImport(false);
+            setSuccess("CSVを反映しました");
           }}
         />
       )}

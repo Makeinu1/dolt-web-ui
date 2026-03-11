@@ -4,8 +4,9 @@ import { useUIStore } from "../../store/ui";
 import { DiffTableDetail } from "../common/DiffTableDetail";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
-import type { ApproveResponse, RequestSummary, DiffSummaryEntry, OverwrittenTable } from "../../types/api";
+import type { ApproveResponse, DiffSummaryEntry, DiffSummaryLightEntry, OverwrittenTable, RequestSummary } from "../../types/api";
 import { UI_DIFF_PREVIEW_TIMEOUT_MS } from "../../constants/ui";
+import { mergeDiffSummaryEntries } from "../../utils/diffSummary";
 
 // --- Expandable Diff summary (click table → cell-level detail) ---
 function ExpandableDiffSummary({ targetId, dbName, branchName }: {
@@ -13,9 +14,11 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
   dbName: string;
   branchName: string;
 }) {
-  const [entries, setEntries] = useState<DiffSummaryEntry[]>([]);
+  const [lightEntries, setLightEntries] = useState<DiffSummaryLightEntry[]>([]);
+  const [heavyEntries, setHeavyEntries] = useState<DiffSummaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [summaryNotice, setSummaryNotice] = useState<string | null>(null);
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
@@ -26,20 +29,45 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
 
     setLoading(true);
     setError(null);
-    setEntries([]);
+    setSummaryNotice(null);
+    setLightEntries([]);
+    setHeavyEntries([]);
 
     try {
-      const res = await Promise.race([
-        api.getDiffSummary(targetId, dbName, branchName),
-        new Promise<never>((_, reject) => {
-          timeoutId = window.setTimeout(() => {
-            reject(new ApiError(408, { code: "TIMEOUT", message: "差分の読み込みがタイムアウトしました。再試行してください。" }));
-          }, UI_DIFF_PREVIEW_TIMEOUT_MS);
-        }),
+      const [lightResult, heavyResult] = await Promise.allSettled([
+        api.getDiffSummaryLight(targetId, dbName, branchName),
+        Promise.race([
+          api.getDiffSummary(targetId, dbName, branchName),
+          new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => {
+              reject(new ApiError(408, { code: "TIMEOUT", message: "差分の読み込みがタイムアウトしました。再試行してください。" }));
+            }, UI_DIFF_PREVIEW_TIMEOUT_MS);
+          }),
+        ]),
       ]);
-
       if (requestIdRef.current !== requestId) return;
-      setEntries(res.entries || []);
+
+      const nextLightEntries =
+        lightResult.status === "fulfilled" ? lightResult.value.tables || [] : [];
+      const nextHeavyEntries =
+        heavyResult.status === "fulfilled" ? heavyResult.value.entries || [] : [];
+
+      if (lightResult.status === "rejected" && heavyResult.status === "rejected") {
+        const lightError = lightResult.reason;
+        const msg =
+          lightError instanceof ApiError
+            ? lightError.message
+            : "差分の読み込みに失敗しました";
+        setError(msg);
+        return;
+      }
+
+      setLightEntries(nextLightEntries);
+      setHeavyEntries(nextHeavyEntries);
+
+      if (heavyResult.status === "rejected") {
+        setSummaryNotice("件数集計に失敗したため、変更テーブル一覧のみ表示しています。");
+      }
     } catch (err) {
       if (requestIdRef.current !== requestId) return;
       const msg = err instanceof ApiError ? err.message : "差分の読み込みに失敗しました";
@@ -63,6 +91,8 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
     void loadSummary();
   };
 
+  const entries = mergeDiffSummaryEntries(lightEntries, heavyEntries);
+
   if (loading) return <div style={{ fontSize: 12, color: "#888", padding: 8 }}>差分を読み込み中...</div>;
   if (error) {
     return (
@@ -81,6 +111,11 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
 
   return (
     <div>
+      {summaryNotice && (
+        <div style={{ fontSize: 11, color: "#92400e", marginBottom: 8 }}>
+          ⚠ {summaryNotice}
+        </div>
+      )}
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid #e0e0e8", color: "#666" }}>
@@ -105,6 +140,12 @@ function ExpandableDiffSummary({ targetId, dbName, branchName }: {
               >
                 <td style={{ padding: "4px 8px", fontFamily: "monospace" }}>
                   {expandedTable === e.table ? "▼ " : "▶ "}{e.table}
+                  {e.hasSchemaChange && (
+                    <span style={{ marginLeft: 8, fontSize: 10, color: "#1d4ed8" }}>schema</span>
+                  )}
+                  {e.hasDataChange && !e.hasSchemaChange && (
+                    <span style={{ marginLeft: 8, fontSize: 10, color: "#475569" }}>data</span>
+                  )}
                 </td>
                 <td style={{ textAlign: "right", padding: "4px 8px", color: "#065f46", fontWeight: e.added > 0 ? 600 : 400 }}>
                   {e.added > 0 ? `+${e.added}` : "—"}
@@ -153,6 +194,7 @@ export function SubmitDialog({
   const { targetId, dbName, branchName } = useContextStore();
   const setBaseState = useUIStore((s) => s.setBaseState);
   const setGlobalError = useUIStore((s) => s.setError);
+  const setSuccess = useUIStore((s) => s.setSuccess);
   const [submitting, setSubmitting] = useState(false);
   const [summaryJa, setSummaryJa] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -173,6 +215,7 @@ export function SubmitDialog({
         summary_ja: summaryJa,
       });
       onSubmitted(result.overwritten_tables);
+      setSuccess("承認を申請しました");
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "STALE_HEAD") {
@@ -405,6 +448,7 @@ function RejectModal({
 export function ApproverInbox() {
   const { targetId, dbName, triggerBranchRefresh, setBranch } = useContextStore();
   const setError = useUIStore((s) => s.setError);
+  const setSuccess = useUIStore((s) => s.setSuccess);
   const [requests, setRequests] = useState<RequestSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [approveTarget, setApproveTarget] = useState<string | null>(null);
@@ -437,6 +481,7 @@ export function ApproverInbox() {
     } else {
       setBranch("main");
     }
+    setSuccess("main へのマージが完了しました");
     if (result.warnings && result.warnings.length > 0) {
       setError(result.warnings.join(" "));
     }
@@ -445,6 +490,7 @@ export function ApproverInbox() {
   const onRejected = () => {
     triggerBranchRefresh();
     void loadRequests();
+    setSuccess("申請を却下しました");
   };
 
   if (loading) {

@@ -74,6 +74,36 @@ func (h *Handler) DiffSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.DiffSummaryResponse{Entries: entries})
 }
 
+func (h *Handler) DiffSummaryLight(w http.ResponseWriter, r *http.Request) {
+	targetID, dbName, branchName, ok := parseQueryContext(w, r)
+	if !ok {
+		return
+	}
+
+	fromRef := r.URL.Query().Get("from_ref")
+	if fromRef == "" {
+		fromRef = "main"
+	}
+	toRef := r.URL.Query().Get("to_ref")
+	if toRef == "" {
+		toRef = branchName
+	}
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "three_dot"
+	}
+
+	entries, err := h.svc.DiffSummaryLight(r.Context(), targetID, dbName, branchName, fromRef, toRef, mode)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, model.DiffSummaryLightResponse{
+		ChangedTableCount: len(entries),
+		Tables:            entries,
+	})
+}
+
 func (h *Handler) ExportDiffZip(w http.ResponseWriter, r *http.Request) {
 	targetID, dbName, branchName, ok := parseQueryContext(w, r)
 	if !ok {

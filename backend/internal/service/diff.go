@@ -4,11 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"regexp"
+	"sort"
 	"strings"
-	"sync"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -22,6 +24,51 @@ func validateRef(name, value string) error {
 		return fmt.Errorf("%s contains invalid characters: %q", name, value)
 	}
 	return nil
+}
+
+func resolveDiffRefs(ctx context.Context, conn *sql.Conn, fromRef, toRef, mode string) (string, string, error) {
+	if mode != "three_dot" {
+		return fromRef, toRef, nil
+	}
+
+	var mergeBase sql.NullString
+	query := fmt.Sprintf("SELECT DOLT_MERGE_BASE('%s', '%s')", fromRef, toRef)
+	if err := conn.QueryRowContext(ctx, query).Scan(&mergeBase); err != nil {
+		return "", "", fmt.Errorf("failed to resolve merge base: %w", err)
+	}
+	if !mergeBase.Valid || mergeBase.String == "" {
+		return "", "", &model.APIError{
+			Status: httpStatusPreconditionFailed(),
+			Code:   model.CodePreconditionFailed,
+			Msg:    fmt.Sprintf("merge base not found for %s and %s", fromRef, toRef),
+		}
+	}
+	return mergeBase.String, toRef, nil
+}
+
+func scanBoolFlag(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int64:
+		return v != 0
+	case int32:
+		return v != 0
+	case int:
+		return v != 0
+	case []byte:
+		s := strings.TrimSpace(string(v))
+		return s == "1" || strings.EqualFold(s, "true")
+	case string:
+		s := strings.TrimSpace(v)
+		return s == "1" || strings.EqualFold(s, "true")
+	default:
+		return false
+	}
+}
+
+func httpStatusPreconditionFailed() int {
+	return 412
 }
 
 // DiffTable returns the diff between two refs for a table.
@@ -155,86 +202,146 @@ func (s *Service) DiffSummary(ctx context.Context, targetID, dbName, branchName,
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
 	}
 
-	// Get the list of tables to diff
-	tables, err := s.ListTables(ctx, targetID, dbName, branchName)
+	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tables: %w", err)
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	resolvedFrom, resolvedTo, err := resolveDiffRefs(ctx, conn, fromRef, toRef, mode)
+	if err != nil {
+		return nil, err
 	}
 
-	var refSpec string
-	if mode == "three_dot" {
-		refSpec = fmt.Sprintf("%s...%s", fromRef, toRef)
-	} else {
-		refSpec = fmt.Sprintf("%s..%s", fromRef, toRef)
+	query := fmt.Sprintf(
+		"SELECT table_name, rows_added, rows_modified, rows_deleted FROM DOLT_DIFF_STAT('%s', '%s')",
+		resolvedFrom, resolvedTo,
+	)
+	rows, err := conn.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf(
+			"ERROR: diff summary stat query failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+			branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
+		)
+		return nil, fmt.Errorf("failed to get diff summary: %w", err)
 	}
+	defer rows.Close()
 
-	// Run per-table DOLT_DIFF queries in parallel (max 5 concurrent) to eliminate N+1 latency.
-	type diffResult struct {
-		entry model.DiffSummaryEntry
-		valid bool
-	}
-	results := make([]diffResult, len(tables))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5) // limit to 5 concurrent connections
-
-	for i, t := range tables {
-		if err := validation.ValidateIdentifier("table", t.Name); err != nil {
-			continue
-		}
-		wg.Add(1)
-		go func(idx int, tableName string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-
-			query := fmt.Sprintf(
-				"SELECT diff_type, COUNT(*) FROM DOLT_DIFF('%s', '%s') GROUP BY diff_type",
-				refSpec, tableName,
+	entries := make([]model.DiffSummaryEntry, 0)
+	for rows.Next() {
+		var (
+			tableName string
+			added     int
+			modified  int
+			removed   int
+		)
+		if err := rows.Scan(&tableName, &added, &modified, &removed); err != nil {
+			log.Printf(
+				"ERROR: diff summary stat scan failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+				branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
 			)
-			rows, err := conn.QueryContext(ctx, query)
-			if err != nil {
-				// Table may not have diff support (e.g. new table); skip silently.
-				return
-			}
-			defer rows.Close()
-
-			entry := model.DiffSummaryEntry{Table: tableName}
-			for rows.Next() {
-				var diffType string
-				var count int
-				if err := rows.Scan(&diffType, &count); err != nil {
-					break
-				}
-				switch diffType {
-				case "added":
-					entry.Added = count
-				case "modified":
-					entry.Modified = count
-				case "removed":
-					entry.Removed = count
-				}
-			}
-			results[idx] = diffResult{entry: entry, valid: true}
-		}(i, t.Name)
-	}
-	wg.Wait()
-
-	result := make([]model.DiffSummaryEntry, 0)
-	for _, r := range results {
-		if !r.valid {
+			return nil, fmt.Errorf("failed to scan diff summary: %w", err)
+		}
+		if added+modified+removed == 0 {
 			continue
 		}
-		if r.entry.Added+r.entry.Modified+r.entry.Removed > 0 {
-			result = append(result, r.entry)
-		}
+		entries = append(entries, model.DiffSummaryEntry{
+			Table:    tableName,
+			Added:    added,
+			Modified: modified,
+			Removed:  removed,
+		})
 	}
-	return result, nil
+	if err := rows.Err(); err != nil {
+		log.Printf(
+			"ERROR: diff summary stat rows failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+			branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
+		)
+		return nil, fmt.Errorf("failed to read diff summary: %w", err)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Table < entries[j].Table
+	})
+	return entries, nil
+}
+
+func (s *Service) DiffSummaryLight(ctx context.Context, targetID, dbName, branchName, fromRef, toRef, mode string) ([]model.DiffSummaryLightEntry, error) {
+	if err := validateRef("from", fromRef); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+	if err := validateRef("to", toRef); err != nil {
+		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: err.Error()}
+	}
+
+	conn, err := s.repo.Conn(ctx, targetID, dbName, branchName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	resolvedFrom, resolvedTo, err := resolveDiffRefs(ctx, conn, fromRef, toRef, mode)
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(
+		"SELECT from_table_name, to_table_name, diff_type, data_change, schema_change FROM DOLT_DIFF_SUMMARY('%s', '%s')",
+		resolvedFrom, resolvedTo,
+	)
+	rows, err := conn.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf(
+			"ERROR: diff summary light query failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+			branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
+		)
+		return nil, fmt.Errorf("failed to get changed tables: %w", err)
+	}
+	defer rows.Close()
+
+	entriesByTable := make(map[string]model.DiffSummaryLightEntry)
+	for rows.Next() {
+		var (
+			fromTable    sql.NullString
+			toTable      sql.NullString
+			diffType     string
+			dataChange   interface{}
+			schemaChange interface{}
+		)
+		if err := rows.Scan(&fromTable, &toTable, &diffType, &dataChange, &schemaChange); err != nil {
+			log.Printf(
+				"ERROR: diff summary light scan failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+				branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
+			)
+			return nil, fmt.Errorf("failed to scan changed tables: %w", err)
+		}
+		tableName := toTable.String
+		if tableName == "" {
+			tableName = fromTable.String
+		}
+		entry := entriesByTable[tableName]
+		entry.Table = tableName
+		entry.HasDataChange = entry.HasDataChange || scanBoolFlag(dataChange)
+		entry.HasSchemaChange = entry.HasSchemaChange || scanBoolFlag(schemaChange)
+		entriesByTable[tableName] = entry
+		_ = diffType
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf(
+			"ERROR: diff summary light rows failed: branch=%s from_ref=%s to_ref=%s resolved_from=%s resolved_to=%s mode=%s error=%v",
+			branchName, fromRef, toRef, resolvedFrom, resolvedTo, mode, err,
+		)
+		return nil, fmt.Errorf("failed to read changed tables: %w", err)
+	}
+
+	entries := make([]model.DiffSummaryLightEntry, 0, len(entriesByTable))
+	for _, entry := range entriesByTable {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Table < entries[j].Table
+	})
+	return entries, nil
 }
 
 // ExportDiffZip generates a ZIP archive containing per-table, per-diff-type CSV files.

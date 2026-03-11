@@ -5,7 +5,8 @@ import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import { ErrorBoundary } from "../common/ErrorBoundary";
-import type { Branch, DiffSummaryEntry, DiffRow } from "../../types/api";
+import type { Branch, DiffSummaryEntry, DiffSummaryLightEntry, DiffRow } from "../../types/api";
+import { mergeDiffSummaryEntries, type DisplayDiffSummaryEntry } from "../../utils/diffSummary";
 
 // --- DiffSummary Table ---
 function DiffSummaryTable({
@@ -15,7 +16,7 @@ function DiffSummaryTable({
   onExportZip,
   exportingZip,
 }: {
-  entries: DiffSummaryEntry[];
+  entries: DisplayDiffSummaryEntry[];
   onSelectTable: (table: string) => void;
   selectedTable: string | null;
   onExportZip?: () => void;
@@ -58,7 +59,12 @@ function DiffSummaryTable({
             }}
             onClick={() => onSelectTable(e.table)}
           >
-            <td style={{ padding: "4px 8px", fontFamily: "monospace" }}>{e.table}</td>
+            <td style={{ padding: "4px 8px", fontFamily: "monospace" }}>
+              {e.table}
+              {e.hasSchemaChange && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: "#1d4ed8", fontFamily: "sans-serif" }}>schema</span>
+              )}
+            </td>
             <td style={{ textAlign: "right", padding: "4px 8px", color: "#065f46", fontWeight: e.added > 0 ? 600 : 400 }}>
               {e.added > 0 ? `+${e.added}` : "—"}
             </td>
@@ -374,9 +380,11 @@ export function HistoryTab() {
   const [toBranch, setToBranch] = useState(branchName || "");
 
   // Comparison results
-  const [entries, setEntries] = useState<DiffSummaryEntry[]>([]);
+  const [lightEntries, setLightEntries] = useState<DiffSummaryLightEntry[]>([]);
+  const [heavyEntries, setHeavyEntries] = useState<DisplayDiffSummaryEntry[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryNotice, setSummaryNotice] = useState<string | null>(null);
   const [compared, setCompared] = useState(false);
 
   // Fullscreen DiffGrid
@@ -400,12 +408,33 @@ export function HistoryTab() {
     if (!fromBranch || !toBranch) return;
     setLoadingSummary(true);
     setSummaryError(null);
-    setEntries([]);
+    setSummaryNotice(null);
+    setLightEntries([]);
+    setHeavyEntries([]);
     setDiffGridTable(null);
     setCompared(false);
     try {
-      const res = await api.getDiffSummary(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot");
-      setEntries(res.entries || []);
+      const [lightResult, heavyResult] = await Promise.allSettled([
+        api.getDiffSummaryLight(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot"),
+        api.getDiffSummary(targetId, dbName, branchName || "main", fromBranch, toBranch, "two_dot"),
+      ]);
+
+      if (lightResult.status === "rejected" && heavyResult.status === "rejected") {
+        throw lightResult.reason;
+      }
+
+      const nextLightEntries =
+        lightResult.status === "fulfilled" ? lightResult.value.tables || [] : [];
+      const nextHeavyEntries =
+        heavyResult.status === "fulfilled"
+          ? mergeDiffSummaryEntries(nextLightEntries, heavyResult.value.entries || [])
+          : mergeDiffSummaryEntries(nextLightEntries, []);
+
+      setLightEntries(nextLightEntries);
+      setHeavyEntries(nextHeavyEntries);
+      if (heavyResult.status === "rejected") {
+        setSummaryNotice("件数集計に失敗したため、変更テーブル一覧のみ表示しています。");
+      }
       setCompared(true);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "差分サマリーの読み込みに失敗しました";
@@ -414,6 +443,11 @@ export function HistoryTab() {
       setLoadingSummary(false);
     }
   }, [targetId, dbName, branchName, fromBranch, toBranch]);
+
+  const entries = useMemo(
+    () => (heavyEntries.length > 0 ? heavyEntries : mergeDiffSummaryEntries(lightEntries, [])),
+    [heavyEntries, lightEntries]
+  );
 
   const handleExportZip = async () => {
     setExportingZip(true);
@@ -499,6 +533,10 @@ export function HistoryTab() {
 
         {summaryError && (
           <div style={{ fontSize: 12, color: "#991b1b", padding: "0 16px" }}>{summaryError}</div>
+        )}
+
+        {!summaryError && summaryNotice && (
+          <div style={{ fontSize: 12, color: "#92400e", padding: "0 16px" }}>{summaryNotice}</div>
         )}
 
         {exportError && (

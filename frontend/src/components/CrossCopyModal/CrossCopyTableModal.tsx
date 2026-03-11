@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useContextStore } from "../../store/context";
 import { useDraftStore } from "../../store/draft";
+import { useUIStore } from "../../store/ui";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
 import type { Database, CrossCopyTableResponse } from "../../types/api";
@@ -16,6 +17,7 @@ export function CrossCopyTableModal({
   onClose,
 }: CrossCopyTableModalProps) {
   const { targetId, dbName, branchName } = useContextStore();
+  const setSuccess = useUIStore((s) => s.setSuccess);
   const sourceBranch = branchName;
 
   const [databases, setDatabases] = useState<Database[]>([]);
@@ -53,6 +55,7 @@ export function CrossCopyTableModal({
         dest_db: destDB,
       });
       setResult(res);
+      setSuccess("他DBへテーブルをコピーしました");
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "BRANCH_EXISTS") {
         const details =

@@ -139,6 +139,72 @@ test.describe('Branch-sensitive Features', () => {
     expect(capturedDiffTableQuery).toContain('to_ref=wi%2Ffeat-a');
   });
 
+  test('should show lightweight merge summaries before loading heavy counts', async ({ page }) => {
+    await setupBaseMocks(page);
+
+    let lightCalls = 0;
+    let heavyCalls = 0;
+
+    await page.route('**/api/v1/history/commits*', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            hash: 'merge-hash-1',
+            author: 'alice',
+            message: 'merge feat-a',
+            timestamp: '2025-01-03T00:00:00Z',
+            merge_branch: 'wi/feat-a',
+          },
+        ],
+      });
+    });
+
+    await page.unroute('**/api/v1/diff/summary*');
+    await page.route('**/api/v1/diff/summary*', async (route) => {
+      heavyCalls += 1;
+      await route.fulfill({
+        json: {
+          entries: [
+            { table: 'users', added: 1, modified: 2, removed: 0 },
+          ],
+        },
+      });
+    });
+    await page.unroute('**/api/v1/diff/summary/light*');
+    await page.route('**/api/v1/diff/summary/light*', async (route) => {
+      lightCalls += 1;
+      await route.fulfill({
+        json: {
+          changed_table_count: 2,
+          tables: [
+            { table: 'users', has_data_change: true, has_schema_change: false },
+            { table: 'settings', has_data_change: false, has_schema_change: true },
+          ],
+        },
+      });
+    });
+
+    await page.goto('/');
+    await selectContextInUI(page, 'local', 'test_db', 'main');
+
+    await page.locator('.overflow-btn').click();
+    await page.locator('button', { hasText: '📋 マージログ' }).click();
+
+    const modal = page.locator('.modal');
+    await expect(modal.locator('h2')).toHaveText('📋 マージログ');
+    await expect(modal).toContainText('2テーブル変更');
+    await expect(modal).toContainText('users');
+    await expect(modal).toContainText('settings');
+    expect(lightCalls).toBeGreaterThan(0);
+    expect(heavyCalls).toBe(0);
+
+    await modal.locator('button', { hasText: '詳細を表示' }).click();
+
+    await expect.poll(() => heavyCalls).toBe(1);
+    await expect(modal).toContainText('テーブル');
+    await expect(modal).toContainText('+1');
+  });
+
   test('should only expose cross-db copy actions on protected branches', async ({ page }) => {
     await setupBaseMocks(page);
 
@@ -152,7 +218,6 @@ test.describe('Branch-sensitive Features', () => {
     await expect(page.locator('button', { hasText: '他DBへ' })).toHaveCount(0);
     await page.locator('.overflow-btn').click();
     await expect(page.locator('button', { hasText: '他DBへテーブルコピー' })).toHaveCount(0);
-
     await selectContextInUI(page, 'local', 'test_db', 'main');
     const mainAliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
     await mainAliceRow.waitFor({ state: 'visible', timeout: 5000 });
@@ -198,6 +263,7 @@ test.describe('Branch-sensitive Features', () => {
 
     await expect(modal).toContainText('コピー完了');
     await expect(modal).toContainText('ブランチ: wi/import-test_db-users');
+    await expect(page.locator('.success-toast')).toContainText('他DBへテーブルをコピーしました');
 
     const switchedTablesRequest = page.waitForRequest((req) =>
       req.url().includes('/api/v1/tables') &&
@@ -328,6 +394,7 @@ test.describe('Branch-sensitive Features', () => {
     await modal.locator('button.primary', { hasText: 'コピー実行 (2件)' }).click();
 
     await expect(modal).toContainText('2件コピーしました（挿入: 1, 更新: 1）');
+    await expect(page.locator('.success-toast')).toContainText('他DBへ行をコピーしました');
 
     const switchedTablesRequest = page.waitForRequest((req) =>
       req.url().includes('/api/v1/tables') &&
