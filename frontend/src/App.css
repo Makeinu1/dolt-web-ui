@@ -266,8 +266,14 @@
   flex-shrink: 0;
 }
 
-.error-banner button {
+.error-banner-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-banner button {
   font-size: 14px;
   background: none;
   border: none;

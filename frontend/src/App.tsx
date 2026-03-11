@@ -17,6 +17,7 @@ import { CrossCopyTableModal } from "./components/CrossCopyModal/CrossCopyTableM
 import { CSVImportModal } from "./components/CSVImportModal/CSVImportModal";
 import { SearchModal } from "./components/SearchModal/SearchModal";
 import { UI_ERROR_AUTO_CLEAR_MS } from "./constants/ui";
+import { performRecoveryReload } from "./utils/recoveryReload";
 import "./App.css";
 
 function stateLabel(state: BaseState): { text: string; className: string } {
@@ -200,6 +201,10 @@ function App() {
       setBaseState(hasDraft() ? "DraftEditing" : "Idle");
       setError(null);
     }
+  };
+
+  const handleRecoveryReload = () => {
+    performRecoveryReload({ hasUnsavedDraft: ops.length > 0 });
   };
 
   const handleDeleteBranch = async () => {
@@ -478,9 +483,16 @@ function App() {
       {error && (
         <div className="error-banner">
           <span>{error}</span>
-          {baseState !== "StaleHeadDetected" && (
-            <button onClick={() => setError(null)}>✕</button>
-          )}
+          <div className="error-banner-actions">
+            <button type="button" onClick={handleRecoveryReload}>
+              復旧付き再読み込み
+            </button>
+            {baseState !== "StaleHeadDetected" && (
+              <button type="button" onClick={() => setError(null)} aria-label="エラーを閉じる">
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       )}
 

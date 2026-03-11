@@ -4,7 +4,7 @@ import { safeGetJSON, safeSetJSON } from "../utils/safeStorage";
 import { stablePkJson } from "../utils/stablePk";
 import { UI_DRAFT_SAVE_DEBOUNCE_MS } from "../constants/ui";
 
-const STORAGE_KEY = "dolt-web-ui-draft";
+export const DRAFT_STORAGE_KEY = "dolt-web-ui-draft";
 
 interface DraftState {
   ops: CommitOp[];
@@ -23,7 +23,7 @@ function saveDraftDebounced(ops: CommitOp[]) {
   _pendingOps = ops;
   if (_saveTimer !== null) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    safeSetJSON(sessionStorage, STORAGE_KEY, _pendingOps);
+    safeSetJSON(sessionStorage, DRAFT_STORAGE_KEY, _pendingOps);
     _saveTimer = null;
     _pendingOps = null;
   }, UI_DRAFT_SAVE_DEBOUNCE_MS);
@@ -35,7 +35,7 @@ function saveDraftImmediate(ops: CommitOp[]) {
     _saveTimer = null;
     _pendingOps = null;
   }
-  safeSetJSON(sessionStorage, STORAGE_KEY, ops);
+  safeSetJSON(sessionStorage, DRAFT_STORAGE_KEY, ops);
 }
 
 // Flush any pending debounced write before the page unloads to prevent data loss.
@@ -43,7 +43,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     if (_saveTimer !== null && _pendingOps !== null) {
       clearTimeout(_saveTimer);
-      safeSetJSON(sessionStorage, STORAGE_KEY, _pendingOps);
+      safeSetJSON(sessionStorage, DRAFT_STORAGE_KEY, _pendingOps);
     }
   });
 }
@@ -125,11 +125,11 @@ export const useDraftStore = create<DraftState>((set, get) => ({
       _saveTimer = null;
       _pendingOps = null;
     }
-    sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     set({ ops: [] });
   },
   loadDraft: () => {
-    const ops = safeGetJSON<CommitOp[]>(sessionStorage, STORAGE_KEY, []);
+    const ops = safeGetJSON<CommitOp[]>(sessionStorage, DRAFT_STORAGE_KEY, []);
     if (ops.length > 0) set({ ops });
   },
   hasDraft: () => get().ops.length > 0,

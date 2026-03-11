@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
+import { performRecoveryReload } from "../../utils/recoveryReload";
 
 interface Props {
     children: ReactNode;
@@ -43,10 +44,10 @@ export class ErrorBoundary extends Component<Props, State> {
                         {this.state.error?.message ?? "不明なエラー"}
                     </p>
                     <button
-                        onClick={() => window.location.reload()}
+                        onClick={() => performRecoveryReload()}
                         style={{ fontSize: 13, padding: "6px 20px", cursor: "pointer" }}
                     >
-                        ページを再読み込み
+                        復旧付き再読み込み
                     </button>
                 </div>
             );

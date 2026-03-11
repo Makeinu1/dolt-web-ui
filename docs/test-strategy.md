@@ -55,6 +55,8 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-REAL-03` | real Playwright smoke | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-REAL-04` | real Playwright smoke | `MT-13-07` | cross-copy 生成 branch をそのまま submit でき、2 回目は `BRANCH_EXISTS` になる | implemented |
 | `BL-REAL-05` | real Playwright smoke | `MT-13-08` `MT-13-09` `MT-13-10` | protected branch だけで cross-copy を見せ、`audit -> wi/*` の row copy を current branch source で完了できる | implemented |
+| `ER-UNIT-01` | frontend unit | `MT-13-12` | recovery reload flag が one-shot cleanup を行い、通常 reload では draft を保持する | implemented |
+| `ER-MOCK-01` | mocked Playwright | `MT-13-11` `MT-13-12` | `復旧付き再読み込み` は error 時だけ表示され、`STALE_HEAD` で secondary action として見える | implemented |
 
 ## Next Expansion Targets
 

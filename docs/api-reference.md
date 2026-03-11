@@ -1468,7 +1468,7 @@ The frontend manages a state machine with the following states:
 | `MergeConflictsPresent` | Data conflicts after sync | Resolve conflicts |
 | `SchemaConflictDetected` | Schema conflicts after sync | CLI intervention required |
 | `ConstraintViolationDetected` | Constraint violations after sync | CLI intervention required |
-| `StaleHeadDetected` | HEAD hash mismatch | Refresh HEAD |
+| `StaleHeadDetected` | HEAD hash mismatch | Refresh HEAD / recovery reload |
 
 **Orthogonal Counter:** `requestCount` (number) - count of pending approval requests. Auto-fetched on app load and context switch. `0` means none pending.
 

@@ -18,6 +18,7 @@ test.describe('エラー回復テスト', () => {
         });
 
         await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+        await expect(page.getByRole('button', { name: '復旧付き再読み込み' })).toHaveCount(0);
 
         // ドラフトを作成（行削除）
         const aliceRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Alice' });
@@ -85,6 +86,7 @@ test.describe('エラー回復テスト', () => {
         await modal.locator('button.primary', { hasText: '申請する' }).click();
 
         await expect(page.getByText(/HEAD が古くなっています|要更新/).first()).toBeVisible({ timeout: 5000 });
+        await expect(page.getByRole('button', { name: '復旧付き再読み込み' })).toBeVisible({ timeout: 5000 });
     });
 
     test('2B-2c: CSV Apply STALE_HEAD → StaleHeadDetected に遷移', async ({ page }) => {
@@ -136,14 +138,6 @@ test.describe('エラー回復テスト', () => {
         });
 
         await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
-
-        // テーブル選択
-        const tableSelect = page.locator('select').filter({ hasText: 'users' }).or(
-            page.locator('select[title*="テーブル"]')
-        );
-        if (await tableSelect.count() > 0) {
-            await tableSelect.selectOption('users');
-        }
 
         // エラーバナー表示
         await expect(page.getByText(/接続できません|失敗/)).toBeVisible({ timeout: 5000 });

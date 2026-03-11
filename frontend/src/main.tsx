@@ -6,6 +6,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary'
 import { useContextStore } from './store/context'
 import { useUIStore } from './store/ui'
 import { useDraftStore } from './store/draft'
+import { applyPendingRecoveryReset } from './utils/recoveryReload'
 
 // E2Eテスト用のグローバルフックを公開
 if (import.meta.env.MODE === 'development') {
@@ -16,6 +17,8 @@ if (import.meta.env.MODE === 'development') {
     useDraftStore.getState().clearDraft();
   };
 }
+
+applyPendingRecoveryReset();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
