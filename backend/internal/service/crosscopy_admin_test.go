@@ -45,6 +45,8 @@ func TestCrossCopyAdminPrepareRows_PreparesMainAndSyncsBranch(t *testing.T) {
 				return testQueryResult{}, nil
 			case "CALL DOLT_MERGE('main')":
 				return syncSuccessResult("merge-hash"), nil
+			case "COMMIT":
+				return testQueryResult{}, nil
 			default:
 				return testQueryResult{}, fmt.Errorf("unexpected work query on %s/%s: %s", dbName, branchName, query)
 			}
@@ -125,6 +127,8 @@ func TestCrossCopyAdminPrepareRows_NoSchemaPrepSkipsProtectedMaintenance(t *test
 				return testQueryResult{}, nil
 			case "CALL DOLT_MERGE('main')":
 				return syncSuccessResult("merge-hash"), nil
+			case "COMMIT":
+				return testQueryResult{}, nil
 			default:
 				return testQueryResult{}, fmt.Errorf("unexpected work query on %s/%s: %s", dbName, branchName, query)
 			}
