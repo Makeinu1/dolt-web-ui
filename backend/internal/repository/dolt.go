@@ -146,6 +146,22 @@ func (r *Repository) Conn(ctx context.Context, targetID, dbName, branchName stri
 	return r.ConnRevision(ctx, targetID, dbName, branchName)
 }
 
+// PurgeIdleConns drops all idle connections for a target, forcing fresh connections
+// to be created on next use. This prevents stale branch/database contexts from
+// lingering in pooled connections after branch deletion.
+func (r *Repository) PurgeIdleConns(targetID string) {
+	r.mu.RLock()
+	pool, ok := r.pools[targetID]
+	r.mu.RUnlock()
+	if !ok {
+		return
+	}
+	// Setting MaxIdleConns to 0 immediately closes all idle connections in the pool.
+	// Restoring to the configured value allows future connections to be pooled normally.
+	pool.SetMaxIdleConns(0)
+	pool.SetMaxIdleConns(r.cfg.Server.Pool.MaxIdle)
+}
+
 func (r *Repository) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
