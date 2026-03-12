@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
@@ -148,19 +147,13 @@ func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchReques
 		return apiErr
 	}
 
-	// Use safe delete (-d) instead of force delete (-D) to prevent deleting
-	// branches that have unmerged changes. Force delete can destroy data and
-	// also leaves stale branch references in pooled connections.
-	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH('-d', ?)", req.BranchName)
+	// Force delete (-D) is required because Dolt's safe delete (-d) refuses to
+	// delete any branch not fully merged into HEAD, including freshly created
+	// branches with no changes ("unsafe to delete or rename" error).
+	// PurgeIdleConns below prevents stale pooled connections from causing
+	// cascading "branch not found" errors after deletion.
+	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", req.BranchName)
 	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "not fully merged") || strings.Contains(errMsg, "is not merged") {
-			return &model.APIError{
-				Status: 409,
-				Code:   model.CodePreconditionFailed,
-				Msg:    fmt.Sprintf("ブランチ '%s' にはmainにマージされていない変更があります。先に同期するか、強制削除してください", req.BranchName),
-			}
-		}
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}
 

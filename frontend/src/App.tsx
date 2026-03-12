@@ -230,9 +230,12 @@ function App() {
         branch_name: branchName,
       });
       setBranch("main");
-      triggerBranchRefresh();
       setShowDeleteConfirm(false);
       setSuccess("ブランチを削除しました");
+      // Delay refresh so branchName state ("main") is committed before
+      // useHeadSync fires — otherwise the old (deleted) branch name may
+      // be used for getHead, causing "failed to get head" errors.
+      setTimeout(() => triggerBranchRefresh(), 0);
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "";
       setError("ブランチの削除に失敗しました" + (msg ? ": " + msg : ""));
