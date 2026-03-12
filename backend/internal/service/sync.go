@@ -91,7 +91,12 @@ func (s *Service) Sync(ctx context.Context, req model.SyncRequest) (*model.SyncR
 		return &model.SyncResponse{Hash: newHead, OverwrittenTables: overwritten}, nil
 	}
 
-	// No conflicts: get new HEAD (merge already committed at Dolt level)
+	// No conflicts: merge already committed at Dolt level, close the SQL transaction
+	// to prevent returning a poisoned connection (open transaction) to the pool.
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
 	var newHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {
 		return nil, fmt.Errorf("failed to get new HEAD: %w", err)

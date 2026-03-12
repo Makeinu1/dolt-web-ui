@@ -80,9 +80,15 @@ func (s *Service) CreateBranch(ctx context.Context, req model.CreateBranchReques
 	if !readiness.Ready {
 		logBranchQueryabilityFailure("create_branch_not_ready", req.TargetID, req.DBName, req.BranchName, readiness)
 
-		// If the branch exists on the creating connection, USE db/branch is simply lagging.
-		// Surface a recoverable state instead of returning opaque INTERNAL.
-		exists, existsErr := branchExists(ctx, conn, req.BranchName)
+		// Purge idle connections to clear any poisoned connections (e.g. open transactions
+		// left by sync/submit) that may have caused the readiness probe to fail.
+		s.repo.PurgeIdleConns(req.TargetID)
+
+		// Use context.Background() because the HTTP request context may already be
+		// canceled after the readiness probe timeout. With a canceled context,
+		// branchExists would fail and we'd fall through to the opaque 500 error
+		// instead of returning the retryable BRANCH_NOT_READY.
+		exists, existsErr := branchExists(context.Background(), conn, req.BranchName)
 		if existsErr == nil && exists {
 			return newBranchNotReadyError(req.BranchName, s.branchReadyRetryAfterMS())
 		}

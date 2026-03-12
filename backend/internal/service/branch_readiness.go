@@ -91,14 +91,20 @@ func (s *Service) branchReadiness(ctx context.Context, targetID, dbName, branch 
 	return s.branchReadinessProbe(ctx, targetID, dbName, branch)
 }
 
-func (s *Service) probeBranchReadiness(ctx context.Context, targetID, dbName, branch string) branchQueryabilityResult {
+func (s *Service) probeBranchReadiness(_ context.Context, targetID, dbName, branch string) branchQueryabilityResult {
+	// Use a dedicated timeout context independent of the HTTP request context.
+	// The HTTP context can be canceled by client/proxy timeouts (~20-30s),
+	// cutting the probe short and causing premature failure.
+	probeCtx, cancel := context.WithTimeout(context.Background(), s.branchReadyTimeout())
+	defer cancel()
+
 	start := time.Now()
 	attempts := s.branchReadyAttempts()
 	poll := s.branchReadyPollInterval()
 
 	result := branchQueryabilityResult{Attempts: attempts}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		err := s.checkBranchQueryableOnce(ctx, targetID, dbName, branch)
+		err := s.checkBranchQueryableOnce(probeCtx, targetID, dbName, branch)
 		if err == nil {
 			result.Ready = true
 			result.Attempts = attempt
@@ -109,7 +115,7 @@ func (s *Service) probeBranchReadiness(ctx context.Context, targetID, dbName, br
 		result.Attempts = attempt
 
 		if attempt < attempts {
-			if sleepErr := sleepWithContext(ctx, poll); sleepErr != nil {
+			if sleepErr := sleepWithContext(probeCtx, poll); sleepErr != nil {
 				result.LastErr = sleepErr
 				break
 			}

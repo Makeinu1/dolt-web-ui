@@ -121,6 +121,13 @@ func (s *Service) SubmitRequest(ctx context.Context, req model.SubmitRequestRequ
 		return nil, fmt.Errorf("failed to create tag: %w", err)
 	}
 
+	// Close the SQL transaction opened for auto-sync + tag creation.
+	// Without this, the connection is returned to the pool with an open transaction,
+	// poisoning subsequent operations (USE db/branch fails inside transactions).
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
 	return &model.SubmitRequestResponse{
 		RequestID:         requestID,
 		SubmittedMainHash: submittedMainHash,
