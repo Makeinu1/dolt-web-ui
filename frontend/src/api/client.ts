@@ -3,9 +3,11 @@ import { ApiError } from "./errors";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
+  const method = options?.method ?? "GET";
   try {
     res = await fetch(`${API_BASE}${path}`, {
       headers: { "Content-Type": "application/json" },
+      cache: method === "GET" ? "no-store" : options?.cache,
       ...options,
     });
   } catch {
@@ -378,7 +380,8 @@ export const search = (
   branchName: string,
   keyword: string,
   includeMemo = false,
-  limit = 100
+  limit = 100,
+  tables: string[] = []
 ) =>
   request<import("../types/api").SearchResultResponse>(
     `/search${queryString({
@@ -388,6 +391,7 @@ export const search = (
       keyword,
       include_memo: includeMemo ? "true" : "",
       limit: String(limit),
+      tables: tables.join(","),
     })}`
   );
 

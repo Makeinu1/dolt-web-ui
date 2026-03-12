@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../observability';
 import { setupBaseMocks, selectContextInUI } from './setup';
 
 test.describe('Draft Undo and Discard Logic', () => {

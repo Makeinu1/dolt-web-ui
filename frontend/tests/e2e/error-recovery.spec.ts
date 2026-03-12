@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../observability';
 import {
     setupBaseMocks,
     selectContextInUI,
@@ -160,7 +160,8 @@ test.describe('エラー回復テスト', () => {
         await expect(page.getByText(/HEAD が古くなっています|要更新/).first()).toBeVisible({ timeout: 5000 });
     });
 
-    test('2B-3: ネットワークエラー → バナー表示', async ({ page }) => {
+    test('2B-3: ネットワークエラー → バナー表示', async ({ page, observability }) => {
+        observability.allowRequestFailures('/api/v1/table/rows');
         await page.route('**/api/v1/table/rows*', async route => {
             await route.abort('failed');
         });
@@ -171,7 +172,8 @@ test.describe('エラー回復テスト', () => {
         await expect(page.getByText(/接続できません|失敗/)).toBeVisible({ timeout: 5000 });
     });
 
-    test('2B-5: 行読み込み失敗 → エラーバナー → 再試行で成功', async ({ page }) => {
+    test('2B-5: 行読み込み失敗 → エラーバナー → 再試行で成功', async ({ page, observability }) => {
+        observability.allowApiFailures('/api/v1/table/rows');
         let callCount = 0;
         await page.route('**/api/v1/table/rows*', async route => {
             callCount++;

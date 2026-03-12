@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../observability';
 import { setupBaseMocks, selectContextInUI, MOCK_SCHEMA_USERS } from './setup';
 
 test.describe('エラーバナー・ドラフト制御テスト', () => {
@@ -6,7 +6,8 @@ test.describe('エラーバナー・ドラフト制御テスト', () => {
         await setupBaseMocks(page);
     });
 
-    test('行読み込み失敗 → グリッドエラー表示 → 閉じるで消去', async ({ page }) => {
+    test('行読み込み失敗 → グリッドエラー表示 → 閉じるで消去', async ({ page, observability }) => {
+        observability.allowApiFailures('/api/v1/table/rows');
         // Override rows mock with a 500 error
         let callCount = 0;
         await page.route('**/api/v1/table/rows*', async route => {

@@ -221,6 +221,11 @@ Delete a work branch.
 { "status": "ok" }
 ```
 
+Behavior:
+
+- Missing branches fail with `404 NOT_FOUND` instead of being collapsed into `500 INTERNAL`.
+- Protected branches still fail with `403 FORBIDDEN`, and request-locked branches fail with `423 BRANCH_LOCKED`.
+
 ### GET /head
 
 Get the HEAD hash of a branch or revision.
@@ -1236,6 +1241,7 @@ Search across table values and, optionally, memo text.
 | `keyword` | Yes | |
 | `include_memo` | No | `false` |
 | `limit` | No | `100` |
+| `tables` | No | empty = all visible user tables |
 
 **Response**
 
@@ -1258,6 +1264,7 @@ Search across table values and, optionally, memo text.
 Behavior:
 
 - Empty `keyword` returns `200 OK` with `results: []`, `total: 0`, and `read_integrity: "complete"`.
+- When `tables` is supplied, search runs only on the selected user tables in the provided order.
 - Partial reads are not silently dropped. Table discovery, column discovery, row scans,
   memo scans, and iterator errors all fail loud with `500 INTERNAL`.
 - Search timeout returns `408 PRECONDITION_FAILED` with a retry hint in `details.timeout`.

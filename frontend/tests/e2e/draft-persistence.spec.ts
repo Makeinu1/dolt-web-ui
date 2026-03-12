@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../observability';
 import { setupBaseMocks, selectContextInUI } from './setup';
 
 async function clickToolbarButton(page: Page, label: string | RegExp) {
@@ -111,5 +111,35 @@ test.describe('ドラフト永続性テスト', () => {
                 }
             }
         }
+    });
+
+    test('2C-4: ドラフトのみ表示 — リロード後も INSERT ドラフトを表示できる', async ({ page }) => {
+        await page.route('**/api/v1/preview/clone', async route => {
+            await route.fulfill({
+                json: {
+                    ops: [{
+                        type: 'insert',
+                        table: 'users',
+                        values: { id: 99, name: 'Clone', role: 'user' },
+                    }],
+                    errors: [],
+                },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+        const firstRow = page.locator('.ag-center-cols-container .ag-row').first();
+        await firstRow.waitFor({ state: 'visible', timeout: 5000 });
+        await firstRow.locator('.ag-selection-checkbox').click();
+        await clickToolbarButton(page, /コピー/);
+        await expect(page.locator('.action-commit')).toHaveText('Commit (1)', { timeout: 3000 });
+
+        await page.reload();
+        await expect(page.locator('.action-commit')).toHaveText('Commit (1)', { timeout: 5000 });
+
+        await clickToolbarButton(page, 'ドラフトのみ');
+        await expect(page.locator('.ag-center-cols-container .ag-row', { hasText: 'Clone' })).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(1);
     });
 });

@@ -28,6 +28,9 @@ import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
 import { UI_CLONE_TIMEOUT_MS } from "../../constants/ui";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+// The toolbar covers row actions in community mode; AG Grid's context menu
+// requires an enterprise-only module and otherwise emits console errors.
+const AG_GRID_CONTEXT_MENU_SUPPORTED = false;
 
 // Module-level counter for unique draft row IDs
 let _draftIdCounter = 0;
@@ -177,19 +180,30 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     [pkCols]
   );
 
+  const stableGridRowId = useCallback(
+    (row: Record<string, unknown>) => {
+      if (row._draftId != null) {
+        return `draft:${row._draftId}`;
+      }
+      if (pkCols.length === 0) {
+        return "";
+      }
+      return rowPkId(row);
+    },
+    [pkCols.length, rowPkId]
+  );
+
   // Stable row ID for AG Grid selection — sorted PK JSON.
   // Draft insert rows carry _draftId to prevent dedup when cloning a row
   // that already exists with the same PK.
   const getRowId = useMemo(
     () => (params: { data: Record<string, unknown> }) => {
-      if (params.data._draftId != null) {
-        return `draft:${params.data._draftId}`;
-      }
+      if (params.data._draftId != null) return stableGridRowId(params.data);
       // BUG-O: use rowIndex instead of Math.random() for stable (within-session) IDs for PK-less tables.
       if (pkCols.length === 0) return `row:${(params as { rowIndex?: number }).rowIndex ?? Math.random()}`;
-      return stablePkJson(Object.fromEntries(pkCols.map((c) => [c.name, params.data[c.name]])));
+      return stableGridRowId(params.data);
     },
-    [pkCols]
+    [pkCols, stableGridRowId]
   );
 
 
@@ -268,36 +282,70 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return index;
   }, [draftOps, tableName, pkCols]);
 
+  const derivedRows = useMemo(() => {
+    if (pkCols.length === 0) return rowData;
+
+    const nextRows = rowData.map((row) => ({ ...row }));
+
+    for (let opIndex = 0; opIndex < draftOps.length; opIndex += 1) {
+      const op = draftOps[opIndex];
+      if (op.table !== tableName) continue;
+
+      if (op.type === "update" && op.pk) {
+        const targetPkId = stablePkJson(op.pk);
+        const rowIndex = nextRows.findIndex((row) => row._draftId == null && rowPkId(row) === targetPkId);
+        if (rowIndex !== -1) {
+          nextRows[rowIndex] = { ...nextRows[rowIndex], ...(op.values ?? {}) };
+        }
+        continue;
+      }
+
+      if (op.type === "insert") {
+        const targetPkId = stablePkJson(Object.fromEntries(pkCols.map((c) => [c.name, op.values[c.name]])));
+        const rowIndex = nextRows.findIndex((row) => row._draftId != null && rowPkId(row) === targetPkId);
+        const draftId = rowIndex !== -1 ? nextRows[rowIndex]._draftId : `restored:${opIndex}`;
+        const draftRow = { ...(op.values as Record<string, unknown>), _draftId: draftId };
+        if (rowIndex !== -1) {
+          nextRows[rowIndex] = draftRow;
+        } else {
+          nextRows.push(draftRow);
+        }
+      }
+    }
+
+    return nextRows;
+  }, [draftOps, pkCols, rowData, rowPkId, tableName]);
+
 
   // Feature 3: INSERT rows whose PK collides with an existing (non-draft) DB row
   const duplicatePkIds = useMemo(() => {
     if (pkCols.length === 0) return new Set<string>();
     const dbRowPkIds = new Set(
-      rowData.filter((r) => r._draftId == null).map((r) => rowPkId(r))
+      derivedRows.filter((r) => r._draftId == null).map((r) => rowPkId(r))
     );
     const dups = new Set<string>();
-    for (const row of rowData) {
+    for (const row of derivedRows) {
       if (row._draftId == null) continue;
       const id = rowPkId(row);
       if (dbRowPkIds.has(id)) dups.add(id);
     }
     return dups;
-  }, [rowData, pkCols, rowPkId]);
+  }, [derivedRows, pkCols, rowPkId]);
 
   // Keep UIStore in sync so CommitDialog can read the count
   useEffect(() => {
     setDuplicatePkCount(duplicatePkIds.size);
   }, [duplicatePkIds.size, setDuplicatePkCount]);
 
-  // P2: Filter rowData to show only draft rows when showDraftOnly is active
+  // P2: Filter derived rows to show only draft rows when showDraftOnly is active
   const displayRows = useMemo(() => {
-    if (!showDraftOnly) return rowData;
-    return rowData.filter((row) => {
+    if (!showDraftOnly) return derivedRows;
+    return derivedRows.filter((row) => {
       if (row._draftId != null) return true;
       if (pkCols.length === 0) return false;
       return draftIndex.has(rowPkId(row));
     });
-  }, [rowData, showDraftOnly, draftIndex, pkCols, rowPkId]);
+  }, [derivedRows, showDraftOnly, draftIndex, pkCols, rowPkId]);
 
   // Load schema
   useEffect(() => {
@@ -525,10 +573,21 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     (column: string, operation: BulkEditOperation) => {
       if (pkCols.length === 0) return;
       const targetRows = bulkEditTargetRows;
+      const selectionRemap = targetRows.map((row) => {
+        const updatedRow = { ...row };
+        const preview = previewBulkEdit(row[column], operation);
+        if (preview.willChange) {
+          updatedRow[column] = preview.newStr;
+        }
+        return {
+          oldId: stableGridRowId(row),
+          newId: updatedRow._draftId != null
+            ? `draft:${updatedRow._draftId}`
+            : stablePkJson(Object.fromEntries(pkCols.map((c) => [c.name, updatedRow[c.name]]))),
+        };
+      });
       const targetSet = new Set(
-        targetRows.map((r) =>
-          r._draftId != null ? `draft:${r._draftId}` : rowPkId(r)
-        )
+        targetRows.map((row) => stableGridRowId(row))
       );
       for (const row of targetRows) {
         const preview = previewBulkEdit(row[column], operation);
@@ -541,7 +600,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       // Update rowData for immediate visual feedback
       setRowData((prev) =>
         prev.map((row) => {
-          const rowKey = row._draftId != null ? `draft:${row._draftId}` : rowPkId(row);
+          const rowKey = stableGridRowId(row);
           if (!targetSet.has(rowKey)) return row;
           const preview = previewBulkEdit(row[column], operation);
           if (!preview.willChange) {
@@ -550,9 +609,18 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           return { ...row, [column]: preview.newStr };
         })
       );
+      requestAnimationFrame(() => {
+        const gridApi = gridRef.current?.api;
+        if (!gridApi) return;
+        gridApi.deselectAll();
+        for (const { newId } of selectionRemap) {
+          if (!newId) continue;
+          gridApi.getRowNode(newId)?.setSelected(true);
+        }
+      });
       setBaseState("DraftEditing");
     },
-    [bulkEditTargetRows, tableName, pkCols, addOp, setBaseState, rowPkId]
+    [bulkEditTargetRows, tableName, pkCols, addOp, setBaseState, stableGridRowId]
   );
 
   // Shared helper: fetch all rows matching the current server filter (up to 1000)
@@ -1026,7 +1094,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           onFirstDataRendered={onFirstDataRendered}
           onCellValueChanged={onCellValueChanged}
           suppressClickEdit={editingBlocked}
-          getContextMenuItems={getContextMenuItems}
+          getContextMenuItems={AG_GRID_CONTEXT_MENU_SUPPORTED ? getContextMenuItems : undefined}
           onCellClicked={onCellClicked}
           onFilterChanged={onFilterChanged}
           onSortChanged={onSortChanged}

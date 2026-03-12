@@ -393,6 +393,9 @@ func (s *Service) CSVApply(ctx context.Context, req model.CSVApplyRequest) (*mod
 		safeRollback(conn)
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
 
 	var newHead string
 	if err := conn.QueryRowContext(ctx, "SELECT DOLT_HASHOF('HEAD')").Scan(&newHead); err != nil {

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
@@ -17,17 +17,43 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
   const [keyword, setKeyword] = useState("");
   const [includeMemo, setIncludeMemo] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingTables, setLoadingTables] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [searchedKeyword, setSearchedKeyword] = useState("");
+  const [availableTables, setAvailableTables] = useState<string[]>([]);
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTables(true);
+    api.getTables(targetId, dbName, branchName)
+      .then((tables) => {
+        if (cancelled) return;
+        const names = tables.map((table) => table.name);
+        setAvailableTables(names);
+        setSelectedTables(names);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const msg = err instanceof ApiError ? err.message : "テーブル一覧の取得に失敗しました";
+        setError(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTables(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchName, dbName, targetId]);
 
   const handleSearch = async () => {
     const kw = keyword.trim();
-    if (!kw) return;
+    if (!kw || selectedTables.length === 0) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.search(targetId, dbName, branchName, kw, includeMemo, 100);
+      const res = await api.search(targetId, dbName, branchName, kw, includeMemo, 100, selectedTables);
       const integrityError = readIntegrityMessage(res, "検索結果の整合性を確認できませんでした");
       if (integrityError) {
         setResults(null);
@@ -53,6 +79,14 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
     onClose();
   };
 
+  const toggleTable = (tableName: string) => {
+    setSelectedTables((prev) =>
+      prev.includes(tableName)
+        ? prev.filter((name) => name !== tableName)
+        : [...prev, tableName]
+    );
+  };
+
   // Group results by table for display
   const grouped = results
     ? results.reduce((acc, r) => {
@@ -71,7 +105,7 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
       >
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h2 style={{ margin: 0, fontSize: 16 }}>🔍 全テーブル検索</h2>
+          <h2 style={{ margin: 0, fontSize: 16 }}>🔍 テーブル検索</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#666" }}>✕</button>
         </div>
 
@@ -90,7 +124,7 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
           <button
             className="primary"
             onClick={handleSearch}
-            disabled={loading || keyword.trim() === ""}
+            disabled={loading || loadingTables || keyword.trim() === "" || selectedTables.length === 0}
             style={{ padding: "6px 16px", fontSize: 13, whiteSpace: "nowrap" }}
           >
             {loading ? "検索中..." : "検索"}
@@ -106,6 +140,50 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
           />
           メモも検索する
         </label>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>
+              検索対象テーブル ({selectedTables.length}/{availableTables.length})
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => setSelectedTables(availableTables)}
+                disabled={loadingTables || availableTables.length === 0}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+              >
+                全選択
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedTables([])}
+                disabled={loadingTables || selectedTables.length === 0}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+              >
+                全解除
+              </button>
+            </div>
+          </div>
+          <div style={{ maxHeight: 120, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6, padding: 8, background: "#f8fafc" }}>
+            {loadingTables ? (
+              <div style={{ fontSize: 12, color: "#64748b" }}>テーブル一覧を読み込み中...</div>
+            ) : availableTables.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#64748b" }}>検索対象テーブルがありません</div>
+            ) : (
+              availableTables.map((tableName) => (
+                <label key={tableName} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155", marginBottom: 4, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTables.includes(tableName)}
+                    onChange={() => toggleTable(tableName)}
+                  />
+                  {tableName}
+                </label>
+              ))
+            )}
+          </div>
+        </div>
 
         {/* Error */}
         {error && (
@@ -124,7 +202,7 @@ export function SearchModal({ onClose, onNavigate }: SearchModalProps) {
             ) : (
               <>
                 <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>
-                  {results.length}件 見つかりました（キーワード: 「{searchedKeyword}」）
+                  {results.length}件 見つかりました（キーワード: 「{searchedKeyword}」、対象: {selectedTables.length}テーブル）
                 </div>
                 {Object.entries(grouped!).map(([table, rows]) => (
                   <div key={table} style={{ marginBottom: 12 }}>

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../observability';
 import {
   MOCK_DIFF_SUMMARY,
   MOCK_DIFF_TABLE_USERS,
@@ -42,16 +42,18 @@ async function setupCrossDbMocks(page: Page) {
 }
 
 test.describe('Branch-sensitive Features', () => {
-  test('should search using the current branch and switch table from the result', async ({ page }) => {
+  test('should search using the current branch, allow table selection, and switch table from the result', async ({ page }) => {
     await setupBaseMocks(page);
 
     let capturedSearchBranch = '';
     let capturedKeyword = '';
+    let capturedTables = '';
 
     await page.route('**/api/v1/search*', async (route) => {
       const url = new URL(route.request().url());
       capturedSearchBranch = url.searchParams.get('branch_name') ?? '';
       capturedKeyword = url.searchParams.get('keyword') ?? '';
+      capturedTables = url.searchParams.get('tables') ?? '';
       await route.fulfill({
         json: {
           results: [
@@ -72,10 +74,11 @@ test.describe('Branch-sensitive Features', () => {
     await expect(tableSelect).toHaveValue('settings');
 
     await page.locator('.overflow-btn').click();
-    await page.locator('button', { hasText: '🔍 全テーブル検索' }).click();
+    await page.locator('button', { hasText: '🔍 テーブル検索' }).click();
 
     const modal = page.locator('.modal');
-    await expect(modal.locator('h2')).toHaveText('🔍 全テーブル検索');
+    await expect(modal.locator('h2')).toHaveText('🔍 テーブル検索');
+    await modal.getByLabel('settings').uncheck();
     await modal.locator('input[type="text"]').fill('Bob');
     await modal.locator('button.primary', { hasText: '検索' }).click();
 
@@ -87,10 +90,12 @@ test.describe('Branch-sensitive Features', () => {
     await expect(tableSelect).toHaveValue('users');
     expect(capturedSearchBranch).toBe('wi/feat-a');
     expect(capturedKeyword).toBe('Bob');
+    expect(capturedTables).toBe('users');
   });
 
-  test('should fail loud when search cannot confirm integrity', async ({ page }) => {
+  test('should fail loud when search cannot confirm integrity', async ({ page, observability }) => {
     await setupBaseMocks(page);
+    observability.allowApiFailures("/api/v1/search");
 
     await page.route('**/api/v1/search*', async (route) => {
       await route.fulfill({
@@ -108,7 +113,7 @@ test.describe('Branch-sensitive Features', () => {
     await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
 
     await page.locator('.overflow-btn').click();
-    await page.locator('button', { hasText: '🔍 全テーブル検索' }).click();
+    await page.locator('button', { hasText: '🔍 テーブル検索' }).click();
 
     const modal = page.locator('.modal');
     await modal.locator('input[type="text"]').fill('Bob');
@@ -238,8 +243,9 @@ test.describe('Branch-sensitive Features', () => {
     await expect(modal).toContainText('+1');
   });
 
-  test('should fail loud when merge history cannot confirm integrity', async ({ page }) => {
+  test('should fail loud when merge history cannot confirm integrity', async ({ page, observability }) => {
     await setupBaseMocks(page);
+    observability.allowApiFailures("/api/v1/history/commits");
 
     await page.route('**/api/v1/history/commits*', async (route) => {
       await route.fulfill({

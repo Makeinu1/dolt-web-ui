@@ -682,6 +682,9 @@ func (s *Service) CrossCopyRows(ctx context.Context, req model.CrossCopyRowsRequ
 		dstConn.ExecContext(context.Background(), "ROLLBACK")
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
+	if _, err := dstConn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
 
 	// Get new HEAD
 	var newHead string

@@ -12,8 +12,8 @@ manual checklist を source-of-truth としつつ、fast suite と real Dolt sui
 |---|---|---|---|
 | `manual matrix` | 受け入れ判断、UI/運用確認、実機観察 | `docs/manual-test-checklist.md` | release 前 / 必要時 |
 | `backend pure/unit` | pure function と軽量ロジックの高速回帰 | `cd backend && go test -race ./...` | PR 必須 |
-| `mocked Playwright` | UI 契約、分岐、branch 引数伝搬の高速回帰 | `cd frontend && npm run test:e2e:mock` | PR 必須 |
-| `real-Dolt integration / real Playwright` | 実Dolt上の branch lifecycle と end-to-end 回帰 | `cd backend && go test -tags=integration ./internal/service` / `cd frontend && npm run test:e2e:real:smoke` | PR smoke / nightly full |
+| `mocked Playwright` | UI 契約、分岐、branch 引数伝搬、unexpected client error の高速回帰 | `cd frontend && npm run test:e2e:mock` | PR 必須 |
+| `real-Dolt integration / real Playwright` | 実Dolt上の branch lifecycle、unexpected backend/client error、end-to-end 回帰 | `cd backend && go test -tags=integration ./internal/service` / `cd frontend && npm run test:e2e:real:smoke` | PR smoke / nightly full |
 
 ## Real Test Harness
 
@@ -25,7 +25,14 @@ manual checklist を source-of-truth としつつ、fast suite と real Dolt sui
 | [scripts/testenv/start](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/scripts/testenv/start) | `dolt sql-server` 起動 |
 | [scripts/testenv/stop](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/scripts/testenv/stop) | server 停止 |
 | [scripts/testenv/reset](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/scripts/testenv/reset) | `seed -> start` の共通入口 |
-| [scripts/testenv/run-backend.sh](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/scripts/testenv/run-backend.sh) | real Playwright 用 backend wrapper |
+| [scripts/testenv/run-backend.sh](/Users/shumpeiabe/Desktop/StableDiffusion/GitHub/Dolt/dolt-web-ui/scripts/testenv/run-backend.sh) | real Playwright 用 backend wrapper。stdout/stderr を成果物へ tee 可能 |
+
+## Observability Policy
+
+- mocked / real Playwright は `pageerror`、`console.error`、unexpected API `5xx`、`requestfailed` を収集し、未許可なら test を fail にする
+- 意図した失敗系シナリオは spec 側で allowlist する。暗黙許可は作らない
+- real Playwright は backend log tail も成果物へ添付し、UI 上は成功でも裏で `branch not found` や internal error が出ていれば追える状態にする
+- browser reload に伴う GET の `ERR_ABORTED` だけは navigation noise として除外し、POST abort は引き続き fail 対象にする
 
 ## Gate Policy
 

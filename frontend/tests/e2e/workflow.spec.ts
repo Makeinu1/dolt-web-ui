@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../observability';
 import { MOCK_REQUESTS, setupBaseMocks, selectContextInUI } from './setup';
 
 test.describe('Workflow Tests', () => {
@@ -47,6 +47,65 @@ test.describe('Workflow Tests', () => {
         await expect(modal).not.toBeVisible();
         await expect(commitBtn).not.toBeVisible();
         await expect(page.locator('.success-toast')).toContainText('保存が完了しました');
+    });
+
+    test('should refresh grid rows after commit without switching branches', async ({ page }) => {
+        let commitDone = false;
+        let rowCalls = 0;
+
+        await page.unroute('**/api/v1/head*');
+        await page.route('**/api/v1/head*', async route => {
+            const url = new URL(route.request().url());
+            const branch = url.searchParams.get('branch_name');
+            if (branch === 'main') {
+                await route.fulfill({ json: { hash: 'hash-main' } });
+                return;
+            }
+            await route.fulfill({ json: { hash: commitDone ? 'new-hash-001' : 'hash-feat-a' } });
+        });
+
+        await page.unroute('**/api/v1/table/rows*');
+        await page.route('**/api/v1/table/rows*', async route => {
+            rowCalls += 1;
+            await route.fulfill({
+                json: commitDone
+                    ? {
+                        rows: [
+                            { id: 1, name: 'Alice', role: 'admin' },
+                            { id: 3, name: 'Charlie', role: 'user' },
+                        ],
+                        total_count: 2,
+                    }
+                    : {
+                        rows: [
+                            { id: 1, name: 'Alice', role: 'admin' },
+                            { id: 2, name: 'Bob', role: 'user' },
+                            { id: 3, name: 'Charlie', role: 'user' },
+                        ],
+                        total_count: 3,
+                    },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+        const bobRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' });
+        await bobRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+
+        await page.route('**/api/v1/commit*', async route => {
+            commitDone = true;
+            await route.fulfill({ status: 200, json: { hash: 'new-hash-001' } });
+        });
+
+        await page.locator('.action-commit').click();
+        const modal = page.locator('.modal');
+        await modal.locator('button', { hasText: '保存' }).click();
+
+        await expect(page.locator('.success-toast')).toContainText('保存が完了しました');
+        await expect(page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' })).toHaveCount(0);
+        await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(2);
+        expect(rowCalls).toBeGreaterThanOrEqual(2);
     });
 
     test('should allow submitting branch and opening diffs', async ({ page }) => {

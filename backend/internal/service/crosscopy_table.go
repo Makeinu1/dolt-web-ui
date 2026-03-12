@@ -18,6 +18,9 @@ func (s *Service) cleanupCrossCopyBranch(ctx context.Context, targetID, dbName, 
 	defer conn.Close()
 
 	if _, err := conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", branchName); err != nil {
+		if isBranchNotFoundError(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to cleanup branch %s after cross-copy failure: %w", branchName, err)
 	}
 	return nil
@@ -235,6 +238,9 @@ func (s *Service) CrossCopyTable(ctx context.Context, req model.CrossCopyTableRe
 	if _, err := dstConn.ExecContext(ctx, "CALL DOLT_COMMIT('--allow-empty', '-m', ?)", commitMsg); err != nil {
 		safeRollback(dstConn)
 		return crossCopyTableFailureResponse(newBranchName, shared, srcOnly, dstOnly, cleanupIfNeeded()), nil
+	}
+	if _, err := dstConn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	var newHead string

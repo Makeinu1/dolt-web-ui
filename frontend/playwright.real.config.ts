@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const backendLogFile = process.env.PLAYWRIGHT_BACKEND_LOG ?? ".tmp/test-results-real/backend.log";
+process.env.PLAYWRIGHT_BACKEND_LOG = backendLogFile;
+
 export default defineConfig({
   testDir: "./tests/e2e-real",
   fullyParallel: false,
@@ -20,7 +23,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "../scripts/testenv/run-backend.sh",
+      command: `PLAYWRIGHT_BACKEND_LOG=${backendLogFile} ../scripts/testenv/run-backend.sh`,
       url: "http://127.0.0.1:18080/api/v1/targets",
       reuseExistingServer: false,
       timeout: 180 * 1000,

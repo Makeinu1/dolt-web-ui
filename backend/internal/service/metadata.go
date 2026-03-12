@@ -153,14 +153,13 @@ func (s *Service) DeleteBranch(ctx context.Context, req model.DeleteBranchReques
 		return apiErr
 	}
 
-	// Force delete (-D) is required because Dolt's safe delete (-d) refuses to
-	// delete any branch not fully merged into HEAD, including freshly created
-	// branches with no changes ("unsafe to delete or rename" error).
+	// Force delete (-D) is required because Dolt's safe delete (-d) rejects
+	// branches with unique commits that are not fully merged into HEAD.
 	// PurgeIdleConns below prevents stale pooled connections from causing
 	// cascading "branch not found" errors after deletion.
 	_, err = conn.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", req.BranchName)
 	if err != nil {
-		return fmt.Errorf("failed to delete branch: %w", err)
+		return classifyBranchDeleteError(req.BranchName, err)
 	}
 
 	// Purge idle connections to prevent stale branch/database contexts from

@@ -38,7 +38,7 @@ func TestSearch_Timeout_FailsLoud_NotEmptySuccess(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10)
+	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10, nil)
 
 	var apiErr *model.APIError
 	if err == nil {
@@ -63,7 +63,7 @@ func TestSearch_TableListTimeout_FailsLoud(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10)
+	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10, nil)
 
 	var apiErr *model.APIError
 	if err == nil {
@@ -86,7 +86,7 @@ func TestSearch_EmptyKeyword_ReturnsEmpty(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	resp, err := svc.Search(context.Background(), "local", "test_db", "main", "", false, 10)
+	resp, err := svc.Search(context.Background(), "local", "test_db", "main", "", false, 10, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSearch_ShowColumnsFailure_FailsLoud(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10)
+	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10, nil)
 	var apiErr *model.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected APIError, got %T: %v", err, err)
@@ -155,7 +155,7 @@ func TestSearch_DataQueryFailure_FailsLoud(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10)
+	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", false, 10, nil)
 	var apiErr *model.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected APIError, got %T: %v", err, err)
@@ -193,12 +193,57 @@ func TestSearch_MemoQueryFailure_FailsLoud(t *testing.T) {
 	})
 	svc := newWithDeps(repo, testServiceConfig())
 
-	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", true, 10)
+	_, err := svc.Search(context.Background(), "local", "test_db", "main", "keyword", true, 10, nil)
 	var apiErr *model.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected APIError, got %T: %v", err, err)
 	}
 	if apiErr.Code != model.CodeInternal {
 		t.Fatalf("expected code %s, got %s", model.CodeInternal, apiErr.Code)
+	}
+}
+
+func TestSearch_SelectedTables_RestrictsScope(t *testing.T) {
+	repo := newRecordingSessionRepo(t, func(refName, query string, args []driver.NamedValue) (testQueryResult, error) {
+		switch {
+		case strings.Contains(query, "SHOW FULL TABLES"):
+			return testQueryResult{
+				columns: []string{"Tables_in_db", "Table_type"},
+				rows: [][]driver.Value{
+					{"users", "BASE TABLE"},
+					{"settings", "BASE TABLE"},
+				},
+			}, nil
+		case strings.Contains(query, "INFORMATION_SCHEMA.COLUMNS"):
+			return testQueryResult{
+				columns: []string{"TABLE_NAME", "COLUMN_NAME", "COLUMN_KEY"},
+				rows: [][]driver.Value{
+					{"users", "id", "PRI"},
+					{"users", "name", ""},
+				},
+			}, nil
+		case strings.Contains(query, "FROM `users`"):
+			return testQueryResult{
+				columns: []string{"pk_json", "id", "name"},
+				rows:    [][]driver.Value{{`{"id":1}`, 1, "Alice"}},
+			}, nil
+		case strings.Contains(query, "FROM `settings`"):
+			t.Fatalf("settings should not be searched when only users is selected")
+			return testQueryResult{}, nil
+		default:
+			return testQueryResult{}, nil
+		}
+	})
+	svc := newWithDeps(repo, testServiceConfig())
+
+	resp, err := svc.Search(context.Background(), "local", "test_db", "main", "Alice", false, 10, []string{"users"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Table != "users" {
+		t.Fatalf("expected users hit, got %+v", resp.Results[0])
 	}
 }

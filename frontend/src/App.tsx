@@ -246,6 +246,7 @@ function App() {
 
   const onCommitSuccess = (newHash: string) => {
     setExpectedHead(newHash);
+    refreshHead();
     setRefreshKey((k) => k + 1);
     setSuccess("保存が完了しました");
   };
@@ -332,7 +333,7 @@ function App() {
 
     // Search
     items.push({
-      label: "🔍 全テーブル検索",
+      label: "🔍 テーブル検索",
       onClick: () => { setShowSearch(true); setShowOverflow(false); },
     });
 

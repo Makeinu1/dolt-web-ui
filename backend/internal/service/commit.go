@@ -155,6 +155,9 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		safeRollback(conn)
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
 
 	// Step 5: Get new HEAD
 	var newHead string

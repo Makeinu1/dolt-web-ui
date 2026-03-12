@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -33,6 +34,14 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	includeMemo := q.Get("include_memo") == "true"
+	selectedTables := make([]string, 0)
+	if tablesParam := strings.TrimSpace(q.Get("tables")); tablesParam != "" {
+		for _, tableName := range strings.Split(tablesParam, ",") {
+			if trimmed := strings.TrimSpace(tableName); trimmed != "" {
+				selectedTables = append(selectedTables, trimmed)
+			}
+		}
+	}
 
 	limit := 100
 	if ls := q.Get("limit"); ls != "" {
@@ -44,7 +53,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		limit = 500
 	}
 
-	result, err := h.svc.Search(r.Context(), targetID, dbName, branchName, keyword, includeMemo, limit)
+	result, err := h.svc.Search(r.Context(), targetID, dbName, branchName, keyword, includeMemo, limit, selectedTables)
 	if err != nil {
 		handleServiceError(w, err)
 		return

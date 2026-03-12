@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../observability";
 import {
   approveApprovalRequest,
   commitUserRoleChange,
@@ -397,10 +397,10 @@ test.describe("Real branch lifecycle", () => {
     await expect(tableSelect).toHaveValue("settings");
 
     await page.locator(".overflow-btn").click();
-    await page.locator("button", { hasText: "🔍 全テーブル検索" }).click();
+    await page.locator("button", { hasText: "🔍 テーブル検索" }).click();
 
     const modal = page.locator(".modal").last();
-    await expect(modal.locator("h2")).toHaveText("🔍 全テーブル検索");
+    await expect(modal.locator("h2")).toHaveText("🔍 テーブル検索");
     await modal.locator('input[type="text"]').fill("Alice");
     await modal.locator("button.primary", { hasText: "検索" }).click();
 

@@ -16,7 +16,7 @@ export function BulkEditModal({
   onClose,
 }: BulkEditModalProps) {
   const [targetColumn, setTargetColumn] = useState(columns[0]?.name ?? "");
-  const [mode, setMode] = useState<"set-value" | "find-replace">("set-value");
+  const [mode, setMode] = useState<"set-value" | "find-replace">("find-replace");
   const [value, setValue] = useState("");
   const [searchValue, setSearchValue] = useState("");
   const [emptyOnly, setEmptyOnly] = useState(false);

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
 func (s *Service) searchTimeBudget() time.Duration {
@@ -55,9 +56,9 @@ func (s *Service) searchIntegrityError(stage, table string, err error) *model.AP
 	}
 }
 
-// Search performs a full-table keyword search across all user tables and, optionally, memo tables.
+// Search performs a keyword search across selected user tables and, optionally, memo tables.
 // It returns up to `limit` matching results across all tables.
-func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyword string, includeMemo bool, limit int) (*model.SearchResponse, error) {
+func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyword string, includeMemo bool, limit int, selectedTables []string) (*model.SearchResponse, error) {
 	if keyword == "" {
 		return &model.SearchResponse{
 			Results: make([]model.SearchResult, 0),
@@ -107,6 +108,38 @@ func (s *Service) Search(ctx context.Context, targetID, dbName, branchName, keyw
 		return nil, s.searchTimeoutError()
 	}
 
+	if len(tableNames) == 0 {
+		return &model.SearchResponse{
+			Results: make([]model.SearchResult, 0),
+			Total:   0,
+			ReadResultFields: model.ReadResultFields{
+				ReadIntegrity: model.ReadIntegrityComplete,
+			},
+		}, nil
+	}
+
+	if len(selectedTables) > 0 {
+		available := make(map[string]struct{}, len(tableNames))
+		for _, tableName := range tableNames {
+			available[tableName] = struct{}{}
+		}
+		filtered := make([]string, 0, len(selectedTables))
+		seen := make(map[string]struct{}, len(selectedTables))
+		for _, tableName := range selectedTables {
+			if err := validation.ValidateIdentifier("table", tableName); err != nil {
+				return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
+			}
+			if _, ok := available[tableName]; !ok {
+				continue
+			}
+			if _, dup := seen[tableName]; dup {
+				continue
+			}
+			seen[tableName] = struct{}{}
+			filtered = append(filtered, tableName)
+		}
+		tableNames = filtered
+	}
 	if len(tableNames) == 0 {
 		return &model.SearchResponse{
 			Results: make([]model.SearchResult, 0),

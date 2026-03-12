@@ -41,6 +41,28 @@ func newBranchNotReadyError(branchName string, retryAfterMs int) *model.APIError
 	}
 }
 
+func isBranchNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "branch not found")
+}
+
+func newBranchNotFoundError(branchName string) *model.APIError {
+	return &model.APIError{
+		Status: 404,
+		Code:   model.CodeNotFound,
+		Msg:    fmt.Sprintf("branch %s not found", branchName),
+	}
+}
+
+func classifyBranchDeleteError(branchName string, deleteErr error) error {
+	if isBranchNotFoundError(deleteErr) {
+		return newBranchNotFoundError(branchName)
+	}
+	return fmt.Errorf("failed to delete branch: %w", deleteErr)
+}
+
 func isDuplicateBranchCreateErr(err error) bool {
 	if err == nil {
 		return false

@@ -407,7 +407,7 @@ func TestSearch_RejectsDisallowedBranch(t *testing.T) {
 	svc := newIntegrationService(t)
 	hiddenBranch := createHiddenBranch(t, svc, "test_db")
 
-	_, err := svc.Search(integrationContext(t), "local", "test_db", hiddenBranch, "admin", false, 10)
+	_, err := svc.Search(integrationContext(t), "local", "test_db", hiddenBranch, "admin", false, 10, nil)
 	expectAPIErrorCode(t, err, model.CodeForbidden)
 }
 
@@ -655,7 +655,7 @@ func TestBranchLifecycle_SecondApproveRemainsDiscoverableInHistoryAndSearch(t *t
 		t.Fatalf("expected second approved commit %s in history search results", approveTwo.Hash)
 	}
 
-	searchResp, err := svc.Search(integrationContext(t), "local", "test_db", "main", "supervisor", false, 20)
+	searchResp, err := svc.Search(integrationContext(t), "local", "test_db", "main", "supervisor", false, 20, nil)
 	if err != nil {
 		t.Fatalf("search main after second approve: %v", err)
 	}
@@ -724,6 +724,17 @@ func TestDeleteBranch_BlockedWhileRequestPendingAndSucceedsAfterReject(t *testin
 	if branchPresent(t, svc, branchName) {
 		t.Fatalf("expected branch %s to be deleted", branchName)
 	}
+}
+
+func TestDeleteBranch_MissingBranchReturnsNotFound(t *testing.T) {
+	svc := newIntegrationService(t)
+
+	err := svc.DeleteBranch(integrationContext(t), model.DeleteBranchRequest{
+		TargetID:   "local",
+		DBName:     "test_db",
+		BranchName: "wi/does-not-exist",
+	})
+	expectAPIErrorCode(t, err, model.CodeNotFound)
 }
 
 func TestGetBranchReady_ReturnsReadyAndNotFound(t *testing.T) {

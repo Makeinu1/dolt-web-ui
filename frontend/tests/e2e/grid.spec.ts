@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../observability';
 import { setupBaseMocks, selectContextInUI } from './setup';
 
 test.describe('Grid and Draft Editing Tests', () => {
@@ -81,6 +81,7 @@ test.describe('Grid and Draft Editing Tests', () => {
         const modal = page.locator('.modal');
         await expect(modal.locator('h2')).toHaveText('一括置換');
         await modal.locator('select').first().selectOption('name');
+        await modal.getByLabel('一括置換').check();
         await modal.locator('input[type="text"][placeholder="設定する値"]').fill('filled');
         await modal.getByLabel('空欄だけに適用').check();
 
@@ -100,6 +101,7 @@ test.describe('Grid and Draft Editing Tests', () => {
 
         const modal = page.locator('.modal');
         await modal.locator('select').first().selectOption('name');
+        await modal.getByLabel('一括置換').check();
         await modal.locator('input[type="text"][placeholder="設定する値"]').fill('Alice');
 
         await expect(modal).toContainText('プレビュー (0/1 件が変更されます)');
@@ -111,23 +113,27 @@ test.describe('Grid and Draft Editing Tests', () => {
 
     test('should bulk find-replace only rows that actually match', async ({ page }) => {
         const rows = page.locator('.ag-center-cols-container .ag-row');
+        const bobRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' });
+        const charlieRow = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Charlie' });
         await expect(rows).toHaveCount(3);
-        await rows.nth(0).locator('.ag-selection-checkbox').click();
-        await rows.nth(1).locator('.ag-selection-checkbox').click();
+        await bobRow.locator('.ag-selection-checkbox').click();
+        await charlieRow.locator('.ag-selection-checkbox').click();
 
         await page.locator('button', { hasText: '一括置換 (2)' }).click();
 
         const modal = page.locator('.modal');
+        await expect(modal.getByLabel('文字を置換')).toBeChecked();
         await modal.locator('select').first().selectOption('role');
-        await modal.getByLabel('文字を置換').check();
         await modal.locator('input[type="text"][placeholder="置換対象の文字列"]').fill('user');
         await modal.locator('input[type="text"][placeholder="置換後の文字列"]').fill('member');
 
-        await expect(modal).toContainText('プレビュー (1/2 件が変更されます)');
-        await modal.locator('button.primary', { hasText: '適用 (1 件)' }).click();
+        await expect(modal).toContainText('プレビュー (2/2 件が変更されます)');
+        await modal.locator('button.primary', { hasText: '適用 (2 件)' }).click();
 
-        await expect(page.locator('.action-commit')).toHaveText('Commit (1)');
-        await expect(page.locator('.ag-center-cols-container .ag-row', { hasText: 'Bob' })).toContainText('member');
+        await expect(page.locator('.action-commit')).toHaveText('Commit (2)');
+        await expect(page.locator('button', { hasText: '一括置換 (2)' })).toBeVisible();
+        await expect(bobRow).toContainText('member');
+        await expect(charlieRow).toContainText('member');
     });
 
     test('should hide row cross-copy actions on work branches', async ({ page }) => {
