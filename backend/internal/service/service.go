@@ -22,6 +22,7 @@ type sessionRepository interface {
 	ConnRevision(context.Context, string, string, string) (*sql.Conn, error)
 	ConnWorkBranchWrite(context.Context, string, string, string) (*sql.Conn, error)
 	ConnProtectedMaintenance(context.Context, string, string, string) (*sql.Conn, error)
+	PurgeIdleConns(targetID string)
 }
 
 // approveDeleteRequestTagFn is the hook type for deleting a req/* tag during approval.

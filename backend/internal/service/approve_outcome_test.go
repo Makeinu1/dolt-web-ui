@@ -71,6 +71,8 @@ func (r *approveTestRepo) ConnProtectedMaintenance(ctx context.Context, targetID
 	return r.openConn(ctx, branch, r.maintenanceHandler)
 }
 
+func (r *approveTestRepo) PurgeIdleConns(targetID string) {}
+
 // approveMaintenanceHandler returns a SQL handler that drives the happy-path
 // ApproveRequest merge flow:
 //  1. tag lookup (tag_hash + message)

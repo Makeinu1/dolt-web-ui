@@ -81,6 +81,8 @@ func (r *crossCopyTestRepo) ConnProtectedMaintenance(ctx context.Context, target
 	})
 }
 
+func (r *crossCopyTestRepo) PurgeIdleConns(targetID string) {}
+
 func showColumnsResult(columnType string) testQueryResult {
 	return testQueryResult{
 		columns: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},

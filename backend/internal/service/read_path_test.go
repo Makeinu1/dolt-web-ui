@@ -139,6 +139,8 @@ func (r *recordingSessionRepo) ConnProtectedMaintenance(ctx context.Context, tar
 	return nil, fmt.Errorf("unexpected ConnProtectedMaintenance(%s)", branchName)
 }
 
+func (r *recordingSessionRepo) PurgeIdleConns(targetID string) {}
+
 var testDriverID atomic.Uint64
 
 func testServiceConfig() *config.Config {
