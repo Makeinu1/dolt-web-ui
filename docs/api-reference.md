@@ -818,7 +818,8 @@ Reject a request and delete the `req/*` tag. The work branch is preserved.
 
 ### GET /memo/map
 
-Return the set of `pk:column` cells that have memo text for a table.
+Return the set of `pk:column` cells that have memo text for a table. `branch_name`
+may be a work branch, protected branch, or a commit hash used for history preview.
 
 **Query**
 
@@ -836,10 +837,13 @@ Return the set of `pk:column` cells that have memo text for a table.
 ```
 
 If the hidden memo table does not exist, the response is `{"cells": []}`.
+Other query / iterator / scan failures return `500 INTERNAL` and are not degraded to
+an empty success.
 
 ### GET /memo
 
-Get the memo for one cell.
+Get the memo for one cell. `branch_name` may be a work branch, protected branch,
+or a commit hash used for history preview.
 
 **Query**
 
@@ -864,6 +868,8 @@ Get the memo for one cell.
 ```
 
 If no memo exists, the endpoint still returns `200 OK` with `memo_text: ""`.
+If the hidden memo table does not exist, the endpoint also returns the empty shape.
+Other query / scan failures return `500 INTERNAL`.
 
 ---
 

@@ -64,17 +64,24 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-MOCK-04` | mocked Playwright | `MT-13-07` | CrossCopyTable の `BRANCH_EXISTS` で既存 import branch を開ける | implemented |
 | `BL-MOCK-05` | mocked Playwright | `MT-13-08` `MT-13-09` | cross-copy は protected branch でのみ表示され、modal は current protected branch を source に固定する | implemented |
 | `FA-MOCK-01` | mocked Playwright | `MT-03-14` | filter 結果が 1,000 件超でも、先頭ページの draft update で外れた行ぶんを後続ページから補完して `全件…` 操作対象を 1,000 件に保つ | implemented |
+| `MM-UNIT-01` | frontend unit | `MT-11-05` | memo panel は選択セルの `refName/readOnly` を source-of-truth にし、preview ref では current branch draft を重ねない | implemented |
+| `MM-UNIT-02` | frontend unit | `MT-03-02` | bulk edit target から PK 列を除外し、PK 編集を UI で開かせない前提を固定する | implemented |
 | `BL-INT-01` | backend integration | `MT-06-01` `MT-06-10` | submit -> reject -> resubmit -> approve と archive sequence `01/02` | implemented |
 | `BL-INT-02` | backend integration | `MT-13-03` `MT-13-04` | request lock 中 delete 拒否 / reject 後 delete 成功 | implemented |
 | `BL-INT-03` | backend integration | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-INT-04` | backend integration | `MT-13-07` | CrossCopyTable -> submit -> approve と既存 import branch 再利用 | implemented |
 | `BL-INT-05` | backend integration | `MT-13-10` | `source_branch=audit` は成功し、`source_branch=wi/...` は `INVALID_ARGUMENT` で拒否される | implemented |
 | `BL-INT-06` | backend integration | `MT-02-03` | `GetBranchReady` が existing branch で ready を返し、missing branch を `NOT_FOUND` で返す | implemented |
+| `MM-INT-01` | backend integration | `MT-11-05` | work branch で保存した memo が submit/approve 後に main でも同じ内容で読める | implemented |
+| `MM-UNIT-03` | backend unit | `MT-13-06` | memo hidden table 不在だけ empty success にし、一般 DB error は fail-loud にする | implemented |
+| `MM-UNIT-04` | backend unit | `MT-10-09` | same commit の `base row delete + memo upsert` を `INVALID_ARGUMENT` で reject する | implemented |
 | `BL-REAL-01` | real Playwright smoke | `MT-02-02` | 実UIで branch 作成と同名再利用 | implemented |
 | `BL-REAL-02` | real Playwright smoke | `MT-06-01` `MT-06-10` `MT-13-03` | 実UIで submit / delete lock / reject / resubmit / approve / branch advance | implemented |
 | `BL-REAL-03` | real Playwright smoke | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-REAL-04` | real Playwright smoke | `MT-13-07` | cross-copy 生成 branch をそのまま submit でき、2 回目は `BRANCH_EXISTS` になる | implemented |
 | `BL-REAL-05` | real Playwright smoke | `MT-13-08` `MT-13-09` `MT-13-10` | protected branch だけで cross-copy を見せ、`audit -> wi/*` の row copy を current branch source で完了できる | implemented |
+| `MM-MOCK-01` | mocked Playwright | `MT-10-02` `MT-11-05` | deleted row では memo を開けず、history preview では preview ref の memo だけを read-only 表示する | implemented |
+| `MM-MOCK-02` | mocked Playwright | `MT-03-02` `MT-14-02` | PK セルは mocked UI でも editor を開かない | implemented |
 | `ER-UNIT-01` | frontend unit | `MT-13-12` | recovery reload flag が one-shot cleanup を行い、通常 reload では draft を保持する | implemented |
 | `ER-MOCK-01` | mocked Playwright | `MT-13-11` `MT-13-12` | `復旧付き再読み込み` は error 時だけ表示され、`STALE_HEAD` で secondary action として見える | implemented |
 

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ColumnSchema } from "../../types/api";
 import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
 
@@ -15,11 +15,21 @@ export function BulkEditModal({
   onApply,
   onClose,
 }: BulkEditModalProps) {
-  const [targetColumn, setTargetColumn] = useState(columns[0]?.name ?? "");
+  const editableColumns = useMemo(
+    () => columns.filter((column) => !column.primary_key),
+    [columns]
+  );
+  const [targetColumn, setTargetColumn] = useState(editableColumns[0]?.name ?? "");
   const [mode, setMode] = useState<"set-value" | "find-replace">("find-replace");
   const [value, setValue] = useState("");
   const [searchValue, setSearchValue] = useState("");
   const [emptyOnly, setEmptyOnly] = useState(false);
+
+  useEffect(() => {
+    if (!editableColumns.some((column) => column.name === targetColumn)) {
+      setTargetColumn(editableColumns[0]?.name ?? "");
+    }
+  }, [editableColumns, targetColumn]);
 
   const operation = useMemo<BulkEditOperation>(() => ({
     kind: mode,
@@ -78,12 +88,15 @@ export function BulkEditModal({
                 borderRadius: 4,
               }}
             >
-              {columns.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                  {c.primary_key ? " (PK)" : ""}
-                </option>
-              ))}
+              {editableColumns.length > 0 ? (
+                editableColumns.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">編集可能なカラムがありません</option>
+              )}
             </select>
           </div>
 

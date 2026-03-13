@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
@@ -31,10 +33,34 @@ func ensureMemoTable(ctx context.Context, conn *sql.Conn, memoTable string) erro
 	return nil
 }
 
+func isMissingMemoTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "doesn't exist") || strings.Contains(msg, "not found")
+}
+
+func memoReadError(stage, table string, err error) *model.APIError {
+	details := map[string]string{
+		"stage": stage,
+		"table": table,
+	}
+	if err != nil {
+		details["cause"] = err.Error()
+	}
+	return &model.APIError{
+		Status:  500,
+		Code:    model.CodeInternal,
+		Msg:     "メモの読み込みに失敗しました。時間をおいて再試行してください。",
+		Details: details,
+	}
+}
+
 // GetMemoMap returns pk_value:column_name keys that have a memo for a table.
 // Returns empty slice if the memo table does not exist yet.
 func (s *Service) GetMemoMap(ctx context.Context, targetID, dbName, branchName, tableName string) ([]string, error) {
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -45,8 +71,10 @@ func (s *Service) GetMemoMap(ctx context.Context, targetID, dbName, branchName, 
 		fmt.Sprintf("SELECT pk_value, column_name FROM `%s`", memoTbl),
 	)
 	if err != nil {
-		// Table does not exist yet — return empty
-		return make([]string, 0), nil
+		if isMissingMemoTable(err) {
+			return make([]string, 0), nil
+		}
+		return nil, memoReadError("memo_map_query", tableName, err)
 	}
 	defer rows.Close()
 
@@ -54,17 +82,20 @@ func (s *Service) GetMemoMap(ctx context.Context, targetID, dbName, branchName, 
 	for rows.Next() {
 		var pk, col string
 		if err := rows.Scan(&pk, &col); err != nil {
-			return nil, fmt.Errorf("failed to scan memo map: %w", err)
+			return nil, memoReadError("memo_map_scan", tableName, err)
 		}
 		cells = append(cells, pk+":"+col)
 	}
-	return cells, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, memoReadError("memo_map_iter", tableName, err)
+	}
+	return cells, nil
 }
 
 // GetMemo returns the memo for a specific cell.
 // Returns a MemoResponse with empty memo_text if no memo exists.
 func (s *Service) GetMemo(ctx context.Context, targetID, dbName, branchName, tableName, pkValue, columnName string) (*model.MemoResponse, error) {
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -81,10 +112,15 @@ func (s *Service) GetMemo(ctx context.Context, targetID, dbName, branchName, tab
 		pkValue, columnName,
 	).Scan(&result.MemoText, &result.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || isMissingMemoTable(err) {
+			result.MemoText = ""
+			result.UpdatedAt = ""
+			return result, nil
+		}
 		// No memo or table does not exist — return empty
 		result.MemoText = ""
 		result.UpdatedAt = ""
-		return result, nil
+		return nil, memoReadError("memo_query", tableName, err)
 	}
 	return result, nil
 }

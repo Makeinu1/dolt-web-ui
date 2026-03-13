@@ -1,24 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../../api/client";
+import { ApiError } from "../../api/errors";
 import { useDraftStore } from "../../store/draft";
 
 interface CellCommentPanelProps {
   targetId: string;
   dbName: string;
-  branchName: string;
+  refName: string;
   table: string;
   pk: string;       // rowPkId JSON string (e.g. '{"id":1}')
   column: string;
+  readOnly: boolean;
   onClose: () => void;
 }
 
 export function CellCommentPanel({
   targetId,
   dbName,
-  branchName,
+  refName,
   table,
   pk,
   column,
+  readOnly,
   onClose,
 }: CellCommentPanelProps) {
   const ops = useDraftStore((s) => s.ops);
@@ -31,17 +34,19 @@ export function CellCommentPanel({
   const [error, setError] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
-  const isProtected = branchName === "main" || branchName === "audit";
   const memoTable = `_memo_${table}`;
+  const allowDraftOverlay = !readOnly;
 
   // Find any pending draft op for this memo cell
-  const existingOpIdx = ops.findIndex((o) => {
-    if (o.table !== memoTable) return false;
-    if (o.type === "insert") {
-      return o.values?.pk_value === pk && o.values?.column_name === column;
-    }
-    return o.pk?.pk_value === pk && o.pk?.column_name === column;
-  });
+  const existingOpIdx = allowDraftOverlay
+    ? ops.findIndex((o) => {
+      if (o.table !== memoTable) return false;
+      if (o.type === "insert") {
+        return o.values?.pk_value === pk && o.values?.column_name === column;
+      }
+      return o.pk?.pk_value === pk && o.pk?.column_name === column;
+    })
+    : -1;
   const existingOp = existingOpIdx !== -1 ? ops[existingOpIdx] : null;
 
   // Whether the memo "effectively" exists (draft or DB)
@@ -52,32 +57,36 @@ export function CellCommentPanel({
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     api
-      .getMemo(targetId, dbName, branchName, table, pk, column)
+      .getMemo(targetId, dbName, refName, table, pk, column)
       .then((res) => {
         setDbMemoText(res.memo_text);
         // Pre-fill textarea: use draft value if pending, else DB value
-        if (existingOp && existingOp.type !== "delete") {
+        if (allowDraftOverlay && existingOp && existingOp.type !== "delete") {
           setMemoText(String(existingOp.values?.memo_text ?? res.memo_text));
-        } else if (existingOp?.type === "delete") {
+        } else if (allowDraftOverlay && existingOp?.type === "delete") {
           setMemoText("");
         } else {
           setMemoText(res.memo_text);
         }
-      })
-      .catch(() => {
+      }).catch((err) => {
         setDbMemoText("");
-        setMemoText(existingOp && existingOp.type !== "delete"
-          ? String(existingOp.values?.memo_text ?? "")
-          : "");
+        setMemoText(
+          allowDraftOverlay && existingOp && existingOp.type !== "delete"
+            ? String(existingOp.values?.memo_text ?? "")
+            : ""
+        );
+        setError(err instanceof ApiError ? err.message : "メモの読み込みに失敗しました");
       })
       .finally(() => {
         setLoading(false);
         textRef.current?.focus();
       });
-  }, [targetId, dbName, branchName, table, pk, column]);
+  }, [allowDraftOverlay, column, dbName, existingOp, pk, refName, table, targetId]);
 
   const handleSave = () => {
+    if (readOnly) return;
     setError(null);
 
     // Remove any existing draft op for this memo cell
@@ -157,7 +166,7 @@ export function CellCommentPanel({
           {error && <div className="cell-comment-error">{error}</div>}
 
           {/* Memo edit area (work branch only) */}
-          {!isProtected ? (
+          {!readOnly ? (
             <div className="cell-comment-add" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
               <textarea
                 ref={textRef}

@@ -165,10 +165,11 @@ export function ModalManager({
                 <CellCommentPanel
                     targetId={targetId}
                     dbName={dbName}
-                    branchName={branchName}
+                    refName={selectedCell.refName}
                     table={selectedCell.table}
                     pk={selectedCell.pk}
                     column={selectedCell.column}
+                    readOnly={selectedCell.readOnly}
                     onClose={onCloseCommentPanel}
                 />
             )}

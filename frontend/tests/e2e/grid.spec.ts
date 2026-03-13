@@ -47,6 +47,56 @@ test.describe('Grid and Draft Editing Tests', () => {
         await expect(page.locator('.ag-selectable')).not.toHaveCount(0);
     });
 
+    test('should read memo from the preview ref and keep the panel read-only', async ({ page }) => {
+        await page.route('**/api/v1/history/commits*', async route => {
+            await route.fulfill({
+                json: {
+                    commits: [{
+                        hash: '0123456789abcdef0123456789abcdef',
+                        author: 'alice',
+                        message: 'preview commit',
+                        timestamp: '2025-01-01T00:00:00Z',
+                        merge_branch: 'wi/feat-a',
+                    }],
+                    read_integrity: 'complete',
+                },
+            });
+        });
+        await page.route('**/api/v1/memo?*', async route => {
+            const url = new URL(route.request().url());
+            const refName = url.searchParams.get('branch_name');
+            await route.fulfill({
+                json: {
+                    pk_value: '{"id":1}',
+                    column_name: 'role',
+                    memo_text: refName === '0123456789abcdef0123456789abcdef' ? 'preview memo' : 'current memo',
+                    updated_at: '2026-03-13T12:00:00',
+                },
+            });
+        });
+
+        const aliceRow = rowByExactCellText(page, 'Alice');
+        await aliceRow.locator('.ag-cell[col-id="role"]').click();
+        await page.getByRole('button', { name: '💬' }).click();
+
+        const currentPanel = page.locator('.cell-comment-panel');
+        await currentPanel.locator('textarea').fill('draft memo');
+        await currentPanel.getByRole('button', { name: '下書きに追加' }).click();
+
+        await page.locator('.overflow-btn').click();
+        await page.locator('button', { hasText: '📋 マージログ' }).click();
+        await page.locator('button', { hasText: '📋 閲覧' }).click();
+        await expect(page.getByText('過去バージョン閲覧中')).toBeVisible();
+
+        await aliceRow.locator('.ag-cell[col-id="role"]').click();
+        await page.getByRole('button', { name: '💬' }).click();
+
+        const previewPanel = page.locator('.cell-comment-panel');
+        await expect(previewPanel).toContainText('preview memo');
+        await expect(previewPanel).not.toContainText('draft memo');
+        await expect(previewPanel.getByRole('button', { name: '下書きに追加' })).toHaveCount(0);
+    });
+
     test('should mark row as deleted (strikethrough) on toolbar Delete', async ({ page }) => {
         // Wait for grid
         const gridContainer = page.locator('.ag-root-wrapper');
@@ -69,6 +119,34 @@ test.describe('Grid and Draft Editing Tests', () => {
         // Action button should now say Commit (1)
         const commitBtn = page.locator('.action-commit');
         await expect(commitBtn).toHaveText('Commit (1)');
+    });
+
+    test('should disable memo actions for rows marked as deleted', async ({ page }) => {
+        const bobRow = rowByExactCellText(page, 'Bob');
+        await bobRow.locator('.ag-cell[col-id="name"]').click();
+        await expect(page.getByRole('button', { name: '💬' })).toBeEnabled();
+
+        await bobRow.locator('.ag-selection-checkbox').click();
+        await page.locator('button', { hasText: '削除' }).click();
+
+        await bobRow.locator('.ag-cell[col-id="name"]').click();
+        await expect(page.getByRole('button', { name: '💬' })).toBeDisabled();
+    });
+
+    test('should keep PK cells read-only while allowing non-PK cell edits', async ({ page }) => {
+        const aliceRow = page.locator('.ag-center-cols-container .ag-row').nth(0);
+        const idCell = aliceRow.locator('.ag-cell[col-id="id"]');
+        const nameCell = aliceRow.locator('.ag-cell[col-id="name"]');
+        const nameEditor = aliceRow.getByRole('textbox', { name: 'Input Editor' });
+
+        await expect(aliceRow).toContainText('Alice');
+        await nameCell.dblclick();
+        await expect(nameEditor).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(nameEditor).toHaveCount(0);
+
+        await idCell.dblclick();
+        await expect(aliceRow.getByRole('textbox', { name: 'Input Editor' })).toHaveCount(0);
     });
 
     test('should apply bulk set only to blank cells when emptyOnly is enabled', async ({ page }) => {

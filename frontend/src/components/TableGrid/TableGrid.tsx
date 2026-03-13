@@ -125,6 +125,8 @@ export interface SelectedCellInfo {
   table: string;
   pk: string;
   column: string;
+  refName: string;
+  readOnly: boolean;
 }
 
 interface TableGridProps {
@@ -197,6 +199,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [undoableOpIndex, setUndoableOpIndex] = useState<number | null>(null);
 
   const pkCols = useMemo(() => columns.filter((c) => c.primary_key), [columns]);
+  const pkColumnNames = useMemo(() => new Set(pkCols.map((col) => col.name)), [pkCols]);
   const tableDraftOps = useMemo(
     () => draftOps.filter((op) => op.table === tableName),
     [draftOps, tableName]
@@ -561,6 +564,10 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   // Effect 2: merge draft ops locally (no API call, runs on draftOps change).
   useEffect(() => {
     if (!tableName) return;
+    if (effectiveRef !== branchName) {
+      setCommentCells(new Set(baseMemoMap));
+      return;
+    }
     const cells = new Set(baseMemoMap);
     for (const op of draftOps) {
       if (op.table !== memoTable) continue;
@@ -577,7 +584,28 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       else cells.add(key);
     }
     setCommentCells(cells);
-  }, [baseMemoMap, draftOps, tableName]);
+  }, [baseMemoMap, branchName, draftOps, effectiveRef, tableName]);
+
+  const rowHasPendingPkChange = useCallback((row: Record<string, unknown>) => {
+    if (isDraftInsertRow(row) || pkColumnNames.size === 0) return false;
+    const pkId = rowPkId(row);
+    return tableDraftOps.some(
+      (op) =>
+        op.table === tableName &&
+        op.type === "update" &&
+        !op.client_row_id &&
+        op.pk != null &&
+        stablePkJson(op.pk) === pkId &&
+        Object.keys(op.values ?? {}).some((column) => pkColumnNames.has(column))
+    );
+  }, [pkColumnNames, rowPkId, tableDraftOps, tableName]);
+
+  const rowAllowsMemoSelection = useCallback((row: Record<string, unknown>) => {
+    if (isDraftInsertRow(row)) return false;
+    const draftState = draftStateByRowId.get(stableGridRowId(row));
+    if (draftState?.type === "delete") return false;
+    return !rowHasPendingPkChange(row);
+  }, [draftStateByRowId, rowHasPendingPkChange, stableGridRowId]);
 
   // Selection changed handler
   const onSelectionChanged = useCallback((event: SelectionChangedEvent) => {
@@ -596,15 +624,21 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
       onCellSelected?.(null);
       return;
     }
-    if (isDraftInsertRow(event.data as Record<string, unknown>)) {
+    if (!rowAllowsMemoSelection(event.data as Record<string, unknown>)) {
       onCellSelected(null);
       return;
     }
     const colName = event.column.getColDef().field ?? "";
     // pk is JSON of all PK columns for composite PK support
     const pkVal = rowPkId(event.data as Record<string, unknown>);
-    onCellSelected({ table: tableName, pk: pkVal, column: colName });
-  }, [onCellSelected, pkCols, rowPkId, tableName]);
+    onCellSelected({
+      table: tableName,
+      pk: pkVal,
+      column: colName,
+      refName: effectiveRef,
+      readOnly: editingBlocked,
+    });
+  }, [editingBlocked, effectiveRef, onCellSelected, pkCols, rowAllowsMemoSelection, rowPkId, tableName]);
 
   const rowHasDraft = useCallback((row: Record<string, unknown>) => {
     if (isDraftInsertRow(row)) return true;
@@ -931,7 +965,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return visibleCols.map((col, index) => ({
       field: col.name,
       headerName: col.name,
-      editable: !editingBlocked,  // PK columns are also editable (PK_COLLISION caught server-side)
+      editable: !editingBlocked && !col.primary_key,
       ...(col.name === "Dolt_Description" ? { pinned: "left" as const } : {}),
       ...(index === 0 ? { checkboxSelection: true, headerCheckboxSelection: true } : {}),
       sortable: true,

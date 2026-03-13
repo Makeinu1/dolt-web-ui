@@ -105,6 +105,11 @@ function App() {
     loadDraft();
   }, [loadDraft]);
 
+  useEffect(() => {
+    setSelectedCell(null);
+    setShowCommentPanel(false);
+  }, [branchName, previewCommit?.hash, selectedTable, targetId, dbName]);
+
   // Page leave warning: warn user if there are unsaved draft ops
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {

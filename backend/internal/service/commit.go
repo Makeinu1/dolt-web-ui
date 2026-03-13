@@ -30,6 +30,90 @@ func normalizePkJSON(pk map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+func memoBaseTableName(memoTable string) string {
+	return strings.TrimPrefix(memoTable, "_memo_")
+}
+
+func memoOpPkValue(op model.CommitOp) string {
+	switch op.Type {
+	case "insert":
+		if op.Values == nil {
+			return ""
+		}
+		return fmt.Sprint(op.Values["pk_value"])
+	default:
+		if op.PK == nil {
+			return ""
+		}
+		return fmt.Sprint(op.PK["pk_value"])
+	}
+}
+
+func collectMemoTables(ops []model.CommitOp) []string {
+	seen := make(map[string]struct{})
+	tables := make([]string, 0)
+	for _, op := range ops {
+		if !strings.HasPrefix(op.Table, "_memo_") {
+			continue
+		}
+		if _, ok := seen[op.Table]; ok {
+			continue
+		}
+		seen[op.Table] = struct{}{}
+		tables = append(tables, op.Table)
+	}
+	return tables
+}
+
+func validateMemoOpsAgainstRowOps(ops []model.CommitOp) error {
+	deletedBaseRows := make(map[string]struct{})
+	for _, op := range ops {
+		if strings.HasPrefix(op.Table, "_memo_") || op.Type != "delete" || op.PK == nil {
+			continue
+		}
+		pkJSON, err := json.Marshal(normalizePkJSON(op.PK))
+		if err != nil {
+			continue
+		}
+		deletedBaseRows[op.Table+"\x00"+string(pkJSON)] = struct{}{}
+	}
+
+	for _, op := range ops {
+		if !strings.HasPrefix(op.Table, "_memo_") {
+			continue
+		}
+		if op.Type != "insert" && op.Type != "update" {
+			continue
+		}
+		pkValue := memoOpPkValue(op)
+		if pkValue == "" {
+			continue
+		}
+		key := memoBaseTableName(op.Table) + "\x00" + pkValue
+		if _, ok := deletedBaseRows[key]; ok {
+			return &model.APIError{
+				Status: 400,
+				Code:   model.CodeInvalidArgument,
+				Msg:    "同じ Commit 内で削除する行にはメモを保存できません。",
+			}
+		}
+	}
+
+	return nil
+}
+
+func preprocessMemoOps(ctx context.Context, conn *sql.Conn, ops []model.CommitOp) error {
+	if err := validateMemoOpsAgainstRowOps(ops); err != nil {
+		return err
+	}
+	for _, memoTable := range collectMemoTables(ops) {
+		if err := ensureMemoTable(ctx, conn, memoTable); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // checkBranchLocked returns a BRANCH_LOCKED APIError if the branch has a pending
 // approval request (req/ tag). Called before commit/revert/sync on work branches.
 func checkBranchLocked(ctx context.Context, conn *sql.Conn, branchName string) *model.APIError {
@@ -75,13 +159,9 @@ func (s *Service) Commit(ctx context.Context, req model.CommitRequest) (*model.C
 		return nil, apiErr
 	}
 
-	// Step 1a: Pre-ensure memo tables (DDL cannot run inside a transaction)
-	for _, op := range req.Ops {
-		if strings.HasPrefix(op.Table, "_memo_") {
-			if err := ensureMemoTable(ctx, conn, op.Table); err != nil {
-				return nil, err
-			}
-		}
+	// Step 1a: Validate memo ops and ensure memo tables (DDL cannot run inside a transaction)
+	if err := preprocessMemoOps(ctx, conn, req.Ops); err != nil {
+		return nil, err
 	}
 
 	// Step 1b: START TRANSACTION

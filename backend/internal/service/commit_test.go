@@ -1,7 +1,10 @@
 package service
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/Makeinu1/dolt-web-ui/backend/internal/model"
 )
 
 // Tests for pure functions in commit.go that don't require a DB connection.
@@ -83,5 +86,56 @@ func TestNormalizePkJSON_ValuesPreserved(t *testing.T) {
 	}
 	if out["id"] != "usr-001" {
 		t.Errorf("id: got %v, want usr-001", out["id"])
+	}
+}
+
+func TestValidateMemoOpsAgainstRowOps_RejectsMemoUpsertForDeletedRow(t *testing.T) {
+	err := validateMemoOpsAgainstRowOps([]model.CommitOp{
+		{
+			Type:  "delete",
+			Table: "users",
+			PK:    map[string]interface{}{"id": 1},
+			Values: map[string]interface{}{},
+		},
+		{
+			Type:  "insert",
+			Table: "_memo_users",
+			Values: map[string]interface{}{
+				"pk_value":    `{"id":1}`,
+				"column_name": "role",
+				"memo_text":   "should fail",
+			},
+		},
+	})
+
+	var apiErr *model.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != model.CodeInvalidArgument {
+		t.Fatalf("expected %s, got %s", model.CodeInvalidArgument, apiErr.Code)
+	}
+}
+
+func TestValidateMemoOpsAgainstRowOps_AllowsMemoDeleteForDeletedRow(t *testing.T) {
+	err := validateMemoOpsAgainstRowOps([]model.CommitOp{
+		{
+			Type:  "delete",
+			Table: "users",
+			PK:    map[string]interface{}{"id": 1},
+			Values: map[string]interface{}{},
+		},
+		{
+			Type: "delete",
+			Table: "_memo_users",
+			PK: map[string]interface{}{
+				"pk_value":    `{"id":1}`,
+				"column_name": "role",
+			},
+			Values: map[string]interface{}{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected memo delete to be allowed, got %v", err)
 	}
 }

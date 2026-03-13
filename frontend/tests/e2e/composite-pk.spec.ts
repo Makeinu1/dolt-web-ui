@@ -81,20 +81,26 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
         await modal.locator('button', { hasText: '✕' }).click().catch(() => { });
     });
 
-    test('all PK columns should be editable in composite PK table (editable: !col.primary_key removed)', async ({ page }) => {
+    test('PK columns should stay read-only in composite PK tables', async ({ page }) => {
         const gridContainer = page.locator('.ag-root-wrapper');
         await expect(gridContainer).toBeVisible();
 
-        // In composite PK tables, the circuit_id and region columns must NOT have
-        // the ag-cell-not-inline-editing class (which indicates non-editable).
-        // We verify the column definition is editable by checking that a PK cell
-        // does NOT have the 'not-editable' indicator class used by AG Grid.
-        const suzuka = page.locator('.ag-center-cols-container .ag-row', { hasText: 'Suzuka' });
-        await suzuka.waitFor({ state: 'visible', timeout: 5000 });
+        const suzuka = page.locator('.ag-center-cols-container .ag-row').filter({
+            has: page.locator('.ag-cell[col-id="region"]', { hasText: 'JP' }),
+        }).filter({
+            has: page.locator('.ag-cell[col-id="circuit_id"]', { hasText: '1' }),
+        });
+        await expect(suzuka).toContainText('Suzuka');
         const pkCell = suzuka.locator('.ag-cell[col-id="circuit_id"]');
-        // AG Grid marks non-editable cells with aria-colcount but we rely on double-click
-        // opening the editor. Since we are in mock mode, we just verify the cell exists.
-        await expect(pkCell).toBeVisible();
+        const nonPkCell = suzuka.locator('.ag-cell[col-id="name"]');
+
+        await nonPkCell.dblclick();
+        await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toHaveCount(0);
+
+        await pkCell.dblclick();
+        await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toHaveCount(0);
     });
 });
 
