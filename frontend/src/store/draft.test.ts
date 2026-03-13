@@ -47,6 +47,66 @@ describe("addOp — INSERT absorption", () => {
     useDraftStore.getState().addOp({ type: "update", table: "T2", pk: { id: "1" }, values: { name: "b" } });
     expect(useDraftStore.getState().ops).toHaveLength(2);
   });
+
+  it("does not absorb a base-row UPDATE into a copied INSERT that has client_row_id", () => {
+    useDraftStore.getState().addOp({
+      type: "insert",
+      table: "T1",
+      client_row_id: "copy-1",
+      values: { id: "1", name: "copy" },
+    });
+    useDraftStore.getState().addOp({
+      type: "update",
+      table: "T1",
+      pk: { id: "1" },
+      values: { name: "original" },
+    });
+
+    const ops = useDraftStore.getState().ops;
+    expect(ops).toHaveLength(2);
+    expect(ops[0].type).toBe("insert");
+    expect(ops[0].values.name).toBe("copy");
+    expect(ops[1].type).toBe("update");
+  });
+
+  it("absorbs copied-row UPDATE into INSERT when client_row_id matches", () => {
+    useDraftStore.getState().addOp({
+      type: "insert",
+      table: "T1",
+      client_row_id: "copy-1",
+      values: { id: "1", name: "copy" },
+    });
+    useDraftStore.getState().addOp({
+      type: "update",
+      table: "T1",
+      client_row_id: "copy-1",
+      pk: { id: "1" },
+      values: { name: "copy edited" },
+    });
+
+    const ops = useDraftStore.getState().ops;
+    expect(ops).toHaveLength(1);
+    expect(ops[0].type).toBe("insert");
+    expect(ops[0].values.name).toBe("copy edited");
+  });
+
+  it("cancels copied INSERT when DELETE targets the same client_row_id", () => {
+    useDraftStore.getState().addOp({
+      type: "insert",
+      table: "T1",
+      client_row_id: "copy-1",
+      values: { id: "1", name: "copy" },
+    });
+    useDraftStore.getState().addOp({
+      type: "delete",
+      table: "T1",
+      client_row_id: "copy-1",
+      pk: { id: "1" },
+      values: {},
+    });
+
+    expect(useDraftStore.getState().ops).toHaveLength(0);
+  });
 });
 
 describe("addOp — UPDATE merge", () => {

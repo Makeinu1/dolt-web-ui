@@ -3,6 +3,7 @@ import type { CommitOp } from "../types/api";
 import { safeGetJSON, safeSetJSON } from "../utils/safeStorage";
 import { stablePkJson } from "../utils/stablePk";
 import { UI_DRAFT_SAVE_DEBOUNCE_MS } from "../constants/ui";
+import { createClientRowId } from "../utils/clientRowId";
 
 export const DRAFT_STORAGE_KEY = "dolt-web-ui-draft";
 
@@ -38,6 +39,21 @@ function saveDraftImmediate(ops: CommitOp[]) {
   safeSetJSON(sessionStorage, DRAFT_STORAGE_KEY, ops);
 }
 
+function pkMatchesInsert(opPk: Record<string, unknown>, insertOp: CommitOp): boolean {
+  return stablePkJson(
+    Object.fromEntries(Object.keys(opPk).map((key) => [key, insertOp.values[key]]))
+  ) === stablePkJson(opPk);
+}
+
+function normalizeLoadedOps(ops: CommitOp[]): CommitOp[] {
+  return ops.map((op) => {
+    if (op.type !== "insert" || op.client_row_id || op.table.startsWith("_memo_")) {
+      return op;
+    }
+    return { ...op, client_row_id: createClientRowId() };
+  });
+}
+
 // Flush any pending debounced write before the page unloads to prevent data loss.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
@@ -59,14 +75,15 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     // otherwise the backend would try to INSERT a duplicate PK first and fail.
     if ((op.type === "update" || op.type === "delete") && op.pk) {
       const opPk = op.pk;
-      const opPkKey = stablePkJson(opPk);
       const insertIdx = currentOps.findIndex(
         (o) =>
           o.type === "insert" &&
           o.table === op.table &&
-          stablePkJson(
-            Object.fromEntries(Object.keys(opPk).map((k) => [k, o.values[k]]))
-          ) === opPkKey
+          (
+            op.client_row_id
+              ? o.client_row_id === op.client_row_id
+              : o.client_row_id == null && pkMatchesInsert(opPk, o)
+          )
       );
       if (insertIdx !== -1) {
         if (op.type === "delete") {
@@ -89,13 +106,18 @@ export const useDraftStore = create<DraftState>((set, get) => ({
 
     // Merge consecutive UPDATEs to the same row into a single op.
     if (op.type === "update") {
-      const opPkKey = op.pk ? stablePkJson(op.pk) : "";
       const existingIdx = currentOps.findIndex(
         (o) =>
           o.type === "update" &&
           o.table === op.table &&
-          o.pk != null &&
-          stablePkJson(o.pk) === opPkKey
+          (
+            op.client_row_id
+              ? o.client_row_id === op.client_row_id
+              : o.client_row_id == null &&
+                o.pk != null &&
+                op.pk != null &&
+                stablePkJson(o.pk) === stablePkJson(op.pk)
+          )
       );
 
       if (existingIdx !== -1) {
@@ -129,8 +151,14 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     set({ ops: [] });
   },
   loadDraft: () => {
-    const ops = safeGetJSON<CommitOp[]>(sessionStorage, DRAFT_STORAGE_KEY, []);
-    if (ops.length > 0) set({ ops });
+    const storedOps = safeGetJSON<CommitOp[]>(sessionStorage, DRAFT_STORAGE_KEY, []);
+    const ops = normalizeLoadedOps(storedOps);
+    if (ops.length > 0) {
+      if (JSON.stringify(ops) !== JSON.stringify(storedOps)) {
+        saveDraftImmediate(ops);
+      }
+      set({ ops });
+    }
   },
   hasDraft: () => get().ops.length > 0,
 }));

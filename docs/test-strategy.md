@@ -63,6 +63,7 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-MOCK-02` | mocked Playwright | `MT-06-09` | approve の `active_branch_advanced=false` で `main` fallback + warning 表示 | implemented |
 | `BL-MOCK-04` | mocked Playwright | `MT-13-07` | CrossCopyTable の `BRANCH_EXISTS` で既存 import branch を開ける | implemented |
 | `BL-MOCK-05` | mocked Playwright | `MT-13-08` `MT-13-09` | cross-copy は protected branch でのみ表示され、modal は current protected branch を source に固定する | implemented |
+| `FA-MOCK-01` | mocked Playwright | `MT-03-14` | filter 結果が 1,000 件超でも、先頭ページの draft update で外れた行ぶんを後続ページから補完して `全件…` 操作対象を 1,000 件に保つ | implemented |
 | `BL-INT-01` | backend integration | `MT-06-01` `MT-06-10` | submit -> reject -> resubmit -> approve と archive sequence `01/02` | implemented |
 | `BL-INT-02` | backend integration | `MT-13-03` `MT-13-04` | request lock 中 delete 拒否 / reject 後 delete 成功 | implemented |
 | `BL-INT-03` | backend integration | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |

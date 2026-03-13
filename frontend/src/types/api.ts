@@ -90,6 +90,7 @@ export interface CommitOp {
   table: string;
   values: Record<string, unknown>;
   pk?: Record<string, unknown>;
+  client_row_id?: string;
 }
 
 export interface CommitRequest {

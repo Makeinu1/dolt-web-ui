@@ -142,4 +142,38 @@ test.describe('ドラフト永続性テスト', () => {
         await expect(page.locator('.ag-center-cols-container .ag-row', { hasText: 'Clone' })).toBeVisible({ timeout: 5000 });
         await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(1);
     });
+
+    test('2C-5: ドラフトのみ表示中に変更をクリアすると通常表示へ戻る', async ({ page }) => {
+        await page.route('**/api/v1/preview/clone', async route => {
+            await route.fulfill({
+                json: {
+                    ops: [{
+                        type: 'insert',
+                        table: 'users',
+                        values: { id: 99, name: 'Clone', role: 'user' },
+                    }],
+                    errors: [],
+                },
+            });
+        });
+
+        await selectContextInUI(page, 'local', 'test_db', 'wi/feat-a');
+
+        const firstRow = page.locator('.ag-center-cols-container .ag-row').first();
+        await firstRow.waitFor({ state: 'visible', timeout: 5000 });
+        await firstRow.locator('.ag-selection-checkbox').click();
+        await clickToolbarButton(page, /コピー/);
+        await expect(page.locator('.action-commit')).toHaveText('Commit (1)', { timeout: 3000 });
+
+        await clickToolbarButton(page, 'ドラフトのみ');
+        await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(1);
+
+        page.on('dialog', dialog => dialog.accept());
+        await clickToolbarButton(page, '変更をクリア');
+
+        await expect(page.locator('.action-commit')).toHaveCount(0);
+        await expect(page.locator('button', { hasText: 'ドラフトのみ' })).toHaveCount(0);
+        await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(3);
+        await expect(page.locator('text=3 rows')).toBeVisible();
+    });
 });
