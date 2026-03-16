@@ -262,10 +262,12 @@ func (e *APIError) Error() string {
 
 // FilterCondition represents a single filter in /table/rows.
 // Per v6f spec: eq, contains, in operators only, combined with AND.
+// When Op is "or_group", OrGroup contains sub-conditions joined with OR.
 type FilterCondition struct {
-	Column string      `json:"column"`
-	Op     string      `json:"op"` // "eq", "contains", "in"
-	Value  interface{} `json:"value"`
+	Column  string            `json:"column"`
+	Op      string            `json:"op"` // "eq", "neq", "contains", "startsWith", "endsWith", "blank", "notBlank", "in", "or_group"
+	Value   interface{}       `json:"value"`
+	OrGroup []FilterCondition `json:"or_group,omitempty"`
 }
 
 // PreviewCloneRequest represents a clone preview request.

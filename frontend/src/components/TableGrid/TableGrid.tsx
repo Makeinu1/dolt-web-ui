@@ -902,16 +902,18 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
 
   // Convert AG Grid filter model to backend FilterCondition[] JSON.
   // Debounced 300ms to avoid excessive API calls during rapid filter typing.
+  // Supports both single conditions and compound conditions (AND/OR within a column).
   const onFilterChanged = useCallback((event: FilterChangedEvent) => {
     const model = event.api.getFilterModel();
-    const conditions: { column: string; op: string; value?: unknown }[] = [];
-    for (const [col, filter] of Object.entries(model)) {
-      const f = filter as { filterType?: string; type?: string; filter?: string; dateFrom?: string };
-      if (!f.type) continue;
-      const agType = f.type;
+    type Cond = { column: string; op: string; value?: unknown; or_group?: Cond[] };
+    const conditions: Cond[] = [];
+
+    // Convert a single AG Grid condition to backend format.
+    const convertCondition = (col: string, cond: { type?: string; filter?: string; dateFrom?: string }): Cond | null => {
+      if (!cond.type) return null;
       let op = "";
-      let value: unknown = f.filter ?? f.dateFrom;
-      switch (agType) {
+      let value: unknown = cond.filter ?? cond.dateFrom;
+      switch (cond.type) {
         case "contains": op = "contains"; break;
         case "equals": op = "eq"; break;
         case "notEqual": op = "neq"; break;
@@ -919,12 +921,45 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         case "endsWith": op = "endsWith"; break;
         case "blank": op = "blank"; value = undefined; break;
         case "notBlank": op = "notBlank"; value = undefined; break;
-        default: continue;
+        default: return null;
       }
-      const cond: { column: string; op: string; value?: unknown } = { column: col, op };
-      if (value !== undefined) cond.value = value;
-      conditions.push(cond);
+      const result: Cond = { column: col, op };
+      if (value !== undefined) result.value = value;
+      return result;
+    };
+
+    for (const [col, filter] of Object.entries(model)) {
+      const f = filter as {
+        filterType?: string; type?: string; filter?: string; dateFrom?: string;
+        operator?: string;
+        condition1?: { type?: string; filter?: string; dateFrom?: string };
+        condition2?: { type?: string; filter?: string; dateFrom?: string };
+      };
+
+      if (f.operator && f.condition1 && f.condition2) {
+        // Compound condition: two sub-conditions joined by AND or OR.
+        const c1 = convertCondition(col, f.condition1);
+        const c2 = convertCondition(col, f.condition2);
+        if (c1 && c2) {
+          if (f.operator === "OR") {
+            // OR group: backend handles via or_group field.
+            conditions.push({ column: "", op: "or_group", or_group: [c1, c2] });
+          } else {
+            // AND: add both as separate conditions (backend joins all with AND).
+            conditions.push(c1, c2);
+          }
+        } else if (c1) {
+          conditions.push(c1);
+        } else if (c2) {
+          conditions.push(c2);
+        }
+      } else {
+        // Single condition.
+        const c = convertCondition(col, f);
+        if (c) conditions.push(c);
+      }
     }
+
     const newFilter = conditions.length > 0 ? JSON.stringify(conditions) : "";
     setActiveFilterJson(newFilter);
     if (filterDebounceRef.current !== null) clearTimeout(filterDebounceRef.current);

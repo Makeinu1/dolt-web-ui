@@ -13,6 +13,61 @@ import (
 	"github.com/Makeinu1/dolt-web-ui/backend/internal/validation"
 )
 
+// buildFilterSQL converts a single FilterCondition to a SQL fragment and args.
+// When Op is "or_group", sub-conditions are joined with OR and wrapped in parentheses.
+func buildFilterSQL(f model.FilterCondition, allowedCols map[string]bool) (string, []interface{}, *model.APIError) {
+	if f.Op == "or_group" {
+		if len(f.OrGroup) == 0 {
+			return "1=1", nil, nil
+		}
+		var parts []string
+		var args []interface{}
+		for _, sub := range f.OrGroup {
+			part, subArgs, apiErr := buildFilterSQL(sub, allowedCols)
+			if apiErr != nil {
+				return "", nil, apiErr
+			}
+			parts = append(parts, part)
+			args = append(args, subArgs...)
+		}
+		return "(" + strings.Join(parts, " OR ") + ")", args, nil
+	}
+
+	if !allowedCols[f.Column] {
+		return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in filter: %s", f.Column)}
+	}
+	switch f.Op {
+	case "eq":
+		return fmt.Sprintf("`%s` = ?", f.Column), []interface{}{f.Value}, nil
+	case "neq":
+		return fmt.Sprintf("`%s` != ?", f.Column), []interface{}{f.Value}, nil
+	case "contains":
+		return fmt.Sprintf("`%s` LIKE CONCAT('%%', ?, '%%')", f.Column), []interface{}{f.Value}, nil
+	case "startsWith":
+		return fmt.Sprintf("`%s` LIKE CONCAT(?, '%%')", f.Column), []interface{}{f.Value}, nil
+	case "endsWith":
+		return fmt.Sprintf("`%s` LIKE CONCAT('%%', ?)", f.Column), []interface{}{f.Value}, nil
+	case "blank":
+		return fmt.Sprintf("`%s` IS NULL", f.Column), nil, nil
+	case "notBlank":
+		return fmt.Sprintf("`%s` IS NOT NULL", f.Column), nil, nil
+	case "in":
+		vals, ok := f.Value.([]interface{})
+		if !ok {
+			return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "in filter value must be an array"}
+		}
+		placeholders := make([]string, len(vals))
+		args := make([]interface{}, len(vals))
+		for i, v := range vals {
+			placeholders[i] = "?"
+			args[i] = v
+		}
+		return fmt.Sprintf("`%s` IN (%s)", f.Column, strings.Join(placeholders, ",")), args, nil
+	default:
+		return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown filter operator: %s", f.Op)}
+	}
+}
+
 func buildStableOrderByClause(sortStr string, allowedCols map[string]bool, pkCols []string) (string, *model.APIError) {
 	if sortStr == "" {
 		pkOrderParts := make([]string, len(pkCols))
@@ -168,43 +223,12 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 			return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid filter JSON"}
 		}
 		for _, f := range filters {
-			if !allowedCols[f.Column] {
-				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in filter: %s", f.Column)}
+			part, args, apiErr := buildFilterSQL(f, allowedCols)
+			if apiErr != nil {
+				return apiErr
 			}
-			switch f.Op {
-			case "eq":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` = ?", f.Column))
-				whereArgs = append(whereArgs, f.Value)
-			case "neq":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` != ?", f.Column))
-				whereArgs = append(whereArgs, f.Value)
-			case "contains":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT('%%', ?, '%%')", f.Column))
-				whereArgs = append(whereArgs, f.Value)
-			case "startsWith":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT(?, '%%')", f.Column))
-				whereArgs = append(whereArgs, f.Value)
-			case "endsWith":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` LIKE CONCAT('%%', ?)", f.Column))
-				whereArgs = append(whereArgs, f.Value)
-			case "blank":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` IS NULL", f.Column))
-			case "notBlank":
-				whereParts = append(whereParts, fmt.Sprintf("`%s` IS NOT NULL", f.Column))
-			case "in":
-				vals, ok := f.Value.([]interface{})
-				if !ok {
-					return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "in filter value must be an array"}
-				}
-				placeholders := make([]string, len(vals))
-				for i, v := range vals {
-					placeholders[i] = "?"
-					whereArgs = append(whereArgs, v)
-				}
-				whereParts = append(whereParts, fmt.Sprintf("`%s` IN (%s)", f.Column, strings.Join(placeholders, ",")))
-			default:
-				return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown filter operator: %s", f.Op)}
-			}
+			whereParts = append(whereParts, part)
+			whereArgs = append(whereArgs, args...)
 		}
 	}
 
