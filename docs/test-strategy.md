@@ -80,6 +80,21 @@ PR smoke では `--grep-invert @quarantine`、nightly full では含めて実行
 | `BL-REAL-03` | real Playwright smoke | `MT-02-02` | duplicate create が `BRANCH_EXISTS` を返す | implemented |
 | `BL-REAL-04` | real Playwright smoke | `MT-13-07` | cross-copy 生成 branch をそのまま submit でき、2 回目は `BRANCH_EXISTS` になる | implemented |
 | `BL-REAL-05` | real Playwright smoke | `MT-13-08` `MT-13-09` `MT-13-10` | protected branch だけで cross-copy を見せ、`audit -> wi/*` の row copy を current branch source で完了できる | implemented |
+| `CM-MOCK-01` | mocked Playwright | `MT-18-01` | 非ドラフト行選択時に「比較 (N)」ボタンが表示される | implemented |
+| `CM-MOCK-02` | mocked Playwright | `MT-18-02` | 「比較 (N)」クリックで比較モード入り、A群ラベル表示・選択クリア | implemented |
+| `CM-MOCK-03` | mocked Playwright | `MT-18-03` | B群行を選択すると「比較実行」ボタンが表示される（A/B同数時のみ） | implemented |
+| `CM-MOCK-04` | mocked Playwright | `MT-18-04` `MT-18-10` | 「比較実行」→モーダル開く / 「キャンセル」→比較モード終了 | implemented |
+| `CM-MOCK-05` | mocked Playwright | `MT-18-04` | モーダルに「行比較結果」見出し・A群/B群ラベル・値並列表示 | implemented |
+| `CM-MOCK-06` | mocked Playwright | `MT-18-04` | サマリー: Nペア中Mペアに差分あり、差分カラム名列挙 | implemented |
+| `CM-MOCK-07` | mocked Playwright | `MT-18-04` | 差分カラムヘッダーに🔴アイコン、非差分列には🔴なし | implemented |
+| `CM-MOCK-08` | mocked Playwright | `MT-18-09` | 「閉じる」ボタン / モーダル外クリックでモーダルが閉じる | implemented |
+| `CM-MOCK-09` | mocked Playwright | — | モーダル幅が 700px より広い（~960px） | implemented |
+| `CM-MOCK-10` | mocked Playwright | `MT-18-05` | 「差分列のみ表示」デフォルトON — 非差分列がヘッダーに表示されない | implemented |
+| `CM-MOCK-11` | mocked Playwright | `MT-18-05` | 「差分列のみ表示」OFF — 全列（非差分含む）が表示される | implemented |
+| `CM-MOCK-12` | mocked Playwright | `MT-18-06` | 差分なしペアに「差分なし」緑バッジが表示される | implemented |
+| `CM-MOCK-13` | mocked Playwright | `MT-18-07` | 「差分ペアのみ表示」ON → 差分なしペアが非表示、「表示するペアがありません」表示 | implemented |
+| `CM-MOCK-14` | mocked Playwright | `MT-18-08` | CSVダウンロードで `比較_*.csv` ファイルが生成される | implemented |
+| `CM-MOCK-15` | mocked Playwright | — | 全フロー中コンソールエラー・ページエラーゼロ（observability） | implemented |
 | `MM-MOCK-01` | mocked Playwright | `MT-10-02` `MT-11-05` | deleted row では memo を開けず、history preview では preview ref の memo だけを read-only 表示する | implemented |
 | `MM-MOCK-02` | mocked Playwright | `MT-03-02` `MT-14-02` | PK セルは mocked UI でも editor を開かない | implemented |
 | `ER-UNIT-01` | frontend unit | `MT-13-12` | recovery reload flag が one-shot cleanup を行い、通常 reload では draft を保持する | implemented |

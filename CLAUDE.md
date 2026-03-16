@@ -370,6 +370,15 @@ Database: Test
 - ブランチ種別表示（🔒 main / 📋 audit / 🌿 wi/*）
 
 ### データ閲覧・比較
+- **行比較モード** — ツールバー「比較 (N)」ボタンで選択行を A群としてスナップショット → 別の行を選択して「比較実行」→ 横並びグリッドモーダル（`CompareResultModal`）を表示
+  - A群行とB群行を2行テーブルで横並び表示。差分カラムのヘッダーに🔴アイコン、A群セルに淡赤背景（`#fef2f2`）、B群セルに淡青背景（`#eff6ff`）
+  - 「差分列のみ表示」チェックボックス（デフォルトON）— 非差分列を隠す
+  - 「差分ペアのみ表示」チェックボックス（デフォルトOFF）— 差分なしペアを隠す
+  - 差分なしペアには緑の「差分なし」バッジ
+  - CSVダウンロード（`compareRows.ts` の `generateCompareCSV` / `downloadCompareCSV` を流用）
+  - モーダル幅: `min(90vw, 960px)`、横スクロール対応
+  - `compareRows.ts` の `dataColumns` は `_` プレフィックス列を除く全列を比較対象にする（PK列含む）
+  - E2E テスト: `compare-mode.spec.ts` （24テスト）
 - バージョン比較 HistoryTab（ブランチ HEAD 間比較のみ、コミット選択なし）
   - DiffSummary → DiffGrid フルスクリーン AG Grid
   - サーバーサイドページネーション（50件/ページ）
