@@ -60,7 +60,7 @@ func buildStableOrderByClause(sortStr string, allowedCols map[string]bool, pkCol
 }
 
 func (s *Service) ListTables(ctx context.Context, targetID, dbName, branchName string) ([]model.TableResponse, error) {
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (s *Service) GetTableSchema(ctx context.Context, targetID, dbName, branchNa
 		return nil, fmt.Errorf("invalid table name: %w", err)
 	}
 
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (s *Service) GetTableRows(ctx context.Context, targetID, dbName, branchName
 		return &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "table has no primary key (not supported)"}
 	}
 
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return err
 	}
@@ -320,7 +320,7 @@ func (s *Service) GetTableRow(ctx context.Context, targetID, dbName, branchName,
 		whereArgs = append(whereArgs, v)
 	}
 
-	conn, err := s.connAllowedRevision(ctx, targetID, dbName, branchName)
+	conn, err := s.connHistoryRevision(ctx, targetID, dbName, branchName)
 	if err != nil {
 		return nil, err
 	}
