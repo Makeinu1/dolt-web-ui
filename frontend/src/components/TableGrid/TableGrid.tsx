@@ -27,7 +27,7 @@ import { stablePkJson } from "../../utils/stablePk";
 import { createClientRowId } from "../../utils/clientRowId";
 import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
 import { UI_CLONE_TIMEOUT_MS } from "../../constants/ui";
-import { compareRowGroups, type CompareResult, type CompareMetadata } from "./compareRows";
+import { compareRowGroups, type CompareResult } from "./compareRows";
 import { CompareResultModal } from "./CompareResultModal";
 import {
   buildRowModel,

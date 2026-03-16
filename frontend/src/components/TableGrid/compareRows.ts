@@ -106,7 +106,6 @@ export function generateCompareCSV(
   metadata: CompareMetadata,
 ): string {
   const dataColumns = allColumns.filter((c) => !c.name.startsWith("_"));
-  const diffSet = new Set(result.diffColumnNames);
   const pairsWithDiffs = result.pairs.filter((p) => p.diffs.length > 0).length;
 
   // Sort groups same way as compareRowGroups
