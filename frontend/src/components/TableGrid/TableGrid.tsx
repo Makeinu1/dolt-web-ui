@@ -27,6 +27,8 @@ import { stablePkJson } from "../../utils/stablePk";
 import { createClientRowId } from "../../utils/clientRowId";
 import { previewBulkEdit, type BulkEditOperation } from "../../utils/bulkEdit";
 import { UI_CLONE_TIMEOUT_MS } from "../../constants/ui";
+import { compareRowGroups, type CompareResult, type CompareMetadata } from "./compareRows";
+import { CompareResultModal } from "./CompareResultModal";
 import {
   buildRowModel,
   getTableGridPkId,
@@ -182,6 +184,10 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const [filteredActionPreview, setFilteredActionPreview] = useState<FilteredActionPreviewState>(
     EMPTY_FILTERED_ACTION_PREVIEW
   );
+  const [compareMode, setCompareMode] = useState(false);
+  const [groupARows, setGroupARows] = useState<TableGridRow[]>([]);
+  const [groupBRows, setGroupBRows] = useState<TableGridRow[]>([]);
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const cloningRef = useRef(false);
   const gridRef = useRef<AgGridReact>(null);
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -281,6 +287,19 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
   const selectedRowIdSet = useMemo(() => new Set(selectedRowIds), [selectedRowIds]);
   const effectiveSelectedRow = selectedDisplayRows.length === 1 ? selectedDisplayRows[0] : null;
 
+  // Compare mode derived values
+  const groupARowIdSet = useMemo(
+    () => new Set(groupARows.map((r) => r._rowId)),
+    [groupARows]
+  );
+  const groupBRowIds = useMemo(() => {
+    if (!compareMode) return [];
+    return selectedRowIds.filter((id) => !groupARowIdSet.has(id));
+  }, [compareMode, selectedRowIds, groupARowIdSet]);
+  const canExecuteCompare = compareMode
+    && groupBRowIds.length > 0
+    && groupBRowIds.length === groupARows.length;
+
   useEffect(() => {
     setDuplicatePkCount(duplicatePkRowIds.size);
   }, [duplicatePkRowIds.size, setDuplicatePkCount]);
@@ -345,12 +364,49 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     }
   }, [undoableOpIndex, removeOp]);
 
+  // Compare mode: reset all compare state
+  const resetCompareState = useCallback(() => {
+    setCompareMode(false);
+    setGroupARows([]);
+    setGroupBRows([]);
+    setCompareResult(null);
+  }, []);
+
+  // Compare mode: enter (snapshot A group)
+  const handleEnterCompareMode = useCallback(() => {
+    const dbRows = selectedDisplayRows.filter((r) => !isDraftInsertRow(r));
+    if (dbRows.length === 0) return;
+    if (dbRows.length > 500) {
+      alert("最大500行まで比較可能です");
+      return;
+    }
+    setGroupARows([...dbRows]);
+    setGroupBRows([]);
+    setCompareResult(null);
+    setCompareMode(true);
+    // Deselect all so user can pick B group
+    gridRef.current?.api?.deselectAll();
+    setSelectedRowIds([]);
+  }, [selectedDisplayRows]);
+
+  // Compare mode: execute comparison
+  const handleExecuteCompare = useCallback(() => {
+    const bRows = groupBRowIds
+      .map((id) => rowById.get(id))
+      .filter((r): r is TableGridRow => r != null && !isDraftInsertRow(r));
+    if (bRows.length !== groupARows.length) return;
+    setGroupBRows([...bRows]);
+    const result = compareRowGroups(groupARows, bRows, pkCols, columns);
+    setCompareResult(result);
+  }, [groupBRowIds, rowById, groupARows, pkCols, columns]);
+
   // Load schema
   useEffect(() => {
     if (!tableName) return;
     let cancelled = false;
     const currentSchemaKey = `${tableName}|${effectiveRef}`;
     setGridError(null);
+    resetCompareState();          // 比較モードリセット
     setSchemaReadyKey("");        // ガード ON: loadRows をブロック
     setServerFilter("");          // フィルタリセット
     setServerSort("");            // ソートリセット
@@ -1000,7 +1056,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return visibleCols.map((col, index) => ({
       field: col.name,
       headerName: col.name,
-      editable: !editingBlocked && !col.primary_key,
+      editable: !editingBlocked && !col.primary_key && !compareMode,
       ...(col.name === "Dolt_Description" ? { pinned: "left" as const } : {}),
       ...(index === 0 ? { checkboxSelection: true, headerCheckboxSelection: true } : {}),
       sortable: true,
@@ -1015,6 +1071,12 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         if (!params.data) return base;
         const rowData = params.data as Record<string, unknown>;
         const rowId = stableGridRowId(rowData);
+
+        // Compare mode: Group A rows get blue left border on first column
+        if (compareMode && groupARowIdSet.has(rowId) && col === visibleCols[0]) {
+          base.borderLeft = "3px solid #0369a1";
+        }
+
         const draft = draftStateByRowId.get(rowId);
 
         if (draft) {
@@ -1056,7 +1118,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         return base;
       },
     }));
-  }, [columns, hiddenColumns, editingBlocked, draftStateByRowId, duplicatePkRowIds, commentCells, rowPkId, stableGridRowId]);
+  }, [columns, hiddenColumns, editingBlocked, draftStateByRowId, duplicatePkRowIds, commentCells, rowPkId, stableGridRowId, compareMode, groupARowIdSet]);
 
 
   // Auto-size columns to fit content on first data render
@@ -1151,7 +1213,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
         )}
 
         {/* Row action buttons (visible when 1+ rows are selected and not blocked) */}
-        {selectedDisplayRows.length > 0 && (canEditRows || canCrossCopyRows) && (
+        {!compareMode && selectedDisplayRows.length > 0 && (canEditRows || canCrossCopyRows) && (
           <div style={{ display: "flex", gap: 2, alignItems: "center", marginRight: 8 }}>
             {/* P3: Unified copy button — selected rows take priority over filter */}
             {canEditRows && pkCols.length > 0 && (
@@ -1212,7 +1274,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           </div>
         )}
         {/* P3/U2: Full-operation buttons — shown when no rows selected but filter is active */}
-        {selectedDisplayRows.length === 0 && activeFilterJson !== "" && pkCols.length > 0 && (canEditRows || canCrossCopyRows) && (
+        {!compareMode && selectedDisplayRows.length === 0 && activeFilterJson !== "" && pkCols.length > 0 && (canEditRows || canCrossCopyRows) && (
           <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
             {canEditRows && (
               <span title={filteredCopyButtonTitle}>
@@ -1265,8 +1327,52 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
           </div>
         )}
 
+        {/* Compare mode: toolbar or entry button */}
+        {compareMode ? (
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>
+              比較モード: A群 {groupARows.length}行 | B群 {groupBRowIds.length}行選択中
+            </span>
+            {canExecuteCompare && (
+              <button
+                onClick={handleExecuteCompare}
+                style={{ fontSize: 11, padding: "2px 10px", background: "#0369a1", color: "#fff",
+                         border: "1px solid #0369a1", borderRadius: 4, cursor: "pointer" }}
+              >
+                比較実行
+              </button>
+            )}
+            {groupBRowIds.length > 0 && groupBRowIds.length !== groupARows.length && (
+              <span style={{ fontSize: 11, color: "#dc2626" }}>
+                A群と同じ{groupARows.length}行を選択してください
+              </span>
+            )}
+            <button
+              onClick={resetCompareState}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#f3f4f6", color: "#374151",
+                       border: "1px solid #d1d5db", borderRadius: 4, cursor: "pointer" }}
+            >
+              キャンセル
+            </button>
+          </div>
+        ) : (() => {
+          const nonDraftCount = selectedDisplayRows.filter((r) => !isDraftInsertRow(r)).length;
+          return nonDraftCount > 0 && pkCols.length > 0 ? (
+            <button
+              onClick={handleEnterCompareMode}
+              disabled={nonDraftCount > 500}
+              style={{ fontSize: 11, padding: "2px 8px", background: "#f0f9ff", color: "#0369a1",
+                       border: "1px solid #bae6fd", borderRadius: 4,
+                       cursor: nonDraftCount > 500 ? "not-allowed" : "pointer" }}
+              title={nonDraftCount > 500 ? "最大500行まで比較可能です" : "選択行をA群として比較モードに入る"}
+            >
+              比較 ({nonDraftCount})
+            </button>
+          ) : null;
+        })()}
+
         {/* 履歴ボタン (読み取り専用 — 保護ブランチ・編集ブロック中でも表示) */}
-        {canShowRowHistory && onShowRowHistory && pkCols.length > 0 && effectiveSelectedRow && (
+        {!compareMode && canShowRowHistory && onShowRowHistory && pkCols.length > 0 && effectiveSelectedRow && (
           <button
             onClick={() => onShowRowHistory(tableName, rowPkId(effectiveSelectedRow))}
             style={{ fontSize: 11, padding: "2px 8px", background: "#f0f9ff", color: "#0369a1",
@@ -1324,6 +1430,19 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
             ▶
           </button>
         </div>
+      )}
+
+      {/* Compare result modal */}
+      {compareResult && (
+        <CompareResultModal
+          result={compareResult}
+          allColumns={columns}
+          pkCols={pkCols}
+          groupA={groupARows}
+          groupB={groupBRows}
+          metadata={{ tableName, branchName, timestamp: new Date().toISOString() }}
+          onClose={() => setCompareResult(null)}
+        />
       )}
 
       {/* P5: Bulk edit modal */}

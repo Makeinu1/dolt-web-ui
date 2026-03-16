@@ -117,7 +117,7 @@ function matchesFilter(row: Record<string, unknown>, filters: FilterCondition[])
   });
 }
 
-function comparePrimitiveValues(left: unknown, right: unknown): number {
+export function comparePrimitiveValues(left: unknown, right: unknown): number {
   if (left === right) return 0;
   if (left === null || left === undefined) return -1;
   if (right === null || right === undefined) return 1;
