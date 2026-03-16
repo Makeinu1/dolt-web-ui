@@ -174,14 +174,6 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		}, nil
 	}
 
-	// Build IN clause for commit hashes.
-	hashPlaceholders := make([]string, len(commits))
-	hashArgs := make([]interface{}, len(commits))
-	for i, c := range commits {
-		hashPlaceholders[i] = "?"
-		hashArgs[i] = c.Hash
-	}
-
 	// Build PK WHERE conditions.
 	whereParts := make([]string, 0, len(pkMap))
 	pkArgs := make([]interface{}, 0, len(pkMap))
@@ -196,8 +188,54 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		pkArgs = append(pkArgs, v)
 	}
 
+	// --- Query 1: Get first-parent hash for each merge commit ---
+	commitPlaceholders := make([]string, len(commits))
+	commitArgs := make([]interface{}, len(commits))
+	for i, c := range commits {
+		commitPlaceholders[i] = "?"
+		commitArgs[i] = c.Hash
+	}
+	ancestorQuery := fmt.Sprintf(
+		"SELECT commit_hash, parent_hash FROM dolt_commit_ancestors WHERE commit_hash IN (%s) AND parent_index = 0",
+		strings.Join(commitPlaceholders, ", "),
+	)
+	ancestorRows, err := conn.QueryContext(ctx, ancestorQuery, commitArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query commit ancestors: %w", err)
+	}
+	parentMap := make(map[string]string) // mergeHash -> parentHash
+	for ancestorRows.Next() {
+		var commitHash, parentHash string
+		if err := ancestorRows.Scan(&commitHash, &parentHash); err != nil {
+			ancestorRows.Close()
+			return nil, fmt.Errorf("failed to scan commit ancestor: %w", err)
+		}
+		parentMap[commitHash] = parentHash
+	}
+	if err := ancestorRows.Err(); err != nil {
+		ancestorRows.Close()
+		return nil, err
+	}
+	ancestorRows.Close() // Must close before next query on same conn
+
+	// Collect all unique hashes (merge + parent) for history query.
+	allHashes := make(map[string]bool)
+	for _, c := range commits {
+		allHashes[c.Hash] = true
+		if ph, ok := parentMap[c.Hash]; ok {
+			allHashes[ph] = true
+		}
+	}
+	hashPlaceholders := make([]string, 0, len(allHashes))
+	hashArgs := make([]interface{}, 0, len(allHashes))
+	for h := range allHashes {
+		hashPlaceholders = append(hashPlaceholders, "?")
+		hashArgs = append(hashArgs, h)
+	}
+
+	// --- Query 2: Get record snapshots at all relevant commits ---
 	histQuery := fmt.Sprintf(
-		"SELECT * FROM `dolt_history_%s` WHERE %s AND commit_hash IN (%s) ORDER BY commit_date DESC",
+		"SELECT * FROM `dolt_history_%s` WHERE %s AND commit_hash IN (%s)",
 		filterTable,
 		strings.Join(whereParts, " AND "),
 		strings.Join(hashPlaceholders, ", "),
@@ -223,12 +261,8 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 		return nil, fmt.Errorf("failed to get history columns: %w", err)
 	}
 
-	type histSnap struct {
-		commitHash string
-		vals       map[string]interface{}
-	}
-	var snapshots []histSnap
-
+	// Build snapshot map: commitHash -> column values (excluding metadata).
+	snapMap := make(map[string]map[string]interface{})
 	for histRows.Next() {
 		vals := make([]interface{}, len(histCols))
 		vPtrs := make([]interface{}, len(histCols))
@@ -239,7 +273,8 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 			histRows.Close()
 			return nil, fmt.Errorf("failed to scan history row: %w", err)
 		}
-		snap := histSnap{vals: make(map[string]interface{})}
+		var commitHash string
+		rowVals := make(map[string]interface{})
 		for i, col := range histCols {
 			v := vals[i]
 			if b, ok := v.([]byte); ok {
@@ -248,15 +283,17 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 			switch col {
 			case "commit_hash":
 				if sv, ok := v.(string); ok {
-					snap.commitHash = sv
+					commitHash = sv
 				}
 			case "commit_date", "committer":
 				// skip metadata columns
 			default:
-				snap.vals[col] = v
+				rowVals[col] = v
 			}
 		}
-		snapshots = append(snapshots, snap)
+		if commitHash != "" {
+			snapMap[commitHash] = rowVals
+		}
 	}
 	if err := histRows.Err(); err != nil {
 		histRows.Close()
@@ -264,36 +301,35 @@ func (s *Service) HistoryCommits(ctx context.Context, targetID, dbName, branchNa
 	}
 	histRows.Close()
 
-	if len(snapshots) == 0 {
-		return &model.HistoryCommitsResponse{
-			Commits: make([]model.HistoryCommit, 0),
-			ReadResultFields: model.ReadResultFields{
-				ReadIntegrity: model.ReadIntegrityComplete,
-			},
-		}, nil
-	}
-
-	// Step 3: Find commit hashes where record values changed.
-	// snapshots are ORDER BY commit_date DESC: index 0 = newest, index n-1 = oldest.
-	// Compare each snapshot to the next (older) one; if different, include it.
+	// --- Step 3: Compare each merge commit against its first parent ---
 	changedHashes := make(map[string]bool)
-	for i, snap := range snapshots {
-		if i == len(snapshots)-1 {
-			// Oldest merge snapshot: include (no prior merge to compare against).
-			changedHashes[snap.commitHash] = true
-		} else {
-			older := snapshots[i+1]
-			changed := len(snap.vals) != len(older.vals)
-			if !changed {
-				for k, av := range snap.vals {
-					if fmt.Sprintf("%v", av) != fmt.Sprintf("%v", older.vals[k]) {
-						changed = true
-						break
-					}
-				}
-			}
-			if changed {
-				changedHashes[snap.commitHash] = true
+	for _, c := range commits {
+		parentHash, hasParent := parentMap[c.Hash]
+		if !hasParent {
+			// No parent info (root commit); skip.
+			continue
+		}
+		mergeSnap, mergeExists := snapMap[c.Hash]
+		parentSnap, parentExists := snapMap[parentHash]
+
+		if !mergeExists && !parentExists {
+			// Record didn't exist before or after this merge.
+			continue
+		}
+		if mergeExists != parentExists {
+			// Record was created or deleted by this merge.
+			changedHashes[c.Hash] = true
+			continue
+		}
+		// Both exist: compare field by field.
+		if len(mergeSnap) != len(parentSnap) {
+			changedHashes[c.Hash] = true
+			continue
+		}
+		for k, mv := range mergeSnap {
+			if fmt.Sprintf("%v", mv) != fmt.Sprintf("%v", parentSnap[k]) {
+				changedHashes[c.Hash] = true
+				break
 			}
 		}
 	}
