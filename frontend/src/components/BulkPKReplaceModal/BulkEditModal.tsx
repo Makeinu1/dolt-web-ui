@@ -15,10 +15,7 @@ export function BulkEditModal({
   onApply,
   onClose,
 }: BulkEditModalProps) {
-  const editableColumns = useMemo(
-    () => columns.filter((column) => !column.primary_key),
-    [columns]
-  );
+  const editableColumns = useMemo(() => columns, [columns]);
   const [targetColumn, setTargetColumn] = useState(editableColumns[0]?.name ?? "");
   const [mode, setMode] = useState<"set-value" | "find-replace">("find-replace");
   const [value, setValue] = useState("");
