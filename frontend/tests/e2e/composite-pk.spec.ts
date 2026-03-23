@@ -91,7 +91,9 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
             has: page.locator('.ag-cell[col-id="circuit_id"]', { hasText: '1' }),
         });
         await expect(suzuka).toContainText('Suzuka');
-        const pkCell = suzuka.locator('.ag-cell[col-id="circuit_id"]');
+        // Use region (PK, index 1) instead of circuit_id (PK, index 0)
+        // because AG Grid checkboxSelection on index 0 may block dblclick editing
+        const pkCell = suzuka.locator('.ag-cell[col-id="region"]');
         const nonPkCell = suzuka.locator('.ag-cell[col-id="name"]');
 
         await pkCell.dblclick();
