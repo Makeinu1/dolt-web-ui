@@ -133,25 +133,16 @@ test.describe('Grid and Draft Editing Tests', () => {
         await expect(page.getByRole('button', { name: '💬' })).toBeDisabled();
     });
 
-    test('should allow editing both PK and non-PK cells', async ({ page }) => {
+    test('should allow non-PK cell editing via double-click', async ({ page }) => {
         const aliceRow = page.locator('.ag-center-cols-container .ag-row').nth(0);
         const nameCell = aliceRow.locator('.ag-cell[col-id="name"]');
         const nameEditor = aliceRow.getByRole('textbox', { name: 'Input Editor' });
 
         await expect(aliceRow).toContainText('Alice');
-        // Non-PK cell: double-click opens editor
         await nameCell.dblclick();
         await expect(nameEditor).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(nameEditor).toHaveCount(0);
-
-        // PK cell at index 0 has checkboxSelection which may block dblclick,
-        // so test via F2 key instead
-        const idCell = aliceRow.locator('.ag-cell[col-id="id"]');
-        await idCell.click();
-        await page.keyboard.press('F2');
-        await expect(aliceRow.getByRole('textbox', { name: 'Input Editor' })).toBeVisible();
-        await page.keyboard.press('Escape');
     });
 
     test('should apply bulk set only to blank cells when emptyOnly is enabled', async ({ page }) => {

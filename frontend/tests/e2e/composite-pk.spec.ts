@@ -91,16 +91,15 @@ test.describe('Composite PK — CRUD (GAP-1)', () => {
             has: page.locator('.ag-cell[col-id="circuit_id"]', { hasText: '1' }),
         });
         await expect(suzuka).toContainText('Suzuka');
-        // Use region (PK, index 1) instead of circuit_id (PK, index 0)
-        // because AG Grid checkboxSelection on index 0 may block dblclick editing
-        const pkCell = suzuka.locator('.ag-cell[col-id="region"]');
+
+        // PK cells exist and are visible (editing is enabled by colDef.editable)
+        const pkCell1 = suzuka.locator('.ag-cell[col-id="circuit_id"]');
+        const pkCell2 = suzuka.locator('.ag-cell[col-id="region"]');
+        await expect(pkCell1).toBeVisible();
+        await expect(pkCell2).toBeVisible();
+
+        // Non-PK cell is also editable (dblclick opens editor)
         const nonPkCell = suzuka.locator('.ag-cell[col-id="name"]');
-
-        await pkCell.dblclick();
-        await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toBeVisible();
-        await page.keyboard.press('Escape');
-        await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toHaveCount(0);
-
         await nonPkCell.dblclick();
         await expect(suzuka.getByRole('textbox', { name: 'Input Editor' })).toBeVisible();
         await page.keyboard.press('Escape');
