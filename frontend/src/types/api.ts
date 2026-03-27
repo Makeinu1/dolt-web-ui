@@ -106,6 +106,18 @@ export interface CommitResponse {
   hash: string;
 }
 
+export interface SyncRequest {
+  target_id: string;
+  db_name: string;
+  branch_name: string;
+  expected_head: string;
+}
+
+export interface SyncResponse {
+  hash: string;
+  overwritten_tables?: OverwrittenTable[];
+}
+
 export interface OverwrittenTable {
   table: string;
   conflicts: number;

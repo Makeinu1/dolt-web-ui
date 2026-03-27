@@ -155,6 +155,12 @@ export const commit = (body: import("../types/api").CommitRequest) =>
     body: JSON.stringify(body),
   });
 
+export const syncBranch = (body: import("../types/api").SyncRequest) =>
+  request<import("../types/api").SyncResponse>("/sync", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 // Diff & History
 export const getDiffTable = (
   targetId: string,

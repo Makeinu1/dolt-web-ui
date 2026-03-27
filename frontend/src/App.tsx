@@ -72,6 +72,7 @@ function App() {
   const [showCrossCopyRows, setShowCrossCopyRows] = useState(false);
   const [crossCopyPKs, setCrossCopyPKs] = useState<string[]>([]);
   const [showCrossCopyTable, setShowCrossCopyTable] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [rowHistoryInfo, setRowHistoryInfo] = useState<{ table: string; pk: string } | null>(null);
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -143,7 +144,7 @@ function App() {
         setError(msg);
       })
       .finally(() => setTablesLoading(false));
-  }, [targetId, dbName, branchName, isContextReady]);
+  }, [targetId, dbName, branchName, isContextReady, branchRefreshKey]);
 
   // C-3: React to context changes to clear draft and reset UI state.
   // Previously this was done inside context.ts by calling other stores directly
@@ -249,6 +250,28 @@ function App() {
     }
   };
 
+  const handleSyncBranch = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const result = await api.syncBranch({
+        target_id: targetId,
+        db_name: dbName,
+        branch_name: branchName,
+        expected_head: expectedHead,
+      });
+      triggerBranchRefresh();
+      if (result.overwritten_tables && result.overwritten_tables.length > 0) {
+        setOverwrittenTables(result.overwritten_tables);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof ApiError ? err.message : "mainとの同期に失敗しました";
+      setError("mainとの同期に失敗しました: " + msg);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const onCommitSuccess = (newHash: string) => {
     setExpectedHead(newHash);
     refreshHead();
@@ -333,6 +356,14 @@ function App() {
       items.push({
         label: "🔄 最新に更新",
         onClick: () => { handleRefresh(); setShowOverflow(false); },
+      });
+
+      // Sync with main
+      items.push({
+        label: isSyncing ? "同期中..." : "⬇ mainと同期",
+        onClick: () => { setShowOverflow(false); handleSyncBranch(); },
+        disabled: isSyncing,
+        disabledReason: isSyncing ? "同期中です" : undefined,
       });
     }
 

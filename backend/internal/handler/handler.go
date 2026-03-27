@@ -42,6 +42,7 @@ func Register(r chi.Router, svc *service.Service, cfg *config.Config) {
 
 		// Write operations
 		r.Post("/commit", h.Commit)
+		r.Post("/sync", h.SyncBranch)
 		r.Post("/merge/abort", h.MergeAbort) // L3-2: escape hatch for stuck merges
 
 		// Diff & History
