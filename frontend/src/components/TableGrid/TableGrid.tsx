@@ -1056,7 +1056,7 @@ export function TableGrid({ tableName, refreshKey, previewCommitHash, onCellSele
     return visibleCols.map((col, index) => ({
       field: col.name,
       headerName: col.name,
-      editable: !editingBlocked && !col.primary_key && !compareMode,
+      editable: !editingBlocked && !compareMode,
       ...(col.name === "Dolt_Description" ? { pinned: "left" as const } : {}),
       ...(index === 0 ? { checkboxSelection: true, headerCheckboxSelection: true } : {}),
       sortable: true,

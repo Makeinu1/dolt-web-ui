@@ -133,9 +133,8 @@ test.describe('Grid and Draft Editing Tests', () => {
         await expect(page.getByRole('button', { name: '💬' })).toBeDisabled();
     });
 
-    test('should keep PK cells read-only while allowing non-PK cell edits', async ({ page }) => {
+    test('should allow non-PK cell editing via double-click', async ({ page }) => {
         const aliceRow = page.locator('.ag-center-cols-container .ag-row').nth(0);
-        const idCell = aliceRow.locator('.ag-cell[col-id="id"]');
         const nameCell = aliceRow.locator('.ag-cell[col-id="name"]');
         const nameEditor = aliceRow.getByRole('textbox', { name: 'Input Editor' });
 
@@ -144,9 +143,6 @@ test.describe('Grid and Draft Editing Tests', () => {
         await expect(nameEditor).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(nameEditor).toHaveCount(0);
-
-        await idCell.dblclick();
-        await expect(aliceRow.getByRole('textbox', { name: 'Input Editor' })).toHaveCount(0);
     });
 
     test('should apply bulk set only to blank cells when emptyOnly is enabled', async ({ page }) => {

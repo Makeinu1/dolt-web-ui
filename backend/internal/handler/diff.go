@@ -25,6 +25,7 @@ func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode") // "two_dot" or "three_dot"
 	skinny := r.URL.Query().Get("skinny") == "true"
 	diffType := r.URL.Query().Get("diff_type") // "added", "modified", "removed", or ""
+	filter := r.URL.Query().Get("filter")      // JSON-encoded column filter conditions
 
 	page := 1
 	if p := r.URL.Query().Get("page"); p != "" {
@@ -39,7 +40,7 @@ func (h *Handler) DiffTable(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, err := h.svc.DiffTable(r.Context(), targetID, dbName, branchName, table, fromRef, toRef, mode, skinny, diffType, page, pageSize)
+	resp, err := h.svc.DiffTable(r.Context(), targetID, dbName, branchName, table, fromRef, toRef, mode, skinny, diffType, filter, page, pageSize)
 	if err != nil {
 		handleServiceError(w, err)
 		return

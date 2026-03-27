@@ -167,7 +167,8 @@ export const getDiffTable = (
   skinny = false,
   diffType = "",
   page = 1,
-  pageSize = 50
+  pageSize = 50,
+  filter = "",
 ) =>
   request<import("../types/api").DiffTableResponse>(
     `/diff/table${queryString({
@@ -182,6 +183,7 @@ export const getDiffTable = (
       diff_type: diffType,
       page: String(page),
       page_size: String(pageSize),
+      filter,
     })}`
   );
 

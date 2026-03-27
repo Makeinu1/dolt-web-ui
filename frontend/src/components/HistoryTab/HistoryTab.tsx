@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, CellClassParams } from "ag-grid-community";
+import type { ColDef, CellClassParams, FilterChangedEvent } from "ag-grid-community";
 import { useContextStore } from "../../store/context";
 import * as api from "../../api/client";
 import { ApiError } from "../../api/errors";
@@ -112,6 +112,8 @@ function DiffGrid({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [diffTypeFilter, setDiffTypeFilter] = useState("");
+  const [serverFilter, setServerFilter] = useState("");
+  const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadDiff = useCallback(async () => {
     setLoading(true);
@@ -119,7 +121,7 @@ function DiffGrid({
     try {
       const res = await api.getDiffTable(
         targetId, dbName, branchName, tableName, fromRef, toRef,
-        "two_dot", false, diffTypeFilter, page, DIFF_PAGE_SIZE
+        "two_dot", false, diffTypeFilter, page, DIFF_PAGE_SIZE, serverFilter
       );
       setRows(res.rows || []);
       setTotalCount(res.total_count);
@@ -129,12 +131,68 @@ function DiffGrid({
     } finally {
       setLoading(false);
     }
-  }, [targetId, dbName, branchName, tableName, fromRef, toRef, diffTypeFilter, page]);
+  }, [targetId, dbName, branchName, tableName, fromRef, toRef, diffTypeFilter, page, serverFilter]);
 
   useEffect(() => { loadDiff(); }, [loadDiff]);
 
   // Reset page when filter changes
-  useEffect(() => { setPage(1); }, [diffTypeFilter]);
+  useEffect(() => { setPage(1); }, [diffTypeFilter, serverFilter]);
+
+  // Convert AG Grid filter model to backend JSON (same logic as TableGrid onFilterChanged)
+  const onFilterChanged = useCallback((event: FilterChangedEvent) => {
+    const filterModel = event.api.getFilterModel();
+    type Cond = { column: string; op: string; value?: unknown; or_group?: Cond[] };
+    const conditions: Cond[] = [];
+
+    const convertCondition = (col: string, cond: { type?: string; filter?: string; dateFrom?: string }): Cond | null => {
+      if (!cond.type) return null;
+      let op = "";
+      let value: unknown = cond.filter ?? cond.dateFrom;
+      switch (cond.type) {
+        case "contains": op = "contains"; break;
+        case "equals": op = "eq"; break;
+        case "notEqual": op = "neq"; break;
+        case "startsWith": op = "startsWith"; break;
+        case "endsWith": op = "endsWith"; break;
+        case "blank": op = "blank"; value = undefined; break;
+        case "notBlank": op = "notBlank"; value = undefined; break;
+        default: return null;
+      }
+      const result: Cond = { column: col, op };
+      if (value !== undefined) result.value = value;
+      return result;
+    };
+
+    for (const [col, filter] of Object.entries(filterModel)) {
+      const f = filter as {
+        filterType?: string; type?: string; filter?: string; dateFrom?: string;
+        operator?: string;
+        condition1?: { type?: string; filter?: string; dateFrom?: string };
+        condition2?: { type?: string; filter?: string; dateFrom?: string };
+      };
+
+      if (f.operator && f.condition1 && f.condition2) {
+        const c1 = convertCondition(col, f.condition1);
+        const c2 = convertCondition(col, f.condition2);
+        if (c1 && c2) {
+          if (f.operator === "OR") {
+            conditions.push({ column: "", op: "or_group", or_group: [c1, c2] });
+          } else {
+            conditions.push(c1, c2);
+          }
+        }
+      } else {
+        const c = convertCondition(col, f);
+        if (c) conditions.push(c);
+      }
+    }
+
+    const json = conditions.length > 0 ? JSON.stringify(conditions) : "";
+    if (filterDebounceRef.current !== null) clearTimeout(filterDebounceRef.current);
+    filterDebounceRef.current = setTimeout(() => {
+      setServerFilter(json);
+    }, 300);
+  }, []);
 
   // Derive columns from rows
   const allCols = useMemo(() => {
@@ -319,6 +377,7 @@ function DiffGrid({
           enableCellTextSelection
           ensureDomOrder
           defaultColDef={{ sortable: true, resizable: true }}
+          onFilterChanged={onFilterChanged}
         />
       </div>
 

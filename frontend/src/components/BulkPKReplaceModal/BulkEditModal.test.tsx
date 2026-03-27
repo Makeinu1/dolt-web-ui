@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BulkEditModal } from "./BulkEditModal";
 
 describe("BulkEditModal", () => {
-  it("excludes PK columns from the editable target list", () => {
+  it("includes PK columns in the editable target list", () => {
     render(
       <BulkEditModal
         columns={[
@@ -16,7 +16,7 @@ describe("BulkEditModal", () => {
       />
     );
 
-    expect(screen.queryByRole("option", { name: "id" })).toBeNull();
+    expect(screen.getByRole("option", { name: "id" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "name" })).toBeTruthy();
   });
 });

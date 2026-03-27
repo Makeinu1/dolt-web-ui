@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -68,10 +69,67 @@ func httpStatusPreconditionFailed() int {
 }
 
 // DiffTable returns the diff between two refs for a table.
+// buildDiffFilterSQL converts a FilterCondition to SQL for DOLT_DIFF columns.
+// User-facing column "col" maps to COALESCE(`to_col`, `from_col`) so that
+// removed rows (where to_ is NULL) are also filtered by their from_ values.
+func buildDiffFilterSQL(f model.FilterCondition, allowedCols map[string]bool) (string, []interface{}, *model.APIError) {
+	if f.Op == "or_group" {
+		if len(f.OrGroup) == 0 {
+			return "1=1", nil, nil
+		}
+		var parts []string
+		var args []interface{}
+		for _, sub := range f.OrGroup {
+			part, subArgs, apiErr := buildDiffFilterSQL(sub, allowedCols)
+			if apiErr != nil {
+				return "", nil, apiErr
+			}
+			parts = append(parts, part)
+			args = append(args, subArgs...)
+		}
+		return "(" + strings.Join(parts, " OR ") + ")", args, nil
+	}
+
+	if !allowedCols[f.Column] {
+		return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown column in filter: %s", f.Column)}
+	}
+	colExpr := fmt.Sprintf("COALESCE(`to_%s`, `from_%s`)", f.Column, f.Column)
+	switch f.Op {
+	case "eq":
+		return fmt.Sprintf("%s = ?", colExpr), []interface{}{f.Value}, nil
+	case "neq":
+		return fmt.Sprintf("%s != ?", colExpr), []interface{}{f.Value}, nil
+	case "contains":
+		return fmt.Sprintf("%s LIKE CONCAT('%%', ?, '%%')", colExpr), []interface{}{f.Value}, nil
+	case "startsWith":
+		return fmt.Sprintf("%s LIKE CONCAT(?, '%%')", colExpr), []interface{}{f.Value}, nil
+	case "endsWith":
+		return fmt.Sprintf("%s LIKE CONCAT('%%', ?)", colExpr), []interface{}{f.Value}, nil
+	case "blank":
+		return fmt.Sprintf("%s IS NULL", colExpr), nil, nil
+	case "notBlank":
+		return fmt.Sprintf("%s IS NOT NULL", colExpr), nil, nil
+	case "in":
+		vals, ok := f.Value.([]interface{})
+		if !ok {
+			return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "in filter value must be an array"}
+		}
+		placeholders := make([]string, len(vals))
+		args := make([]interface{}, len(vals))
+		for i, v := range vals {
+			placeholders[i] = "?"
+			args[i] = v
+		}
+		return fmt.Sprintf("%s IN (%s)", colExpr, strings.Join(placeholders, ",")), args, nil
+	default:
+		return "", nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: fmt.Sprintf("unknown filter operator: %s", f.Op)}
+	}
+}
+
 // Supports pagination (page/pageSize) and optional diffType filter.
 // Per v6f spec section 5.1: DOLT_DIFF() requires literal arguments (no bind).
 // Tokens are validated via allowlist + regex before SQL template embedding.
-func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, table, fromRef, toRef, mode string, skinny bool, diffType string, page, pageSize int) (*model.DiffTableResponse, error) {
+func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, table, fromRef, toRef, mode string, skinny bool, diffType, filterJSON string, page, pageSize int) (*model.DiffTableResponse, error) {
 	if err := validation.ValidateIdentifier("table", table); err != nil {
 		return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid table name"}
 	}
@@ -110,16 +168,57 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 	}
 	diffBase := fmt.Sprintf("DOLT_DIFF('%s', '%s'%s)", refSpec, table, skinnyArg)
 
-	// Build WHERE clause for diff_type filter
-	whereClause := ""
+	// Build WHERE clause
+	var whereParts []string
+	var whereArgs []interface{}
+
+	// diff_type filter (parameterized)
 	if diffType == "added" || diffType == "modified" || diffType == "removed" {
-		whereClause = fmt.Sprintf(" WHERE diff_type = '%s'", diffType)
+		whereParts = append(whereParts, "diff_type = ?")
+		whereArgs = append(whereArgs, diffType)
+	}
+
+	// Column filter (JSON-encoded conditions from frontend AG Grid)
+	if filterJSON != "" {
+		var filters []model.FilterCondition
+		if err := json.Unmarshal([]byte(filterJSON), &filters); err != nil {
+			return nil, &model.APIError{Status: 400, Code: model.CodeInvalidArgument, Msg: "invalid filter JSON"}
+		}
+		// Probe DOLT_DIFF columns to build allowed user-facing column set
+		probeQuery := fmt.Sprintf("SELECT * FROM %s LIMIT 0", diffBase)
+		probeRows, err := conn.QueryContext(ctx, probeQuery)
+		if err != nil {
+			return nil, fmt.Errorf("failed to probe diff columns: %w", err)
+		}
+		probeCols, _ := probeRows.Columns()
+		probeRows.Close()
+
+		userCols := make(map[string]bool)
+		for _, c := range probeCols {
+			if strings.HasPrefix(c, "to_") {
+				userCols[strings.TrimPrefix(c, "to_")] = true
+			}
+		}
+
+		for _, f := range filters {
+			part, args, apiErr := buildDiffFilterSQL(f, userCols)
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			whereParts = append(whereParts, part)
+			whereArgs = append(whereArgs, args...)
+		}
+	}
+
+	whereClause := ""
+	if len(whereParts) > 0 {
+		whereClause = " WHERE " + strings.Join(whereParts, " AND ")
 	}
 
 	// Count query
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s%s", diffBase, whereClause)
 	var totalCount int
-	if err := conn.QueryRowContext(ctx, countQuery).Scan(&totalCount); err != nil {
+	if err := conn.QueryRowContext(ctx, countQuery, whereArgs...).Scan(&totalCount); err != nil {
 		return nil, fmt.Errorf("failed to count diff rows: %w", err)
 	}
 
@@ -127,7 +226,9 @@ func (s *Service) DiffTable(ctx context.Context, targetID, dbName, branchName, t
 	offset := (page - 1) * pageSize
 	dataQuery := fmt.Sprintf("SELECT * FROM %s%s LIMIT %d OFFSET %d", diffBase, whereClause, pageSize, offset)
 
-	rows, err := conn.QueryContext(ctx, dataQuery)
+	dataArgs := make([]interface{}, 0, len(whereArgs))
+	dataArgs = append(dataArgs, whereArgs...)
+	rows, err := conn.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query diff: %w", err)
 	}
@@ -420,7 +521,7 @@ func (s *Service) ExportDiffZip(ctx context.Context, targetID, dbName, branchNam
 				}
 			}
 			// Fetch all rows for this table/diffType (no pagination)
-			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, 1, rowLimit)
+			resp, err := s.DiffTable(ctx, targetID, dbName, branchName, entry.Table, fromRef, toRef, mode, false, dt.diffType, "", 1, rowLimit)
 			if err != nil || len(resp.Rows) == 0 {
 				continue
 			}
