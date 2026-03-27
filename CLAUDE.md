@@ -361,7 +361,7 @@ Database: Test
 - ドラフト管理（sessionStorage、Insert/Update/Delete の色分け表示）
 - ブランチ作成・削除（`wi/{WorkItem}` パターン）
 - **保存**（旧「コミット」、楽観ロック `expected_head`、DOLT_VERIFY_CONSTRAINTS 付き）
-- Main との同期（DOLT_MERGE、データコンフリクトは main 優先で自動解決 + 上書き通知）
+- **mainと同期**（`POST /api/v1/sync`）— ⋮ メニュー「⬇ mainと同期」から実行。`DOLT_MERGE('main')` で新テーブル取り込み・データコンフリクトは main 優先で自動解決 + 上書き通知。作業ブランチのみ表示。`isSyncing` でダブルクリック防止。完了後テーブル一覧を自動再取得（`branchRefreshKey` を `getTables` useEffect 依存配列に追加）
 - 承認ワークフロー（Submit → Approve/Reject、`req/*` タグベース）
 - 承認リクエスト自動検出（アプリ起動・コンテキスト切替時に自動チェック）
 - セッション安全性（defer/ROLLBACK が HTTP 切断時も `context.Background()` で確実実行）
@@ -417,7 +417,7 @@ Database: Test
 - **AG Grid エンプティステート日本語化** — `overlayNoRowsTemplate` を「検索条件に一致するデータがありません」に（UX-N2）
 - **BRANCH_LOCKED 専用メッセージ** — 「承認申請中のためロックされています」（Commit/Sync 両方対応、UX-9）
 - **ConflictView オーバーレイ外クリック** — 閉じる操作が可能に（UX-14）
-- **Sync ダブルクリック防止** — `baseState === "Syncing"` で早期リターン（UX-12）
+- **Sync ダブルクリック防止** — `isSyncing` ローカル state で早期リターン（UX-12）
 - **CommitDialog の `_memo_*` テーブル名変換** — 「{table} のメモ」として表示（UX-16）
 - **CellCommentPanel ドラフト破棄ボタン** — 「未保存の変更あり」バナーに「破棄」リンク追加（UX-18）
 
@@ -430,8 +430,9 @@ Database: Test
 - CLIRunbook（致命的エラー時の手動復旧手順表示）
 - 単一バイナリデプロイ（フロントエンド `//go:embed static/*`）
 - macOS / Linux amd64 クロスコンパイル
-- Playwright ブラウザテスト（31テスト、APIモックベース、`frontend/tests/e2e/`）
+- Playwright ブラウザテスト（94テスト、APIモックベース、`frontend/tests/e2e/`）
   - `composite-pk.spec.ts` — 複合PKテーブルのCRUD・PK_COLLISION・後方互換テスト
+  - `sync.spec.ts` — mainと同期（ボタン表示・成功・ConflictView・各種エラー、7テスト）
 - curl ベース統合テスト（`/tmp/dolt-e2e-4changes.sh` — 19テスト、変更1〜4カバー）
 - curl ベース統合テスト（`/tmp/dolt-e2e-crosscopy.sh` — 46テスト、クロスDB P1〜P11カバー）
 
